@@ -11,6 +11,7 @@ import {
   configuredModelRefsForAgent,
   deriveAutoWorkflowChildMaxIterations,
   defaultProjectIdForAutoWorkflowRun,
+  materializeAutoWorkflowModelOverrideConfig,
   normalizeAutoWorkflowCommand,
   normalizeAutoWorkflowMode,
   resolveAutoWorkflowLocalFallbackEnv,
@@ -243,6 +244,92 @@ test("auto workflow E2E runner validates exact runtime model provider state", ()
   });
   assert.equal(missing.ok, false);
   assert.match(missing.detail, /missing_models=bailian\/qwen3\.6-plus/);
+});
+
+test("auto workflow E2E runner materializes temporary model override config from agent catalog", async (t) => {
+  const openclawHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-model-override-"));
+  t.after(async () => {
+    await fs.rm(openclawHome, { recursive: true, force: true });
+  });
+  const agentDir = path.join(openclawHome, "agents", "researcher", "agent");
+  await fs.mkdir(agentDir, { recursive: true });
+  const sourceConfigPath = path.join(openclawHome, "openclaw.json");
+  await fs.writeFile(
+    sourceConfigPath,
+    `${JSON.stringify(
+      {
+        models: {
+          providers: {
+            bailian: {
+              apiKey: "bailian-key",
+              models: [{ id: "qwen3.5-plus" }],
+            },
+          },
+        },
+        agents: {
+          defaults: {
+            model: {
+              primary: "bailian/qwen3.5-plus",
+              fallbacks: ["bailian/qwen3.6-plus"],
+            },
+          },
+          list: [{ id: "researcher", agentDir }],
+        },
+      },
+      null,
+      2
+    )}\n`,
+    "utf8"
+  );
+  await fs.writeFile(
+    path.join(agentDir, "models.json"),
+    `${JSON.stringify(
+      {
+        providers: {
+          codex: {
+            apiKey: "codex-key",
+            models: [{ id: "gpt-5.4" }],
+          },
+        },
+      },
+      null,
+      2
+    )}\n`,
+    "utf8"
+  );
+
+  const materialized = await materializeAutoWorkflowModelOverrideConfig({
+    sourceConfigPath,
+    modelOverride: {
+      enabled: true,
+      primary: "codex/gpt-5.4",
+      fallbacks: [],
+      requestedRefs: ["codex/gpt-5.4"],
+    },
+    agentIds: ["researcher"],
+  });
+  t.after(async () => {
+    await materialized.cleanup();
+  });
+
+  const effectiveConfig = JSON.parse(await fs.readFile(materialized.configPath, "utf8"));
+  const sourceConfig = JSON.parse(await fs.readFile(sourceConfigPath, "utf8"));
+  assert.equal(effectiveConfig.agents.defaults.model.primary, "codex/gpt-5.4");
+  assert.equal(sourceConfig.agents.defaults.model.primary, "bailian/qwen3.5-plus");
+  assert.deepEqual(
+    effectiveConfig.models.providers.codex.models.map((entry) => entry.id),
+    ["gpt-5.4"]
+  );
+  assert.deepEqual(materialized.summary.backfilledProviders, [
+    {
+      provider: "codex",
+      models: ["gpt-5.4"],
+      sourceAgentId: "researcher",
+    },
+  ]);
+
+  await materialized.cleanup();
+  await assert.rejects(fs.access(materialized.configPath));
 });
 
 test("live E2E harness detects local workflow activation without Discord acknowledgement", async (t) => {

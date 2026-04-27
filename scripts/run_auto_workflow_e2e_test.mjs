@@ -336,6 +336,10 @@ function uniqueStrings(values) {
   return ordered;
 }
 
+function cloneJson(value) {
+  return value == null ? value : JSON.parse(JSON.stringify(value));
+}
+
 function splitModelRef(modelRef) {
   if (typeof modelRef !== "string") {
     return null;
@@ -349,6 +353,246 @@ function splitModelRef(modelRef) {
     provider: trimmed.slice(0, slash),
     modelId: trimmed.slice(slash + 1),
     ref: trimmed,
+  };
+}
+
+function resolveAutoWorkflowModelOverrideArg(argv) {
+  const primary =
+    argValue(argv, "--agent-model-primary", null) ??
+    argValue(argv, "--agent-model-ref", null) ??
+    argValue(argv, "--model-ref", null) ??
+    argValue(argv, "--model", null);
+  const fallbacks = splitListArg(
+    argValue(argv, "--agent-model-fallbacks", null) ??
+      argValue(argv, "--model-fallbacks", "")
+  );
+  const primaryRef = typeof primary === "string" && primary.trim() ? primary.trim() : null;
+  if (!primaryRef && fallbacks.length === 0) {
+    return {
+      enabled: false,
+      primary: null,
+      fallbacks: [],
+      requestedRefs: [],
+    };
+  }
+  const invalidRefs = uniqueStrings([primaryRef, ...fallbacks]).filter(
+    (entry) => entry && !splitModelRef(entry)
+  );
+  if (invalidRefs.length > 0) {
+    throw new Error(
+      `Invalid model ref ${invalidRefs.join(", ")}. Use provider/model, for example codex/gpt-5.4.`
+    );
+  }
+  return {
+    enabled: true,
+    primary: primaryRef,
+    fallbacks,
+    requestedRefs: uniqueStrings([primaryRef, ...fallbacks]),
+  };
+}
+
+function applyAutoWorkflowModelOverride(config, override) {
+  const next = cloneJson(config);
+  if (!override?.enabled) {
+    return next;
+  }
+  next.agents = next.agents && typeof next.agents === "object" ? next.agents : {};
+  next.agents.defaults =
+    next.agents.defaults && typeof next.agents.defaults === "object"
+      ? next.agents.defaults
+      : {};
+  const currentModel =
+    next.agents.defaults.model && typeof next.agents.defaults.model === "object"
+      ? next.agents.defaults.model
+      : {};
+  next.agents.defaults.model = {
+    ...currentModel,
+    ...(override.primary ? { primary: override.primary } : {}),
+    ...(override.fallbacks.length > 0 ? { fallbacks: override.fallbacks } : {}),
+  };
+  return next;
+}
+
+function configuredAgentIds(config, extraAgentIds = []) {
+  const fromConfig = Array.isArray(config?.agents?.list)
+    ? config.agents.list
+        .map((entry) => (entry && typeof entry.id === "string" ? entry.id : null))
+        .filter(Boolean)
+    : [];
+  return uniqueStrings([...extraAgentIds, ...fromConfig]);
+}
+
+function mergeProviderCatalogEntry(targetProvider, sourceProvider, requiredModelIds) {
+  const nextProvider =
+    targetProvider && typeof targetProvider === "object" ? targetProvider : {};
+  const source = sourceProvider && typeof sourceProvider === "object" ? sourceProvider : {};
+  let changed = false;
+
+  for (const [key, value] of Object.entries(source)) {
+    if (key === "models") {
+      continue;
+    }
+    if (!(key in nextProvider) || nextProvider[key] === null || nextProvider[key] === "") {
+      nextProvider[key] = cloneJson(value);
+      changed = true;
+    }
+  }
+
+  const existingModels = Array.isArray(nextProvider.models)
+    ? nextProvider.models
+    : [];
+  if (!Array.isArray(nextProvider.models)) {
+    nextProvider.models = existingModels;
+    changed = true;
+  }
+  const existingModelIds = new Set(
+    existingModels
+      .map((entry) => (entry && typeof entry.id === "string" ? entry.id : null))
+      .filter(Boolean)
+  );
+  const sourceModels = Array.isArray(source.models) ? source.models : [];
+  for (const modelId of requiredModelIds) {
+    if (existingModelIds.has(modelId)) {
+      continue;
+    }
+    const sourceModel = sourceModels.find((entry) => entry && entry.id === modelId);
+    if (!sourceModel) {
+      continue;
+    }
+    nextProvider.models.push(cloneJson(sourceModel));
+    existingModelIds.add(modelId);
+    changed = true;
+  }
+
+  return { provider: nextProvider, changed };
+}
+
+async function backfillModelOverrideProviderCatalogs(params) {
+  const refs = params.modelRefs.map(splitModelRef).filter(Boolean);
+  const byProvider = new Map();
+  for (const ref of refs) {
+    if (!byProvider.has(ref.provider)) {
+      byProvider.set(ref.provider, new Set());
+    }
+    byProvider.get(ref.provider).add(ref.modelId);
+  }
+  if (byProvider.size === 0) {
+    return [];
+  }
+
+  params.config.models =
+    params.config.models && typeof params.config.models === "object" ? params.config.models : {};
+  params.config.models.providers =
+    params.config.models.providers && typeof params.config.models.providers === "object"
+      ? params.config.models.providers
+      : {};
+
+  const agentIds = configuredAgentIds(params.config, params.agentIds);
+  const backfilled = [];
+  for (const [providerId, modelIds] of byProvider.entries()) {
+    const currentProvider = params.config.models.providers[providerId];
+    const currentModelIds = new Set(
+      Array.isArray(currentProvider?.models)
+        ? currentProvider.models
+            .map((entry) => (entry && typeof entry.id === "string" ? entry.id : null))
+            .filter(Boolean)
+        : []
+    );
+    const missingModelIds = [...modelIds].filter((modelId) => !currentModelIds.has(modelId));
+    if (currentProvider && missingModelIds.length === 0) {
+      continue;
+    }
+
+    let sourceProvider = null;
+    let sourceAgentId = null;
+    for (const agentId of agentIds) {
+      const agentDir = resolveAgentDir(params.config, params.openclawHome, agentId);
+      const modelsCatalog = await readJson(path.join(agentDir, "models.json"), null);
+      const candidate = modelsCatalog?.providers?.[providerId];
+      const candidateModels = new Set(
+        Array.isArray(candidate?.models)
+          ? candidate.models
+              .map((entry) => (entry && typeof entry.id === "string" ? entry.id : null))
+              .filter(Boolean)
+          : []
+      );
+      if ([...modelIds].every((modelId) => candidateModels.has(modelId))) {
+        sourceProvider = candidate;
+        sourceAgentId = agentId;
+        break;
+      }
+    }
+    if (!sourceProvider) {
+      continue;
+    }
+
+    const merged = mergeProviderCatalogEntry(
+      currentProvider,
+      sourceProvider,
+      [...modelIds]
+    );
+    if (merged.changed || !currentProvider) {
+      params.config.models.providers[providerId] = merged.provider;
+      backfilled.push({
+        provider: providerId,
+        models: [...modelIds],
+        sourceAgentId,
+      });
+    }
+  }
+  return backfilled;
+}
+
+export async function materializeAutoWorkflowModelOverrideConfig(params) {
+  if (!params.modelOverride?.enabled) {
+    return {
+      configPath: params.sourceConfigPath,
+      summary: null,
+      cleanup: async () => {},
+    };
+  }
+  const sourceConfigPath = path.resolve(expandHomePath(params.sourceConfigPath));
+  const sourceConfig = await readJson(sourceConfigPath, null);
+  if (!sourceConfig || typeof sourceConfig !== "object") {
+    throw new Error(`Failed to read OpenClaw config for model override: ${sourceConfigPath}`);
+  }
+
+  const openclawHome = resolveOpenClawHome(sourceConfigPath);
+  const nextConfig = applyAutoWorkflowModelOverride(sourceConfig, params.modelOverride);
+  const configuredRefs = uniqueStrings(
+    params.modelOverride.requestedRefs.length > 0
+      ? params.modelOverride.requestedRefs
+      : configuredModelRefsForAgent(nextConfig, params.agentIds?.[0] ?? "researcher")
+  );
+  const backfilledProviders = await backfillModelOverrideProviderCatalogs({
+    config: nextConfig,
+    openclawHome,
+    agentIds: params.agentIds ?? [],
+    modelRefs: configuredRefs,
+  });
+
+  const tempConfigPath = path.join(
+    openclawHome,
+    `.openclaw-auto-workflow-${process.pid}-${Date.now()}.json`
+  );
+  await fs.writeFile(tempConfigPath, `${JSON.stringify(nextConfig, null, 2)}\n`, {
+    mode: 0o600,
+  });
+
+  return {
+    configPath: tempConfigPath,
+    summary: {
+      primary: params.modelOverride.primary,
+      fallbacks:
+        params.modelOverride.fallbacks.length > 0 ? params.modelOverride.fallbacks : null,
+      requestedRefs: configuredRefs,
+      sourceConfigPath,
+      temporaryConfigPath: tempConfigPath,
+      backfilledProviders,
+    },
+    cleanup: async () => {
+      await fs.rm(tempConfigPath, { force: true });
+    },
   };
 }
 
@@ -1139,6 +1383,17 @@ async function main(argv = process.argv) {
   const agentAuthProviders = splitListArg(
     argValue(argv, "--agent-auth-providers", "")
   );
+  const modelOverride = resolveAutoWorkflowModelOverrideArg(argv);
+  if (modelOverride.enabled && !isolatedGateway) {
+    throw new Error(
+      "--agent-model-primary/--model-ref requires the default isolated gateway mode so the temporary OpenClaw config is actually used."
+    );
+  }
+  const effectiveSourceConfig = await materializeAutoWorkflowModelOverrideConfig({
+    sourceConfigPath,
+    modelOverride,
+    agentIds: agentAuthRoles,
+  });
   const localPapernexus = await resolveLocalPapernexusConfig(argv);
   const workflowLocalFallback = resolveAutoWorkflowLocalFallbackEnv({
     mode,
@@ -1155,7 +1410,7 @@ async function main(argv = process.argv) {
     ? [{ name: "preflight", ok: true, detail: "skipped" }]
     : await preflight({
         mode,
-        sourceConfigPath,
+        sourceConfigPath: effectiveSourceConfig.configPath,
         isolatedGateway,
         skipAgentAuthPreflight,
         skipAgentModelSync,
@@ -1186,8 +1441,8 @@ async function main(argv = process.argv) {
   if (profile) {
     childArgs.push("--profile", profile);
   }
-  if (sourceConfigPath) {
-    childArgs.push("--source-config-path", sourceConfigPath);
+  if (effectiveSourceConfig.configPath) {
+    childArgs.push("--source-config-path", effectiveSourceConfig.configPath);
   }
   const gatewayUrl = argValue(argv, "--gateway-url", null);
   const gatewayToken = argValue(argv, "--gateway-token", null);
@@ -1305,6 +1560,23 @@ async function main(argv = process.argv) {
     }
   }
 
+  let modelOverrideSummary = effectiveSourceConfig.summary;
+  if (modelOverrideSummary) {
+    try {
+      await effectiveSourceConfig.cleanup();
+      modelOverrideSummary = {
+        ...modelOverrideSummary,
+        temporaryConfigRemoved: true,
+      };
+    } catch (error) {
+      modelOverrideSummary = {
+        ...modelOverrideSummary,
+        temporaryConfigRemoved: false,
+        cleanupError: error instanceof Error ? error.message : String(error),
+      };
+    }
+  }
+
   const status =
     failureReason === null
       ? verdictStatus(resultSummary, allowPartial)
@@ -1352,6 +1624,7 @@ async function main(argv = process.argv) {
     payloadPath: path.join(runRoot, "payload.json"),
     localPapernexus: localPapernexus.summary,
     workflowLocalFallback: workflowLocalFallback.summary,
+    modelOverride: modelOverrideSummary,
   };
 
   await Promise.all([

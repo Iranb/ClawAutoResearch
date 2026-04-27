@@ -398,10 +398,13 @@ node scripts/run_auto_workflow_e2e_test.mjs \
 npm run test:autoresearch:real -- \
   --topic "Generalized Category Discovery" \
   --use-local-papernexus \
-  --papernexus-shared-corpus GCD
+  --papernexus-shared-corpus GCD \
+  --agent-model-primary codex/gpt-5.4
 ```
 
 `--use-local-papernexus` 会读取 `~/.papernexus/config.json` 的 `serve.host`、`serve.port`、`serve.mcp.path` 和 `serve.apiToken`，把 workflow PaperNexus 访问临时覆盖成 `remote_mcp`，并只通过测试进程环境变量注入 token。runner 的 summary 只记录 endpoint、token 来源和 access mode，不会把 token 写入命令文件、项目状态或报告。因为 PaperNexus wrapper 默认拒绝 loopback MCP URL，该开关会同时注入 `PAPERNEXUS_ALLOW_LOCAL_MCP=1` 和 `papernexusAllowLocalMcp=true`；生产配置仍默认禁止本地 MCP。需要显式覆盖时可加 `--papernexus-mcp-url`、`--papernexus-api-base-url`、`--papernexus-token-env` 或 `--papernexus-local-config-path`。如果本机有多个 corpus，务必传 `--papernexus-shared-corpus <name>`；runner 会同步设置 `papernexusSharedCorpus` 和 `PAPERNEXUS_CORPUS`，这样 graph-build worker、直接 batch executor 和兼容 wrapper 会使用同一个 corpus。
+
+`--agent-model-primary <provider/model>` 只作用于这次 live E2E 的 isolated gateway。runner 会在本机 OpenClaw home 下生成一个临时 config，把 `agents.defaults.model.primary` 覆盖为指定模型，并从现有 agent `models.json` 回填缺失的 provider catalog；运行结束后会删除这个临时 config。这样可以测试本地 CPA/Codex 模型，例如 `codex/gpt-5.4`，而不需要修改全局 `~/.openclaw/openclaw.json`。
 
 常用的 live 调试超时参数：
 
