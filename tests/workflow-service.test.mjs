@@ -5210,6 +5210,14 @@ test("maybeAdvanceAutoCodeReviewForProject creates and advances a code innovatio
     hookStore.hookPoints.before_stage_handoff?.code?.aggregateVerdict,
     "pass"
   );
+  const handoffStoreAfterApproval = await readWorkflowHandoffIntentStore(projectRoot);
+  assert.deepEqual(
+    handoffStoreAfterApproval.intents
+      .filter((intent) => intent.reason === "code_review_required")
+      .map((intent) => intent.status)
+      .sort(),
+    ["completed", "completed", "completed"]
+  );
   const runtimeQueueStore = await readWorkflowRuntimeQueueStore(projectRoot);
   const retiredQueueEntries = runtimeQueueStore.entries.filter((entry) =>
     startedCodeReviewQueueKeys.has(entry.queueKey)

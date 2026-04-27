@@ -6,7 +6,12 @@ import {
 } from "../workflow-hooks/builtin-bridge.js";
 import { createWorkflowArtifactReceipt } from "./artifact-receipts";
 import { routeWorkflowFailure } from "./failure-router";
-import { upsertWorkflowHandoffIntent } from "./handoff-store";
+import {
+  readWorkflowHandoffIntentStore,
+  transitionWorkflowHandoffIntent,
+  upsertWorkflowHandoffIntent,
+} from "./handoff-store";
+import { isWorkflowHandoffActiveStatus } from "./handoff-types";
 import type { WorkflowHandoffIntent } from "./handoff-types";
 
 export type WorkflowReviewRoundVerdict = "pass" | "revise" | "block";
@@ -63,6 +68,56 @@ export async function createWorkflowReviewRoundHandoff(params: {
   return handoff;
 }
 
+async function completeRecordedReviewHandoffs(params: {
+  projectRoot: string;
+  workflowLine?: "experiment" | "survey";
+  stage?: string | null;
+  handoffIntentId?: string | null;
+  results: WorkflowReviewRoundResult[];
+}): Promise<void> {
+  const expectedReason = params.stage === "code" ? "code_review_required" : "paper_review_required";
+  const explicitIntentIds = new Set<string>();
+  if (params.handoffIntentId) {
+    explicitIntentIds.add(params.handoffIntentId);
+  }
+  const store = await readWorkflowHandoffIntentStore(params.projectRoot);
+  const completedIntentIds = new Set<string>();
+
+  for (const result of params.results) {
+    const candidates = store.intents
+      .filter((intent) => {
+        if (completedIntentIds.has(intent.intentId)) {
+          return false;
+        }
+        if (!isWorkflowHandoffActiveStatus(intent.status)) {
+          return false;
+        }
+        if (explicitIntentIds.has(intent.intentId)) {
+          return true;
+        }
+        return (
+          intent.reason === expectedReason &&
+          intent.workflowLine === (params.workflowLine ?? "experiment") &&
+          intent.stage === (params.stage ?? null) &&
+          intent.toRole === result.reviewerRole
+        );
+      })
+      .sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt));
+    const intent = candidates[0];
+    if (!intent) {
+      continue;
+    }
+    await transitionWorkflowHandoffIntent({
+      projectRoot: params.projectRoot,
+      intentId: intent.intentId,
+      toStatus: "completed",
+      terminalReason: "review_round_result_recorded",
+      summary: `${result.reviewerRole} review result was recorded with verdict ${result.verdict}.`,
+    });
+    completedIntentIds.add(intent.intentId);
+  }
+}
+
 export async function recordWorkflowReviewRoundResults(params: {
   projectRoot: string;
   projectId?: string | null;
@@ -101,6 +156,13 @@ export async function recordWorkflowReviewRoundResults(params: {
   }
   const aggregateSummary =
     params.results.map((entry) => entry.summary).filter(Boolean).join(" ") || null;
+  await completeRecordedReviewHandoffs({
+    projectRoot: params.projectRoot,
+    workflowLine: params.workflowLine,
+    stage: params.stage,
+    handoffIntentId: params.handoffIntentId,
+    results: params.results,
+  });
   await syncBuiltinReviewRoundHook({
     projectRoot: params.projectRoot,
     workflowLine: params.workflowLine,

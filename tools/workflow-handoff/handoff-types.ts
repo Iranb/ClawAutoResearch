@@ -170,12 +170,12 @@ export const WORKFLOW_HANDOFF_ALLOWED_TRANSITIONS: Record<
   WorkflowHandoffStatus,
   ReadonlySet<WorkflowHandoffStatus>
 > = {
-  prepared: new Set(["pending", "queued", "dispatching", "dispatched", "claimed", "failed", "expired", "superseded", "cancelled"]),
-  pending: new Set(["prepared", "queued", "dispatching", "dispatched", "claimed", "failed", "expired", "superseded", "cancelled"]),
-  queued: new Set(["dispatching", "dispatched", "claimed", "failed", "expired", "superseded", "cancelled"]),
-  dispatching: new Set(["dispatched", "delivered", "claimed", "failed", "queued", "expired", "escalated", "superseded"]),
-  dispatched: new Set(["delivered", "acknowledged", "claimed", "failed", "queued", "expired", "escalated", "superseded"]),
-  delivered: new Set(["acknowledged", "claimed", "failed", "expired", "escalated", "superseded"]),
+  prepared: new Set(["pending", "queued", "dispatching", "dispatched", "claimed", "completed", "failed", "expired", "superseded", "cancelled"]),
+  pending: new Set(["prepared", "queued", "dispatching", "dispatched", "claimed", "completed", "failed", "expired", "superseded", "cancelled"]),
+  queued: new Set(["dispatching", "dispatched", "claimed", "completed", "failed", "expired", "superseded", "cancelled"]),
+  dispatching: new Set(["dispatched", "delivered", "claimed", "completed", "failed", "queued", "expired", "escalated", "superseded"]),
+  dispatched: new Set(["delivered", "acknowledged", "claimed", "completed", "failed", "queued", "expired", "escalated", "superseded"]),
+  delivered: new Set(["acknowledged", "claimed", "completed", "failed", "expired", "escalated", "superseded"]),
   acknowledged: new Set(["claimed", "completed", "failed", "expired", "escalated", "superseded"]),
   claimed: new Set(["activated", "completed", "failed", "stale_claim", "expired", "escalated", "superseded"]),
   activated: new Set(["completed", "failed", "stale_claim", "expired", "escalated", "superseded"]),
