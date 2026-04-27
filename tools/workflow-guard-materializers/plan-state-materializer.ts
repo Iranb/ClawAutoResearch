@@ -203,6 +203,61 @@ function readActiveTrackEntries(value: unknown): Array<Record<string, unknown>> 
     );
 }
 
+function syncTrackRegistryWithResearchProgram(
+  trackRegistry: Record<string, unknown>,
+  state: ResearchProgramState
+): Record<string, unknown> {
+  const rawTracks = Array.isArray(trackRegistry.tracks) ? trackRegistry.tracks : [];
+  const existingById = new Map<string, Record<string, unknown>>();
+  const passthroughTracks: unknown[] = [];
+  for (const entry of rawTracks) {
+    const record = asRecord(entry);
+    const trackId = getTrackId(record);
+    if (record && trackId) {
+      existingById.set(trackId, record);
+    } else {
+      passthroughTracks.push(entry);
+    }
+  }
+
+  const canonicalTracks = state.tracks.map((track) => {
+    const existing = existingById.get(track.trackId) ?? {};
+    return {
+      ...existing,
+      track_id: track.trackId,
+      status: track.status,
+      hypothesis: track.hypothesis,
+      novelty_basis: track.noveltyBasis,
+      main_metric: track.mainMetric,
+      success_threshold: track.successThreshold,
+      required_baselines: track.requiredBaselines,
+      required_ablations: track.requiredAblations,
+      required_controls: track.requiredControls,
+      experiment_stage_matrix: track.experimentStageMatrix,
+      budget: {
+        gpu_hours: track.budget.gpuHours,
+        max_runs: track.budget.maxRuns,
+        max_debug_iterations: track.budget.maxDebugIterations,
+      },
+      stop_rules: track.stopRules,
+      rollback_triggers: track.rollbackTriggers,
+      write_scope: {
+        allowed_claim_ids: track.writeScope.allowedClaimIds,
+        allowed_figure_ids: track.writeScope.allowedFigureIds,
+      },
+      updated_at: state.lastUpdatedAt ?? new Date().toISOString(),
+    };
+  });
+
+  return {
+    ...trackRegistry,
+    tracks: [...canonicalTracks, ...passthroughTracks],
+    active_tracks: canonicalTracks.filter(
+      (track) => normalizeStage(track.status) === "active"
+    ).length,
+  };
+}
+
 function buildDefaultPlanTask(trackId: string, owner: string | null): ResearchProgramTask {
   return normalizeResearchProgramTask({
     task_id: `plan-${trackId}`,
@@ -803,6 +858,11 @@ export async function materializePlanStateImpl(params: {
   });
   manifest.owner_agent = pickString(manifest, ["owner_agent", "ownerAgent"]) ?? "orchestrator";
   await writeJsonEnsured(manifestPath, manifest);
+  const nextTrackRegistry = syncTrackRegistryWithResearchProgram(trackRegistry, next);
+  if (JSON.stringify(nextTrackRegistry) !== JSON.stringify(trackRegistry)) {
+    await writeJsonEnsured(trackRegistryPath, nextTrackRegistry);
+    generatedFiles.push("TRACK_REGISTRY.json");
+  }
   const selectedTrack =
     selectedTrackId
       ? next.tracks.find((entry) => entry.trackId === selectedTrackId) ?? null

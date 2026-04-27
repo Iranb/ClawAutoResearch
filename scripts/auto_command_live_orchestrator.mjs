@@ -955,17 +955,25 @@ export async function runAutoCommandEndToEndLive(params) {
     accountId: "default",
     userId: "owner",
   });
+  const isolatedGatewayEnabled = params.isolatedGateway !== false;
+  const gatewayStartupTimeoutMs = positiveNumber(
+    params.gatewayStartupTimeoutMs,
+    isolatedGatewayEnabled ? 180_000 : 30_000
+  );
   const isolatedGateway =
-    params.isolatedGateway === false
-      ? null
-      : await startIsolatedGateway({
+    isolatedGatewayEnabled
+      ? await startIsolatedGateway({
           projectsRoot,
           sourceConfigPath: params.sourceConfigPath,
-          timeoutMs: params.gatewayStartupTimeoutMs ?? 90_000,
-  });
+          pluginConfigOverrides: params.pluginConfigOverrides,
+          envOverrides: params.envOverrides,
+          timeoutMs: Math.max(90_000, gatewayStartupTimeoutMs),
+        })
+      : null;
   const pluginConfig = await loadWorkflowHarnessPluginConfig({
     sourceConfigPath: isolatedGateway?.configPath ?? params.sourceConfigPath,
     projectsRoot: isolatedGateway?.projectsRoot ?? projectsRoot,
+    overrides: params.pluginConfigOverrides,
   });
   const effectiveProjectsRoot = isolatedGateway?.projectsRoot ?? projectsRoot;
   const expectedProjectId =
@@ -975,17 +983,18 @@ export async function runAutoCommandEndToEndLive(params) {
   const bootstrapTimeoutMs = positiveNumber(params.bootstrapTimeoutMs, 180_000);
   const projectRootTimeoutMs = positiveNumber(params.projectRootTimeoutMs, 60_000);
   const workflowPolicy = getWorkflowGuardPolicy(pluginConfig);
-  const gateway = await createGatewayRuntimeSubagent({
-    profile: params.profile,
-    url: isolatedGateway?.url ?? params.gatewayUrl,
-    token: isolatedGateway?.token ?? params.gatewayToken,
-    startupTimeoutMs: params.gatewayStartupTimeoutMs ?? 30_000,
-    originatingChannel: transportContext.originatingChannel,
-    originatingTo: transportContext.originatingTo,
-    originatingAccountId: transportContext.accountId,
-  });
-  const runtimeSubagent = gateway.runtimeSubagent;
+  let gateway = null;
   try {
+    gateway = await createGatewayRuntimeSubagent({
+      profile: params.profile,
+      url: isolatedGateway?.url ?? params.gatewayUrl,
+      token: isolatedGateway?.token ?? params.gatewayToken,
+      startupTimeoutMs: gatewayStartupTimeoutMs,
+      originatingChannel: transportContext.originatingChannel,
+      originatingTo: transportContext.originatingTo,
+      originatingAccountId: transportContext.accountId,
+    });
+    const runtimeSubagent = gateway.runtimeSubagent;
     let bootstrap = null;
     try {
       const bootstrapPromise =
@@ -1210,7 +1219,7 @@ export async function runAutoCommandEndToEndLive(params) {
       harness,
     };
   } finally {
-    await gateway.stop();
+    await gateway?.stop?.();
     await isolatedGateway?.stop?.();
   }
 }

@@ -103,10 +103,11 @@ npm run test:autoresearch:real -- \
   --topic "GCD" \
   --bootstrap-timeout-ms 180000 \
   --project-root-timeout-ms 60000 \
+  --workflow-local-fallback-after-ms 30000 \
   --max-no-progress-turns 1
 ```
 
-如果 provider quota、rate limit 或 gateway bootstrap 失败，runner 仍会写出 summary，并在 `failure`/`lane failure` 字段说明失败阶段，而不是无限等待。embedded runtime 会先尝试 OpenClaw agent 配置里的 `model.fallbacks`；如果 fallback 仍失败，maintenance 会给关联 queue 写入 `nextRetryAt`，并将本地接管任务追加到 `.openclaw-research/workflow-local-operator-relay.jsonl`。
+live + local bootstrap 的 no-Discord runner 默认把 code-review 和 auto-mode discussion 的 local fallback 缩短到 30 秒；传 `--workflow-local-fallback-after-ms 180000` 可以复现生产默认等待，也可以用 `--code-review-local-fallback-after-ms` / `--auto-mode-discussion-local-fallback-after-ms` 分开覆盖。如果 provider quota、rate limit 或 gateway bootstrap 失败，runner 仍会写出 summary，并在 `failure`/`lane failure` 字段说明失败阶段，而不是无限等待。embedded runtime 会先尝试 OpenClaw agent 配置里的 `model.fallbacks`；如果 fallback 仍失败，maintenance 会给关联 queue 写入 `nextRetryAt`，并将本地接管任务追加到 `.openclaw-research/workflow-local-operator-relay.jsonl`。
 
 当 `/auto-research` 只有 topic、还没有 researcher 写出的 `PAPER_SOURCE_INDEX.json` 时，`graph_build` 会自动从 manifest / `research_program.goal` 里解析 arXiv ID 或论文题名，补一个 workflow-owned source seed，随后抓取 Markdown/PDF 并通过 `pn_batch_import.py` 排 PaperNexus 导入。这个 source bootstrap 不依赖 Discord channel，也不会创建 Discord 项目绑定。
 

@@ -122,6 +122,31 @@ function readNumberField(record: Record<string, unknown> | null, keys: string[])
   return 0;
 }
 
+function hasActiveWriterRevisionCycle(manifest: Record<string, unknown> | null | undefined): boolean {
+  const revision =
+    manifest?.revision_control_state &&
+    typeof manifest.revision_control_state === "object" &&
+    !Array.isArray(manifest.revision_control_state)
+      ? (manifest.revision_control_state as Record<string, unknown>)
+      : null;
+  if (!revision) {
+    return false;
+  }
+  const status = typeof revision.status === "string" ? revision.status.trim().toLowerCase() : null;
+  const owner =
+    typeof revision.current_owner === "string"
+      ? revision.current_owner.trim().toLowerCase()
+      : typeof revision.currentOwner === "string"
+        ? revision.currentOwner.trim().toLowerCase()
+        : null;
+  const sources = Array.isArray(revision.open_sources)
+    ? revision.open_sources
+    : Array.isArray(revision.openSources)
+      ? revision.openSources
+      : [];
+  return status === "active" && owner === "academic_writer" && sources.length > 0;
+}
+
 function countRegistryEntries(record: Record<string, unknown> | null): number {
   const entries = record?.entries;
   return Array.isArray(entries) ? entries.length : 0;
@@ -526,12 +551,17 @@ export async function collectWriteStageMissingSignals(
     projectRoot: ctx.projectRoot,
     value: ctx.manifest?.review_issue_tracker,
   });
-  if (deps.hasBlockingReviewIssues(reviewIssueTracker)) {
+  const activeWriterRevisionCycle = hasActiveWriterRevisionCycle(ctx.manifest);
+  if (!activeWriterRevisionCycle && deps.hasBlockingReviewIssues(reviewIssueTracker)) {
     missing.push(
       `PROJECT_MANIFEST.json.review_issue_tracker must have 0 open critical/high issues before write handoff (current: critical=${reviewIssueTracker.openCounts.critical}, high=${reviewIssueTracker.openCounts.high}, status=${reviewIssueTracker.status})`
     );
   }
-  if (!surveyWriteMode && deps.hasUnwaivedMediumOrHigherReviewIssues(reviewIssueTracker)) {
+  if (
+    !surveyWriteMode &&
+    !activeWriterRevisionCycle &&
+    deps.hasUnwaivedMediumOrHigherReviewIssues(reviewIssueTracker)
+  ) {
     missing.push(
       "PROJECT_MANIFEST.json.review_issue_tracker must resolve or waive all medium+ issues before write handoff"
     );

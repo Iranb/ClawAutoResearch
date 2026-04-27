@@ -112,6 +112,10 @@
           // 远程 PaperNexus MCP 请求超时，单位毫秒。
           "papernexusMcpTimeoutMs": 30000,
 
+          // 是否允许 wrapper 调用 127.0.0.1 / localhost 的 PaperNexus HTTP MCP。
+          // 生产默认应保持 false；真实 no-Discord 本机 E2E runner 会在 --use-local-papernexus 时临时开启。
+          "papernexusAllowLocalMcp": false,
+
           // 存放 PaperNexus API Bearer token 的环境变量名。
           // 推荐只在环境变量里放 secret，不要把明文 token 写进 openclaw.json。
           // 当前 workflow prompt 会引用这个 env 名，但不会把 token 值写进项目状态或 prompt trace。

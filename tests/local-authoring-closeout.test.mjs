@@ -165,6 +165,15 @@ test("authoring closeout synthesizes a substantive no-Discord conference draft",
   assert.ok(closeout.generatedFiles.includes("academic_writer/paper/main.tex"));
   assert.ok(closeout.generatedFiles.includes("academic_writer/KG_STORYLINE_PACKET.md"));
 
+  const reviewPacket = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "reviewer", "REVIEW_PACKET.json"), "utf8")
+  );
+  assert.equal(reviewPacket.status, "completed");
+  assert.equal(reviewPacket.verdict, "ready");
+  assert.ok(reviewPacket.action_items.length > 0);
+  assert.equal(reviewPacket.review_report_freshness, "missing");
+  assert.ok(await fs.stat(path.join(projectRoot, "reviewer", "SURFACE_REVIEW.json")));
+
   const mainTex = await fs.readFile(
     path.join(projectRoot, "academic_writer", "paper", "main.tex"),
     "utf8"
@@ -232,4 +241,54 @@ test("authoring closeout prepares local submit review artifacts without Discord"
     await fs.stat(path.join(projectRoot, manifest.external_review_state.review_response_path))
   );
   assert.ok(await fs.stat(path.join(projectRoot, "cross-reviewer", "LOCAL_SUBMIT_REVIEW.md")));
+});
+
+test("authoring closeout preserves stale negative reviewer actions as a writer revision", async (t) => {
+  const projectRoot = await seedWriteReadyProject();
+  t.after(() => fs.rm(projectRoot, { recursive: true, force: true }));
+
+  const reviewReportPath = path.join(projectRoot, "reviewer", "REVIEW_REPORT.md");
+  await writeText(
+    reviewReportPath,
+    [
+      "# Review Report",
+      "",
+      "## Review Summary",
+      "",
+      "- **Score**: 3/10",
+      "- **Verdict**: not_ready",
+      "",
+      "## Action Items",
+      "1. **Execute real experiments**: Report non-zero H-score values.",
+      "2. **Write section prose**: Replace placeholder manuscript text.",
+      "",
+    ].join("\n")
+  );
+  await fs.utimes(reviewReportPath, new Date("2026-04-27T00:00:00Z"), new Date("2026-04-27T00:00:00Z"));
+
+  const closeout = await reconcileAuthoringCloseout({
+    projectRoot,
+    compilePdf: false,
+    currentStageOverride: "review",
+  });
+
+  assert.equal(closeout.nextStage, "write");
+  const manifest = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "PROJECT_MANIFEST.json"), "utf8")
+  );
+  assert.equal(manifest.current_stage, "write");
+  assert.equal(manifest.owner_agent, "academic_writer");
+  assert.equal(manifest.review_session.status, "needs_revision");
+  assert.match(manifest.review_session.pending_reason, /reviewer-requested revisions/i);
+
+  const reviewPacket = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "reviewer", "REVIEW_PACKET.json"), "utf8")
+  );
+  assert.equal(reviewPacket.review_report_freshness, "stale");
+  assert.equal(reviewPacket.review_report_verdict, "needs_revision");
+  assert.match(reviewPacket.action_items.join("\n"), /Execute real experiments/i);
+  assert.ok(reviewPacket.blocking_artifacts.includes("reviewer/REVIEW_REPORT.md"));
+  assert.ok(
+    reviewPacket.issue_ids.includes("review-report-requests-revision")
+  );
 });

@@ -13,6 +13,7 @@ import {
   defaultProjectIdForAutoWorkflowRun,
   normalizeAutoWorkflowCommand,
   normalizeAutoWorkflowMode,
+  resolveAutoWorkflowLocalFallbackEnv,
   shouldEnableAgentModelSyncWatchdog,
   shouldRestartGatewayAfterAgentModelSync,
   verifyAgentRuntimeModelConfig,
@@ -110,6 +111,73 @@ test("auto workflow E2E runner derives live iteration budget from timeout", () =
     }),
     null
   );
+});
+
+test("auto workflow E2E runner injects short local fallback timeouts for no-Discord live runs", () => {
+  const resolved = resolveAutoWorkflowLocalFallbackEnv(
+    {
+      mode: "live",
+      bootstrapTransport: "local",
+    },
+    {}
+  );
+
+  assert.deepEqual(resolved.envOverrides, {
+    OPENCLAW_CODE_REVIEW_LOCAL_FALLBACK_AFTER_MS: "30000",
+    OPENCLAW_AUTO_MODE_DISCUSSION_LOCAL_FALLBACK_AFTER_MS: "30000",
+  });
+  assert.equal(resolved.summary.codeReviewFallbackAfterMs, 30_000);
+  assert.equal(resolved.summary.codeReviewSource, "local_e2e_default");
+  assert.equal(resolved.summary.autoModeDiscussionFallbackAfterMs, 30_000);
+  assert.equal(resolved.summary.autoModeDiscussionSource, "local_e2e_default");
+
+  const fixture = resolveAutoWorkflowLocalFallbackEnv(
+    {
+      mode: "fixture",
+      bootstrapTransport: "local",
+    },
+    {}
+  );
+  assert.deepEqual(fixture.envOverrides, {});
+  assert.equal(fixture.summary.codeReviewFallbackAfterMs, null);
+  assert.equal(fixture.summary.autoModeDiscussionFallbackAfterMs, null);
+});
+
+test("auto workflow E2E runner preserves explicit fallback configuration", () => {
+  const fromEnv = resolveAutoWorkflowLocalFallbackEnv(
+    {
+      mode: "live",
+      bootstrapTransport: "local",
+    },
+    {
+      OPENCLAW_CODE_REVIEW_LOCAL_FALLBACK_AFTER_MS: "7000",
+      OPENCLAW_AUTO_MODE_DISCUSSION_LOCAL_FALLBACK_AFTER_MS: "9000",
+    }
+  );
+  assert.deepEqual(fromEnv.envOverrides, {});
+  assert.equal(fromEnv.summary.codeReviewFallbackAfterMs, 7_000);
+  assert.equal(fromEnv.summary.codeReviewSource, "environment");
+  assert.equal(fromEnv.summary.autoModeDiscussionFallbackAfterMs, 9_000);
+  assert.equal(fromEnv.summary.autoModeDiscussionSource, "environment");
+
+  const fromCli = resolveAutoWorkflowLocalFallbackEnv(
+    {
+      mode: "live",
+      bootstrapTransport: "local",
+      workflowLocalFallbackAfterMs: 12_000,
+      autoModeDiscussionLocalFallbackAfterMs: 15_000,
+    },
+    {
+      OPENCLAW_CODE_REVIEW_LOCAL_FALLBACK_AFTER_MS: "7000",
+      OPENCLAW_AUTO_MODE_DISCUSSION_LOCAL_FALLBACK_AFTER_MS: "9000",
+    }
+  );
+  assert.deepEqual(fromCli.envOverrides, {
+    OPENCLAW_CODE_REVIEW_LOCAL_FALLBACK_AFTER_MS: "12000",
+    OPENCLAW_AUTO_MODE_DISCUSSION_LOCAL_FALLBACK_AFTER_MS: "15000",
+  });
+  assert.equal(fromCli.summary.codeReviewSource, "cli");
+  assert.equal(fromCli.summary.autoModeDiscussionSource, "cli");
 });
 
 test("auto workflow E2E runner validates exact runtime model provider state", () => {

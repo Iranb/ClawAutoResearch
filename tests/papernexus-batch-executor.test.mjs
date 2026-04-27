@@ -27,6 +27,31 @@ async function writeFakeBatchScript(scriptDir, scenario) {
   await fs.chmod(scriptPath, 0o755);
 }
 
+async function writeLocalMcpGuardBatchScript(scriptDir) {
+  await fs.mkdir(scriptDir, { recursive: true });
+  const scriptPath = path.join(scriptDir, "pn_batch_import.py");
+  await fs.writeFile(
+    scriptPath,
+    [
+      "#!/usr/bin/env python3",
+      "import json, os, sys",
+      "args = sys.argv[1:]",
+      "if os.environ.get('PAPERNEXUS_ALLOW_LOCAL_MCP') != '1':",
+      "    print(json.dumps({'error': 'local MCP disabled'}))",
+      "    sys.exit(1)",
+      "subcommand = next((arg for arg in args if arg in ('submit', 'wait', 'status')), 'status')",
+      "payload = {",
+      "  'submit': {'summary': {'total': 1, 'submitted': 1, 'completed': 0, 'running': 1, 'pending': 0, 'failed': 0, 'remaining': 1}, 'items': [{'paperId': 'paper-a', 'canonicalId': 'paper-a', 'taskId': 'task-a', 'status': 'running', 'submitted': True}]},",
+      "  'wait': {'summary': {'total': 1, 'submitted': 1, 'completed': 1, 'running': 0, 'pending': 0, 'failed': 0, 'remaining': 0}, 'items': [{'paperId': 'paper-a', 'canonicalId': 'paper-a', 'taskId': 'task-a', 'status': 'completed', 'stage': 'completed', 'submitted': True, 'synced': True}]}",
+      "}.get(subcommand, {})",
+      "print(json.dumps(payload))",
+      "",
+    ].join("\n"),
+    "utf8"
+  );
+  await fs.chmod(scriptPath, 0o755);
+}
+
 function makeQueuedRequest(overrides = {}) {
   const manifestPath = "researcher/paper-staging/queued-imports/req-1/batch-import.json";
   return {
@@ -108,6 +133,54 @@ test("PaperNexus batch executor retries submit for plain not-submitted items", a
   assert.equal(result?.runtimeStatus, "waiting_import");
   assert.equal(result?.repairRequired, false);
   assert.match(result?.waitingReason ?? "", /retry submit/i);
+});
+
+test("PaperNexus batch executor propagates explicit local MCP allowance to wrappers", async (t) => {
+  const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "pn-batch-local-mcp-"));
+  const scriptDir = path.join(projectRoot, "scripts");
+  const previousScriptDir = process.env.OPENCLAW_PAPERNEXUS_SCRIPT_DIR;
+  const previousAllowLocal = process.env.PAPERNEXUS_ALLOW_LOCAL_MCP;
+  t.after(async () => {
+    if (previousScriptDir === undefined) {
+      delete process.env.OPENCLAW_PAPERNEXUS_SCRIPT_DIR;
+    } else {
+      process.env.OPENCLAW_PAPERNEXUS_SCRIPT_DIR = previousScriptDir;
+    }
+    if (previousAllowLocal === undefined) {
+      delete process.env.PAPERNEXUS_ALLOW_LOCAL_MCP;
+    } else {
+      process.env.PAPERNEXUS_ALLOW_LOCAL_MCP = previousAllowLocal;
+    }
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  delete process.env.PAPERNEXUS_ALLOW_LOCAL_MCP;
+  process.env.OPENCLAW_PAPERNEXUS_SCRIPT_DIR = scriptDir;
+  await writeLocalMcpGuardBatchScript(scriptDir);
+
+  const result = await executePapernexusBatchImportRequest({
+    projectRoot,
+    request: makeQueuedRequest({
+      paperCount: 1,
+      args: [
+        "--mcp-url",
+        "http://127.0.0.1:4821/mcp",
+        "--manifest",
+        "researcher/paper-staging/queued-imports/req-1/batch-import.json",
+        "submit",
+      ],
+    }),
+    waitTimeoutSeconds: 1,
+    waitIntervalSeconds: 0.1,
+    remoteAccess: {
+      mcpUrl: "http://127.0.0.1:4821/mcp",
+      allowLocalMcp: true,
+    },
+  });
+
+  assert.equal(result?.runtimeStatus, "waiting_graph");
+  assert.equal(result?.request.status, "completed");
+  assert.equal(result?.repairRequired, false);
 });
 
 test("PaperNexus batch executor preserves submit-failed item errors across wait output", async (t) => {

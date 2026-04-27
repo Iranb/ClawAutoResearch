@@ -275,6 +275,153 @@ test("pending background queue check releases provider-capacity active runs", as
   assert.equal(runs.entries[0].status, "needs_repair");
 });
 
+test("background queue repair entries do not block fresh queue keys", async (t) => {
+  const workspaceRoot = await makeTempWorkspace();
+  const projectsRoot = path.join(workspaceRoot, "projects");
+  const projectRoot = path.join(projectsRoot, "repair-project");
+  const queueKey = "background-run:repair-project:research";
+
+  t.after(async () => {
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  });
+
+  await enqueueQueuedBackgroundWorkflowRun({
+    source: "start_background_run",
+    ownerAgent: "researcher",
+    requesterSessionKey: "agent:researcher:local:conversation:repair",
+    messageChannel: "local",
+    preferredSessionKey:
+      "agent:researcher:local:conversation:repair:subagent:workflow-research-pipeline",
+    family: "research",
+    kind: "research_pipeline",
+    projectId: "repair-project",
+    projectRoot,
+    projectsRoot,
+    queueKey,
+    summary: "Initial repair-prone queue entry.",
+    runPayload: {
+      message: "/research-pipeline repair",
+      lane: "nested",
+      deliver: false,
+      idempotencyKey: null,
+      extraSystemPrompt: null,
+    },
+  });
+
+  const firstStore = await readWorkflowRuntimeQueueStore(projectRoot);
+  const firstQueueId = firstStore.entries[0].queueId;
+  await writeWorkflowRuntimeQueueStore({
+    projectRoot,
+    projectId: "repair-project",
+    entries: firstStore.entries.map((entry) => ({
+      ...entry,
+      status: "needs_repair",
+      nextRetryAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+      lastError: "429 usage allocated quota exceeded.",
+    })),
+  });
+
+  const pending = await hasPendingBackgroundWorkflowQueueKey({
+    queueKey,
+    projectId: "repair-project",
+    projectRoot,
+    projectsRoot,
+  });
+  assert.deepEqual(pending, { queued: false, active: false });
+
+  await enqueueQueuedBackgroundWorkflowRun({
+    source: "start_background_run",
+    ownerAgent: "researcher",
+    requesterSessionKey: "agent:researcher:local:conversation:repair",
+    messageChannel: "local",
+    preferredSessionKey:
+      "agent:researcher:local:conversation:repair:subagent:workflow-research-pipeline",
+    family: "research",
+    kind: "research_pipeline",
+    projectId: "repair-project",
+    projectRoot,
+    projectsRoot,
+    queueKey,
+    summary: "Replacement queue entry after repair.",
+    runPayload: {
+      message: "/research-pipeline repair",
+      lane: "nested",
+      deliver: false,
+      idempotencyKey: null,
+      extraSystemPrompt: null,
+    },
+  });
+
+  const replacementStore = await readWorkflowRuntimeQueueStore(projectRoot);
+  assert.equal(replacementStore.entries.length, 1);
+  assert.equal(replacementStore.entries[0].queueKey, queueKey);
+  assert.equal(replacementStore.entries[0].status, "queued");
+  assert.notEqual(replacementStore.entries[0].queueId, firstQueueId);
+});
+
+test("drainQueuedBackgroundWorkflowRuns respects repair retry cooldown", async (t) => {
+  const workspaceRoot = await makeTempWorkspace();
+  const projectsRoot = path.join(workspaceRoot, "projects");
+  const projectRoot = path.join(projectsRoot, "cooldown-project");
+  const queueKey = "background-run:cooldown-project:research";
+  const runCalls = [];
+
+  t.after(async () => {
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  });
+
+  await enqueueQueuedBackgroundWorkflowRun({
+    source: "start_background_run",
+    ownerAgent: "researcher",
+    requesterSessionKey: "agent:researcher:local:conversation:cooldown",
+    messageChannel: "local",
+    preferredSessionKey:
+      "agent:researcher:local:conversation:cooldown:subagent:workflow-research-pipeline",
+    family: "research",
+    kind: "research_pipeline",
+    projectId: "cooldown-project",
+    projectRoot,
+    projectsRoot,
+    queueKey,
+    summary: "Cooldown queue entry.",
+    runPayload: {
+      message: "/research-pipeline cooldown",
+      lane: "nested",
+      deliver: false,
+      idempotencyKey: null,
+      extraSystemPrompt: null,
+    },
+  });
+  const queueStore = await readWorkflowRuntimeQueueStore(projectRoot);
+  await writeWorkflowRuntimeQueueStore({
+    projectRoot,
+    projectId: "cooldown-project",
+    entries: queueStore.entries.map((entry) => ({
+      ...entry,
+      status: "needs_repair",
+      lastAttemptedAt: new Date(Date.now() - 10 * 60 * 1000).toISOString(),
+      nextRetryAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+      lastError: "429 usage allocated quota exceeded.",
+    })),
+  });
+
+  const drained = await drainQueuedBackgroundWorkflowRuns({
+    workflowRuntime: {
+      async run(params) {
+        runCalls.push(params);
+        return { runId: "should-not-run-during-cooldown" };
+      },
+    },
+    projectsRoot,
+  });
+
+  assert.equal(runCalls.length, 0);
+  assert.equal(drained.started.length, 0);
+  assert.equal(drained.remaining.length, 1);
+  assert.equal(drained.remaining[0].queueKey, queueKey);
+  assert.equal(drained.remaining[0].status, "needs_repair");
+});
+
 test("background queue refuses ephemeral fallback without project scope", async (t) => {
   const previousQueuePath = process.env.OPENCLAW_RESEARCH_BACKGROUND_QUEUE_PATH;
 

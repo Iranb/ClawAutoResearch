@@ -19,6 +19,8 @@ import {
 import { materializeExecutionProofState } from "../workflow-execution-proof-state";
 import {
   buildExperimentLedgerSummary,
+  isBlockingActiveExperimentStatus,
+  isTerminalExperimentStatus,
   mergeExperimentEntries,
   normalizeExperimentLedger,
   saveExperimentLedger,
@@ -31,7 +33,15 @@ import {
   buildOneChangeSignature,
   collectBaselineDatasetEnvelope,
   collectInnovationAnchorPoints,
+  deriveComparableTrialBudgetStatus,
+  deriveInnovationDeviation,
+  deriveMeasuredTrialDurationMinutes,
+  normalizeExperimentInnerLoopContract,
 } from "../workflow-experiment-loop";
+import {
+  DEFAULT_EXPERIMENT_SEARCH_SPEC_PATH,
+  normalizeExperimentSearchSpec,
+} from "../workflow-guard-state/experiment-search-spec";
 
 type ManifestLike = Record<string, unknown>;
 
@@ -40,6 +50,7 @@ const DEFAULT_EXPERIMENT_SEARCH_PATH = "researcher/EXPERIMENT_SEARCH.json";
 const DEFAULT_EVALUATION_SUMMARY_PATH = "researcher/evaluation_summary.json";
 const DEFAULT_PLOT_PACK_PATH = "researcher/plot_pack.json";
 const DEFAULT_STAGE_PROGRESS_PATH = "researcher/EXPERIMENT_STAGE_PROGRESS.json";
+const DEFAULT_KARPATHY_LOOP_PATH = "researcher/KARPATHY_EXPERIMENT_LOOP.json";
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -120,6 +131,29 @@ function deriveOneChangeSignature(params: {
     ])[0] ??
     null
   );
+}
+
+async function readExperimentSearchSpec(params: {
+  projectRoot: string;
+  manifest: ManifestLike;
+  searchState: ReturnType<typeof normalizeExperimentSearchState>;
+}): Promise<{
+  relativePath: string;
+  raw: Record<string, unknown>;
+  normalized: ReturnType<typeof normalizeExperimentSearchSpec>;
+}> {
+  const manifestSearch = asRecord(params.manifest.experiment_search) ?? {};
+  const relativePath =
+    params.searchState.searchSpecPath ??
+    pickString(manifestSearch, ["searchSpecPath", "search_spec_path"]) ??
+    DEFAULT_EXPERIMENT_SEARCH_SPEC_PATH;
+  const specPath = path.join(params.projectRoot, relativePath);
+  const raw = (await readJsonIfExists<Record<string, unknown>>(specPath)) ?? {};
+  return {
+    relativePath,
+    raw,
+    normalized: normalizeExperimentSearchSpec(raw),
+  };
 }
 
 function buildSyntheticResultSummary(params: {
@@ -334,6 +368,23 @@ export async function materializeLocalExperimentExecutionImpl(params: {
   const projectId =
     pickString(manifest, ["project_id", "projectId", "id"]) ?? path.basename(projectRoot);
   const searchState = normalizeExperimentSearchState(manifest.experiment_search);
+  const searchSpec = await readExperimentSearchSpec({
+    projectRoot,
+    manifest,
+    searchState,
+  });
+  const specInnerLoop = normalizeExperimentInnerLoopContract(searchSpec.raw);
+  const normalizedSpec = searchSpec.normalized;
+  const innerLoop = {
+    mode: searchState.innerLoopMode ?? specInnerLoop.mode,
+    trialTimeBudgetMinutes:
+      searchState.trialTimeBudgetMinutes ?? specInnerLoop.trialTimeBudgetMinutes,
+    strictComparableBudget:
+      searchState.strictComparableBudget || specInnerLoop.strictComparableBudget,
+    requireOneChangeSignature:
+      searchState.requireOneChangeSignature || specInnerLoop.requireOneChangeSignature,
+    keepDiscardRule: searchState.keepDiscardRule ?? specInnerLoop.keepDiscardRule,
+  };
   if (
     normalizeStage(searchState.status) === "ready_for_analysis" &&
     searchState.evaluationSummaryPath &&
@@ -354,7 +405,11 @@ export async function materializeLocalExperimentExecutionImpl(params: {
   const ledger = normalizeExperimentLedger(ledgerRaw, projectId);
   if (
     ledger.summary.activeExperimentIds.length > 0 ||
-    ledger.experiments.some((entry) => !["done", "completed", "failed", "cancelled"].includes(entry.status ?? ""))
+    ledger.experiments.some(
+      (entry) =>
+        isBlockingActiveExperimentStatus(entry.status) ||
+        isTerminalExperimentStatus(entry.status)
+    )
   ) {
     return {
       generatedFiles: [],
@@ -433,6 +488,24 @@ export async function materializeLocalExperimentExecutionImpl(params: {
     (await readJsonIfExists<Record<string, unknown>>(resultSummaryPath)) ??
     buildSyntheticResultSummary({ experimentId, runId, seed });
   const metrics = deriveMetrics(rawSummary);
+  const lastTrialOutcome = metrics.delta_h_score >= 0 ? "keep" : "discard";
+  const measuredTrialDurationMinutes =
+    deriveMeasuredTrialDurationMinutes({
+      ledgerLike: {
+        experiments: [
+          {
+            experiment_id: experimentId,
+            launched_at: now,
+            completed_at: now,
+          },
+        ],
+      },
+      preferredExperimentIds: [experimentId],
+    }) ?? 0;
+  const comparableTrialBudgetStatus = deriveComparableTrialBudgetStatus({
+    innerLoop,
+    measuredDurationMinutes: measuredTrialDurationMinutes,
+  });
   const resultDir = path.join(
     projectRoot,
     "researcher",
@@ -451,11 +524,13 @@ export async function materializeLocalExperimentExecutionImpl(params: {
   const evaluationSummaryPath = path.join(projectRoot, DEFAULT_EVALUATION_SUMMARY_PATH);
   const plotPackPath = path.join(projectRoot, DEFAULT_PLOT_PACK_PATH);
   const stageProgressPath = path.join(projectRoot, DEFAULT_STAGE_PROGRESS_PATH);
+  const karpathyLoopPath = path.join(projectRoot, DEFAULT_KARPATHY_LOOP_PATH);
   const resultPaths = [
     toRelativeProjectPath(projectRoot, researcherResultPath),
     toRelativeProjectPath(projectRoot, aggregateResultsPath),
     DEFAULT_EVALUATION_SUMMARY_PATH,
     DEFAULT_PLOT_PACK_PATH,
+    DEFAULT_KARPATHY_LOOP_PATH,
   ];
   const orchestration = asRecord(manifest.orchestration_state) ?? {};
   const stageRunId =
@@ -476,6 +551,17 @@ export async function materializeLocalExperimentExecutionImpl(params: {
       name: "h_score",
       value: metrics.h_score,
       direction: "higher_is_better",
+    },
+    karpathy_inner_loop: {
+      mode: innerLoop.mode,
+      trial_time_budget_minutes: innerLoop.trialTimeBudgetMinutes,
+      strict_comparable_budget: innerLoop.strictComparableBudget,
+      require_one_change_signature: innerLoop.requireOneChangeSignature,
+      one_change_signature: oneChangeSignature,
+      keep_discard_rule: innerLoop.keepDiscardRule,
+      keep_discard_decision: lastTrialOutcome,
+      comparable_trial_budget_status: comparableTrialBudgetStatus,
+      measured_trial_duration_minutes: measuredTrialDurationMinutes,
     },
     result_paths: resultPaths,
     stage_run_id: stageRunId,
@@ -512,6 +598,21 @@ export async function materializeLocalExperimentExecutionImpl(params: {
   });
   generatedFiles.push(toRelativeProjectPath(projectRoot, aggregateResultsPath));
 
+  const innovationDeviation = deriveInnovationDeviation({
+    anchorPoints: innovationAnchorPoints,
+    candidateTexts: uniqueStrings([
+      ...[
+        oneChangeSignature,
+        pickString(bundle.manifest, ["hypothesis"]),
+        pickString(bundle.manifest, ["novelty_basis", "noveltyBasis"]),
+      ].filter((value): value is string => typeof value === "string"),
+      ...asStringArray(
+        bundle.manifest.innovation_points ?? bundle.manifest.innovationPoints
+      ),
+    ]),
+    tolerance: normalizedSpec.outerLoopPolicy.innovationDeviationTolerance,
+  });
+
   const evaluationSummary = {
     schema_version: 1,
     generated_at: now,
@@ -520,6 +621,17 @@ export async function materializeLocalExperimentExecutionImpl(params: {
     status: "ready",
     primary_metric: "h_score",
     metrics,
+    karpathy_inner_loop: {
+      mode: innerLoop.mode,
+      trial_time_budget_minutes: innerLoop.trialTimeBudgetMinutes,
+      strict_comparable_budget: innerLoop.strictComparableBudget,
+      require_one_change_signature: innerLoop.requireOneChangeSignature,
+      one_change_signature: oneChangeSignature,
+      keep_discard_rule: innerLoop.keepDiscardRule,
+      keep_discard_decision: lastTrialOutcome,
+      comparable_trial_budget_status: comparableTrialBudgetStatus,
+      measured_trial_duration_minutes: measuredTrialDurationMinutes,
+    },
     one_change_signature: oneChangeSignature,
     baseline_dataset_envelope: baselineDatasetEnvelope,
     validated_dataset_envelope: validatedDatasetEnvelope,
@@ -567,6 +679,39 @@ export async function materializeLocalExperimentExecutionImpl(params: {
   await writeJsonEnsured(plotPackPath, plotPack);
   generatedFiles.push(DEFAULT_PLOT_PACK_PATH);
 
+  await writeJsonEnsured(karpathyLoopPath, {
+    schema_version: 1,
+    generated_at: now,
+    status: "completed",
+    mode: innerLoop.mode,
+    search_spec_path: searchSpec.relativePath,
+    search_session_id: normalizedSpec.searchSessionId,
+    experiment_id: experimentId,
+    track_id: trackId,
+    one_change_signature: oneChangeSignature,
+    require_one_change_signature: innerLoop.requireOneChangeSignature,
+    strict_comparable_budget: innerLoop.strictComparableBudget,
+    trial_time_budget_minutes: innerLoop.trialTimeBudgetMinutes,
+    measured_trial_duration_minutes: measuredTrialDurationMinutes,
+    comparable_trial_budget_status: comparableTrialBudgetStatus,
+    keep_discard_rule: innerLoop.keepDiscardRule,
+    keep_discard_decision: lastTrialOutcome,
+    primary_metric: {
+      name: "h_score",
+      baseline: metrics.baseline_h_score,
+      candidate: metrics.h_score,
+      delta: metrics.delta_h_score,
+      direction: "higher_is_better",
+    },
+    innovation_deviation: innovationDeviation,
+    result_summary_path: toRelativeProjectPath(projectRoot, researcherResultPath),
+    next_action:
+      lastTrialOutcome === "keep"
+        ? "Promote this candidate to analysis evidence."
+        : "Discard this candidate and keep searching inside the bounded envelope.",
+  });
+  generatedFiles.push(DEFAULT_KARPATHY_LOOP_PATH);
+
   await writeJsonEnsured(stageProgressPath, {
     schema_version: 1,
     generated_at: now,
@@ -577,6 +722,8 @@ export async function materializeLocalExperimentExecutionImpl(params: {
       "local_train_script_completed",
       "result_summary_recorded",
       "ledger_reconciled",
+      "karpathy_inner_loop_completed",
+      "keep_discard_decision_recorded",
       "experiment_search_ready_for_analysis",
     ],
     next_action: "Run /analyze using the reconciled local experiment evidence.",
@@ -668,16 +815,28 @@ export async function materializeLocalExperimentExecutionImpl(params: {
         "researcher/EXPERIMENT_REGISTRY.md",
         DEFAULT_EVALUATION_SUMMARY_PATH,
         DEFAULT_PLOT_PACK_PATH,
+        DEFAULT_KARPATHY_LOOP_PATH,
         toRelativeProjectPath(projectRoot, researcherResultPath),
       ]),
       notes: [
         "Generated by the local no-Discord experiment execution materializer.",
+        `Karpathy inner loop ${innerLoop.mode ?? "unknown"} recorded a ${lastTrialOutcome} decision using ${innerLoop.keepDiscardRule ?? "the configured keep/discard rule"}.`,
         "The run uses the deterministic code-stage proxy bundle when external execution is unavailable.",
       ],
       metadata: {
         datasets: validatedDatasetEnvelope,
         validation_datasets: validatedDatasetEnvelope,
         one_change_signature: oneChangeSignature,
+        karpathy_inner_loop: {
+          mode: innerLoop.mode,
+          trial_time_budget_minutes: innerLoop.trialTimeBudgetMinutes,
+          strict_comparable_budget: innerLoop.strictComparableBudget,
+          require_one_change_signature: innerLoop.requireOneChangeSignature,
+          keep_discard_rule: innerLoop.keepDiscardRule,
+          keep_discard_decision: lastTrialOutcome,
+          comparable_trial_budget_status: comparableTrialBudgetStatus,
+          measured_trial_duration_minutes: measuredTrialDurationMinutes,
+        },
         execution: {
           run_id: enrichedSummary.run_id,
           stage_run_id: stageRunId,
@@ -732,12 +891,18 @@ export async function materializeLocalExperimentExecutionImpl(params: {
     current_main_stage: "local_execution_reconciled",
     current_substage: "analysis_ready",
     validation_stage: "analysis_ready",
-    require_one_change_signature: true,
+    inner_loop_mode: innerLoop.mode,
+    trial_time_budget_minutes: innerLoop.trialTimeBudgetMinutes,
+    strict_comparable_budget: innerLoop.strictComparableBudget,
+    require_one_change_signature: innerLoop.requireOneChangeSignature,
     one_change_signature: oneChangeSignature,
     one_change_validation_status: oneChangeSignature ? "ready" : "missing",
-    comparable_trial_budget_status: "within_budget",
-    search_state_path:
-      searchState.searchStatePath ?? DEFAULT_EXPERIMENT_SEARCH_PATH,
+    keep_discard_rule: innerLoop.keepDiscardRule,
+    last_trial_outcome: lastTrialOutcome,
+    comparable_trial_budget_status: comparableTrialBudgetStatus,
+    search_session_id: searchState.searchSessionId ?? normalizedSpec.searchSessionId,
+    search_spec_path: searchState.searchSpecPath ?? searchSpec.relativePath,
+    search_state_path: searchState.searchStatePath ?? DEFAULT_EXPERIMENT_SEARCH_PATH,
     incumbent_experiment_id: searchState.incumbentExperimentId ?? experimentId,
     last_candidate_experiment_id: experimentId,
     completed_experiment_ids: completedExperimentIds,
@@ -760,14 +925,9 @@ export async function materializeLocalExperimentExecutionImpl(params: {
           ? null
           : `Validated datasets still miss baseline-referenced datasets: ${baselineDatasetCoverageMissing.join(", ")}.`,
     innovation_anchor_points: innovationAnchorPoints,
-    innovation_deviation_status:
-      innovationAnchorPoints.length > 0 ? "aligned" : "unknown",
-    innovation_deviation_score:
-      innovationAnchorPoints.length > 0 ? 1 : null,
-    innovation_deviation_summary:
-      innovationAnchorPoints.length > 0
-        ? "Local execution candidate remains aligned with the selected research-program innovation anchors."
-        : null,
+    innovation_deviation_status: innovationDeviation.status,
+    innovation_deviation_score: innovationDeviation.score,
+    innovation_deviation_summary: innovationDeviation.summary,
     evaluation_summary_path: DEFAULT_EVALUATION_SUMMARY_PATH,
     plot_pack_status: "complete",
     plot_pack_path: DEFAULT_PLOT_PACK_PATH,
@@ -786,6 +946,9 @@ export async function materializeLocalExperimentExecutionImpl(params: {
     last_completed_experiment_id: experimentId,
     best_known_config_ref: bundle.bundleRelativeDir,
     last_decision_summary: `${experimentId}: ${metrics.delta_h_score >= 0 ? "advance" : "needs_repair"}`,
+    karpathy_inner_loop_path: DEFAULT_KARPATHY_LOOP_PATH,
+    karpathy_inner_loop_status: "completed",
+    karpathy_keep_discard_decision: lastTrialOutcome,
     papernexus_sync_status: "not_required",
     papernexus_sync_required: false,
   };

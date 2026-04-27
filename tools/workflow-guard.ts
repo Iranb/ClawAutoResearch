@@ -611,6 +611,7 @@ export interface WorkflowGuardPolicy extends ChannelProjectBindingPolicy {
   papernexusMcpUrl?: string;
   papernexusMcpTransport?: string;
   papernexusMcpTimeoutMs?: number;
+  papernexusAllowLocalMcp?: boolean;
   papernexusApiTokenEnv?: string;
   papernexusApiTokenSource?: string;
   papernexusApiTokenService?: string;
@@ -2352,6 +2353,7 @@ const DEFAULT_POLICY: Required<WorkflowGuardPolicy> = {
   papernexusMcpUrl: "",
   papernexusMcpTransport: "streamable-http",
   papernexusMcpTimeoutMs: 30000,
+  papernexusAllowLocalMcp: false,
   papernexusApiTokenEnv: "",
   papernexusApiTokenSource: "auto",
   papernexusApiTokenService: "papernexus-api-token",
@@ -2849,6 +2851,10 @@ function normalizePolicy(
             )
           )
         : DEFAULT_POLICY.papernexusMcpTimeoutMs,
+    papernexusAllowLocalMcp:
+      (config as Record<string, unknown> | null)?.papernexusAllowLocalMcp === true
+        ? true
+        : DEFAULT_POLICY.papernexusAllowLocalMcp,
     papernexusApiTokenEnv:
       asString(config?.papernexusApiTokenEnv) ??
       DEFAULT_POLICY.papernexusApiTokenEnv,

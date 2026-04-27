@@ -204,6 +204,19 @@ npm run test:autoreview:real -- --topic "GCD"
 
 live E2E 默认创建带时间戳的隔离项目；需要复用旧项目时加 `--reuse-project` 或 `--project-id <id>`。如果外部 provider quota、gateway bootstrap 或项目目录创建失败，runner 会写出 `.openclaw-research/e2e-runs/.../AUTO_WORKFLOW_E2E_SUMMARY.*` 供复盘。
 
+使用本机 PaperNexus 服务做真实 autoresearch 测试：
+
+```bash
+npm run test:autoresearch:real -- \
+  --topic "GCD" \
+  --use-local-papernexus \
+  --papernexus-shared-corpus GCD
+```
+
+这个开关读取 `~/.papernexus/config.json`，把当前测试的 PaperNexus access 临时覆盖到本地 HTTP MCP，并只通过进程环境注入 token；summary 不落明文 token。因为 PaperNexus wrapper 默认拒绝 loopback MCP URL，runner 只在显式本地测试时额外注入 `PAPERNEXUS_ALLOW_LOCAL_MCP=1` / `papernexusAllowLocalMcp=true`。如果本机 PaperNexus 有多个 corpus，必须同时传 `--papernexus-shared-corpus <name>`；runner 会把它写入插件策略并导出 `PAPERNEXUS_CORPUS`，避免旧 wrapper 或直接 batch worker 因缺少 corpus 停在 graph build。
+
+no-Discord live E2E 会在子进程里把 code review 和 auto-mode discussion 的本地 fallback 默认缩短到 30 秒，避免测试每个讨论节点都等待生产默认的 180 秒。需要复现生产等待时，显式传 `--workflow-local-fallback-after-ms 180000`；也可以用 `--code-review-local-fallback-after-ms` 和 `--auto-mode-discussion-local-fallback-after-ms` 分开覆盖。这个设置只影响 E2E runner 启动的子进程，不改变 gateway/插件的生产默认值。
+
 topic-only 的 no-Discord 项目不会再等待 Discord 研究员消息先补 `PAPER_SOURCE_INDEX.json`。`graph_build` 会从 `PROJECT_MANIFEST.json` / `research_program.goal` 中提取 arXiv ID 或论文题名，解析成 workflow-owned source seed，抓取 Markdown/PDF 后继续排 PaperNexus batch import。
 
 如果真实运行中触发 provider quota / 429，embedded runtime 会先尝试 OpenClaw agent 配置里的 `model.fallbacks`。如果 fallback 仍失败，runtime maintenance 会把对应 queue 写入 `.openclaw-research/workflow-local-operator-relay.jsonl`，并设置 `nextRetryAt`，避免 background pool 立即反复重放。读取最新本地接管任务：

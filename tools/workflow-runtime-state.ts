@@ -327,6 +327,10 @@ function getRuntimeStoreLockPath(filePath: string): string {
   return `${filePath}.lock`;
 }
 
+const RUNTIME_STORE_LOCK_TIMEOUT_MS = 60_000;
+const RUNTIME_STORE_LOCK_RETRY_MS = 100;
+const RUNTIME_STORE_LOCK_STALE_MS = 10 * 60_000;
+
 async function withRuntimeStoreLock<T>(
   filePath: string,
   task: () => Promise<T>
@@ -334,6 +338,9 @@ async function withRuntimeStoreLock<T>(
   return withAdvisoryLock({
     lockPath: getRuntimeStoreLockPath(filePath),
     task,
+    timeoutMs: RUNTIME_STORE_LOCK_TIMEOUT_MS,
+    retryMs: RUNTIME_STORE_LOCK_RETRY_MS,
+    staleMs: RUNTIME_STORE_LOCK_STALE_MS,
   });
 }
 
@@ -444,18 +451,34 @@ async function readManifest(projectRoot: string): Promise<ManifestLike> {
   return (await readJsonIfExists<ManifestLike>(getManifestPath(projectRoot))) ?? {};
 }
 
-async function saveManifestAudit(
-  projectRoot: string,
-  audit: Record<string, unknown>
-): Promise<void> {
+function jsonContentEquals(left: unknown, right: unknown): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+async function saveManifestRuntimeAudit(params: {
+  projectRoot: string;
+  compatibilityMode: WorkflowRuntimeCompatibilityMode;
+  reason?: string | null;
+}): Promise<boolean> {
+  const projectRoot = normalizeProjectRoot(params.projectRoot);
   const manifestPath = getManifestPath(projectRoot);
-  await withRuntimeStoreLock(manifestPath, async () => {
+  return withRuntimeStoreLock(manifestPath, async () => {
     const current = await readManifest(projectRoot);
+    const currentAudit = asRecord(current.audit) ?? {};
+    const audit = normalizeManifestAudit(
+      currentAudit,
+      params.compatibilityMode,
+      params.reason ?? null
+    );
+    if (jsonContentEquals(currentAudit, audit)) {
+      return false;
+    }
     await writeJson(manifestPath, {
       ...current,
       audit,
       updated_at: nowIso(),
     });
+    return true;
   });
 }
 
@@ -1048,13 +1071,11 @@ export async function migrateWorkflowRuntimeState(params: {
     reason: params.reason,
     notes: params.notes,
   });
-  const audit = normalizeManifestAudit(
-    manifest.audit,
+  const auditUpdated = await saveManifestRuntimeAudit({
+    projectRoot,
     compatibilityMode,
-    params.reason ?? null
-  );
-  manifest.audit = audit;
-  await saveManifestAudit(projectRoot, audit);
+    reason: params.reason ?? null,
+  });
 
   const createdFiles: string[] = [];
   const fileSpecs: Array<{
@@ -1120,7 +1141,7 @@ export async function migrateWorkflowRuntimeState(params: {
   }
 
   return {
-    migrated: createdFiles.length > 0 || readString(asRecord(manifest.audit)?.runtime_framework) === WORKFLOW_RUNTIME_FRAMEWORK,
+    migrated: auditUpdated || createdFiles.length > 0,
     projectRoot,
     projectId,
     compatibilityMode,

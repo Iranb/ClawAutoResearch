@@ -5,6 +5,10 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { syncOpenClawAgentModels } from "./sync_openclaw_agent_models.mjs";
+import {
+  appendLocalPapernexusArgs,
+  resolveLocalPapernexusConfig,
+} from "./local_papernexus_config.mjs";
 
 const scriptPath = fileURLToPath(import.meta.url);
 const scriptDir = path.dirname(scriptPath);
@@ -29,6 +33,20 @@ function numberArgValue(argv, name, fallback = null) {
   }
   const parsed = Number(raw);
   return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function nonNegativeIntegerArgValue(argv, names, fallback = null) {
+  for (const name of Array.isArray(names) ? names : [names]) {
+    const raw = argValue(argv, name, null);
+    if (raw === null) {
+      continue;
+    }
+    const parsed = Number.parseInt(raw, 10);
+    if (Number.isFinite(parsed) && parsed >= 0) {
+      return Math.floor(parsed);
+    }
+  }
+  return fallback;
 }
 
 function firstPositional(argv) {
@@ -154,6 +172,84 @@ export function deriveAutoWorkflowChildMaxIterations(params) {
     return 90;
   }
   return Math.min(240, Math.max(24, Math.ceil(timeoutMs / 30_000)));
+}
+
+const CODE_REVIEW_LOCAL_FALLBACK_ENV = "OPENCLAW_CODE_REVIEW_LOCAL_FALLBACK_AFTER_MS";
+const AUTO_MODE_DISCUSSION_LOCAL_FALLBACK_ENV =
+  "OPENCLAW_AUTO_MODE_DISCUSSION_LOCAL_FALLBACK_AFTER_MS";
+const DEFAULT_NO_DISCORD_E2E_LOCAL_FALLBACK_AFTER_MS = 30_000;
+
+function parseNonNegativeInteger(value) {
+  const raw = String(value ?? "").trim();
+  if (!raw) {
+    return null;
+  }
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : null;
+}
+
+function shouldDefaultNoDiscordE2eLocalFallbacks(params) {
+  return (
+    params?.mode === "live" &&
+    normalizeToken(params?.bootstrapTransport ?? "local") === "local"
+  );
+}
+
+export function resolveAutoWorkflowLocalFallbackEnv(params, baseEnv = process.env) {
+  const defaultAfterMs = shouldDefaultNoDiscordE2eLocalFallbacks(params)
+    ? DEFAULT_NO_DISCORD_E2E_LOCAL_FALLBACK_AFTER_MS
+    : null;
+  const sharedExplicit = parseNonNegativeInteger(params?.workflowLocalFallbackAfterMs);
+  const explicitCodeReview =
+    parseNonNegativeInteger(params?.codeReviewLocalFallbackAfterMs) ?? sharedExplicit;
+  const explicitDiscussion =
+    parseNonNegativeInteger(params?.autoModeDiscussionLocalFallbackAfterMs) ?? sharedExplicit;
+
+  const envOverrides = {};
+  const resolveOne = (name, explicitValue) => {
+    if (explicitValue !== null) {
+      envOverrides[name] = String(explicitValue);
+      return { value: explicitValue, source: "cli" };
+    }
+    const rawEnv = baseEnv?.[name];
+    if (typeof rawEnv === "string" && rawEnv.trim() !== "") {
+      const parsedEnv = parseNonNegativeInteger(rawEnv);
+      if (parsedEnv !== null) {
+        return { value: parsedEnv, source: "environment" };
+      }
+      if (defaultAfterMs !== null) {
+        envOverrides[name] = String(defaultAfterMs);
+        return { value: defaultAfterMs, source: "invalid_environment_default" };
+      }
+      return { value: null, source: "invalid_environment" };
+    }
+    if (defaultAfterMs !== null) {
+      envOverrides[name] = String(defaultAfterMs);
+      return { value: defaultAfterMs, source: "local_e2e_default" };
+    }
+    return { value: null, source: "unset" };
+  };
+
+  const codeReview = resolveOne(CODE_REVIEW_LOCAL_FALLBACK_ENV, explicitCodeReview);
+  const autoModeDiscussion = resolveOne(
+    AUTO_MODE_DISCUSSION_LOCAL_FALLBACK_ENV,
+    explicitDiscussion
+  );
+
+  return {
+    envOverrides,
+    summary: {
+      defaultAfterMs,
+      codeReviewFallbackAfterMs: codeReview.value,
+      codeReviewSource: codeReview.source,
+      autoModeDiscussionFallbackAfterMs: autoModeDiscussion.value,
+      autoModeDiscussionSource: autoModeDiscussion.source,
+      envKeys: {
+        codeReview: CODE_REVIEW_LOCAL_FALLBACK_ENV,
+        autoModeDiscussion: AUTO_MODE_DISCUSSION_LOCAL_FALLBACK_ENV,
+      },
+    },
+  };
 }
 
 export function configuredProjectsRootFromOpenClawConfig(config) {
@@ -905,6 +1001,16 @@ function formatHumanSummary(summary) {
     `projects root: ${summary.projectsRoot}`,
     `summary: ${summary.summaryPath}`,
   ];
+  if (summary.localPapernexus) {
+    lines.push(
+      `PaperNexus: ${summary.localPapernexus.accessMode} ${summary.localPapernexus.mcpUrl ?? summary.localPapernexus.apiBaseUrl ?? "unset"} token=${summary.localPapernexus.tokenProvidedBy}`
+    );
+  }
+  if (summary.workflowLocalFallback) {
+    lines.push(
+      `local fallback: code-review=${summary.workflowLocalFallback.codeReviewFallbackAfterMs ?? "unset"}ms (${summary.workflowLocalFallback.codeReviewSource}), discussion=${summary.workflowLocalFallback.autoModeDiscussionFallbackAfterMs ?? "unset"}ms (${summary.workflowLocalFallback.autoModeDiscussionSource})`
+    );
+  }
   for (const lane of summary.result.lanes) {
     lines.push(
       "",
@@ -998,6 +1104,24 @@ async function main(argv = process.argv) {
   const agentWaitTimeoutMs = numberArgValue(argv, "--agent-wait-timeout-ms", null);
   const progressPollMs = numberArgValue(argv, "--progress-poll-ms", null);
   const maxNoProgressTurns = numberArgValue(argv, "--max-no-progress-turns", null);
+  const workflowLocalFallbackAfterMs = nonNegativeIntegerArgValue(
+    argv,
+    "--workflow-local-fallback-after-ms",
+    null
+  );
+  const codeReviewLocalFallbackAfterMs = nonNegativeIntegerArgValue(
+    argv,
+    ["--code-review-local-fallback-after-ms", "--local-review-fallback-after-ms"],
+    null
+  );
+  const autoModeDiscussionLocalFallbackAfterMs = nonNegativeIntegerArgValue(
+    argv,
+    [
+      "--auto-mode-discussion-local-fallback-after-ms",
+      "--local-discussion-fallback-after-ms",
+    ],
+    null
+  );
   const skipAgentAuthPreflight = hasFlag(argv, "--skip-agent-auth-preflight");
   const skipAgentModelSync = hasFlag(argv, "--skip-agent-model-sync");
   const skipGatewayRestartAfterAgentSync = hasFlag(
@@ -1015,6 +1139,14 @@ async function main(argv = process.argv) {
   const agentAuthProviders = splitListArg(
     argValue(argv, "--agent-auth-providers", "")
   );
+  const localPapernexus = await resolveLocalPapernexusConfig(argv);
+  const workflowLocalFallback = resolveAutoWorkflowLocalFallbackEnv({
+    mode,
+    bootstrapTransport,
+    workflowLocalFallbackAfterMs,
+    codeReviewLocalFallbackAfterMs,
+    autoModeDiscussionLocalFallbackAfterMs,
+  });
 
   await fs.mkdir(runRoot, { recursive: true });
   await fs.mkdir(projectsRoot, { recursive: true });
@@ -1092,6 +1224,7 @@ async function main(argv = process.argv) {
   if (!isolatedGateway) {
     childArgs.push("--no-isolated-gateway");
   }
+  appendLocalPapernexusArgs(argv, childArgs);
 
   const startedAt = new Date().toISOString();
   await writeText(
@@ -1143,6 +1276,10 @@ async function main(argv = process.argv) {
     try {
       child = await runProcess(process.execPath, childArgs, {
         cwd: repoRoot,
+        env: {
+          ...localPapernexus.envOverrides,
+          ...workflowLocalFallback.envOverrides,
+        },
         timeoutMs,
         onStdout: quiet ? null : (text) => process.stdout.write(text),
         onStderr: quiet ? null : (text) => process.stderr.write(text),
@@ -1213,6 +1350,8 @@ async function main(argv = process.argv) {
     stdoutPath: path.join(runRoot, "stdout.log"),
     stderrPath: path.join(runRoot, "stderr.log"),
     payloadPath: path.join(runRoot, "payload.json"),
+    localPapernexus: localPapernexus.summary,
+    workflowLocalFallback: workflowLocalFallback.summary,
   };
 
   await Promise.all([

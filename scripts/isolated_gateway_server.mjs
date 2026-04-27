@@ -33,24 +33,42 @@ async function getFreePort() {
   });
 }
 
-async function waitForPort(params) {
+export async function waitForPort(params) {
   const startedAt = Date.now();
   while (Date.now() - startedAt < params.timeoutMs) {
-    const connected = await new Promise((resolve) => {
-      const socket = net.createConnection({ host: "127.0.0.1", port: params.port });
-      const finish = (ok) => {
-        socket.removeAllListeners();
-        socket.destroy();
-        resolve(ok);
-      };
-      socket.once("connect", () => finish(true));
-      socket.once("error", () => finish(false));
-      socket.setTimeout(500, () => finish(false));
-    });
+    const connected = await Promise.race([
+      new Promise((resolve) => {
+        const socket = net.createConnection({ host: "127.0.0.1", port: params.port });
+        const finish = (ok) => {
+          socket.removeAllListeners();
+          socket.destroy();
+          resolve(ok);
+        };
+        socket.once("connect", () => finish(true));
+        socket.once("error", () => finish(false));
+        socket.setTimeout(500, () => finish(false));
+      }),
+      params.exitPromise
+        ? params.exitPromise.then((exit) => {
+            throw new Error(
+              `isolated gateway exited before opening port ${params.port} (code=${exit.code ?? "null"}, signal=${exit.signal ?? "null"})`
+            );
+          })
+        : new Promise(() => {}),
+    ]);
     if (connected) {
       return;
     }
-    await new Promise((resolve) => setTimeout(resolve, 250));
+    await Promise.race([
+      new Promise((resolve) => setTimeout(resolve, 250)),
+      params.exitPromise
+        ? params.exitPromise.then((exit) => {
+            throw new Error(
+              `isolated gateway exited before opening port ${params.port} (code=${exit.code ?? "null"}, signal=${exit.signal ?? "null"})`
+            );
+          })
+        : new Promise(() => {}),
+    ]);
   }
   throw new Error(`Timed out waiting for isolated gateway on port ${params.port}`);
 }
@@ -104,6 +122,7 @@ export async function startIsolatedGateway(params = {}) {
     enabled: true,
     config: {
       ...(currentResearchPlugin.config ?? {}),
+      ...(params.pluginConfigOverrides ?? {}),
       projectsRoot,
       enableChannelProjectBindings: true,
       heartbeatBackgroundChecks: true,
@@ -141,6 +160,7 @@ export async function startIsolatedGateway(params = {}) {
         OPENCLAW_SKIP_GMAIL_WATCHER: "1",
         OPENCLAW_SKIP_CRON: "1",
         OPENCLAW_SKIP_CANVAS_HOST: "1",
+        ...(params.envOverrides ?? {}),
       },
       stdio: ["ignore", "pipe", "pipe"],
     }
@@ -148,6 +168,14 @@ export async function startIsolatedGateway(params = {}) {
 
   const stdout = [];
   const stderr = [];
+  const exitPromise = new Promise((resolve) => {
+    child.once("exit", (code, signal) => {
+      resolve({ code, signal });
+    });
+    child.once("error", (error) => {
+      resolve({ code: null, signal: `spawn_error:${error.message}` });
+    });
+  });
   child.stdout?.on("data", (chunk) => {
     stdout.push(String(chunk));
   });
@@ -156,7 +184,7 @@ export async function startIsolatedGateway(params = {}) {
   });
 
   try {
-    await waitForPort({ port, timeoutMs: params.timeoutMs ?? 90_000 });
+    await waitForPort({ port, timeoutMs: params.timeoutMs ?? 90_000, exitPromise });
   } catch (error) {
     child.kill("SIGTERM");
     throw new Error(

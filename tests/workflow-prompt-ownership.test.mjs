@@ -505,6 +505,7 @@ test("getWorkflowGuardPolicy normalizes PaperNexus remote access settings", () =
     papernexusApiTokenAccount: "default",
     papernexusMineruHttpUrl: "http://mineru.example:30000",
     papernexusAccessMode: "remote_mcp",
+    papernexusAllowLocalMcp: true,
   });
 
   assert.equal(policy.papernexusApiBaseUrl, "https://papernexus.example/api");
@@ -517,6 +518,7 @@ test("getWorkflowGuardPolicy normalizes PaperNexus remote access settings", () =
   assert.equal(policy.papernexusApiTokenAccount, "default");
   assert.equal(policy.papernexusMineruHttpUrl, "http://mineru.example:30000");
   assert.equal(policy.papernexusAccessMode, "remote_mcp");
+  assert.equal(policy.papernexusAllowLocalMcp, true);
 });
 
 test("getWorkflowGuardPolicy defaults zoteroProjectRoot to bot", () => {

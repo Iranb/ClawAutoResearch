@@ -298,6 +298,18 @@ test("plugin schema exposes autoGate.gateModes.review_to_write", async () => {
   );
 });
 
+test("plugin schema exposes explicit local PaperNexus MCP allowance", async () => {
+  const pluginJson = JSON.parse(
+    await fs.readFile(path.join(process.cwd(), "openclaw.plugin.json"), "utf8")
+  );
+
+  assert.equal(
+    pluginJson?.configSchema?.properties?.papernexusAllowLocalMcp?.type,
+    "boolean"
+  );
+  assert.equal(pluginJson?.configSchema?.properties?.papernexusAllowLocalMcp?.default, false);
+});
+
 test("default auto gate config keeps submit_to_done manual while earlier gates use panel mode", () => {
   const config = defaultAutoGateConfig();
   assert.equal(config.gateModes.review_to_write, "panel_gate");

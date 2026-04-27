@@ -325,48 +325,57 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function healthUrlForGateway(wsUrl) {
+export function healthUrlsForGateway(wsUrl) {
   try {
     const target = new URL(wsUrl);
     target.protocol = target.protocol === "wss:" ? "https:" : "http:";
-    target.pathname = "/health";
-    target.search = "";
-    target.hash = "";
-    return target.toString();
+    return ["/health", "/healthz"].map((pathname) => {
+      const candidate = new URL(target.toString());
+      candidate.pathname = pathname;
+      candidate.search = "";
+      candidate.hash = "";
+      return candidate.toString();
+    });
   } catch {
-    return null;
+    return [];
   }
 }
 
 async function waitForGatewayHealth(wsUrl, timeoutMs) {
-  const healthUrl = healthUrlForGateway(wsUrl);
-  if (!healthUrl || timeoutMs <= 0) {
-    return;
+  const healthUrls = healthUrlsForGateway(wsUrl);
+  if (healthUrls.length === 0 || timeoutMs <= 0) {
+    return { ok: false, error: "gateway health probe skipped" };
   }
   const startedAt = Date.now();
   let lastError = null;
   while (Date.now() - startedAt < timeoutMs) {
-    try {
-      const response = await fetch(healthUrl, { signal: AbortSignal.timeout(2_000) });
-      if (response.ok) {
-        return;
+    for (const healthUrl of healthUrls) {
+      try {
+        const response = await fetch(healthUrl, { signal: AbortSignal.timeout(1_000) });
+        if (response.ok) {
+          return { ok: true, url: healthUrl };
+        }
+        lastError = new Error(`${healthUrl} returned HTTP ${response.status}`);
+      } catch (error) {
+        lastError = error;
       }
-      lastError = new Error(`gateway health returned HTTP ${response.status}`);
-    } catch (error) {
-      lastError = error;
     }
     await sleep(500);
   }
-  throw new Error(
-    `Timed out waiting for gateway health at ${healthUrl}: ${
+  return {
+    ok: false,
+    error: `Timed out waiting for gateway health at ${healthUrls.join(", ")}: ${
       lastError instanceof Error ? lastError.message : String(lastError ?? "unknown")
-    }`
-  );
+    }`,
+  };
 }
 
 async function openGatewayWebSocketWithRetry(resolved, params) {
   const startupTimeoutMs = params.startupTimeoutMs ?? params.gatewayStartupTimeoutMs ?? 15_000;
-  await waitForGatewayHealth(resolved.url, startupTimeoutMs);
+  const healthTimeoutMs =
+    params.gatewayHealthTimeoutMs ??
+    Math.min(5_000, Math.max(0, Math.floor(startupTimeoutMs / 3)));
+  const healthResult = await waitForGatewayHealth(resolved.url, healthTimeoutMs);
   const startedAt = Date.now();
   let lastError = null;
   while (Date.now() - startedAt < startupTimeoutMs) {
@@ -386,7 +395,7 @@ async function openGatewayWebSocketWithRetry(resolved, params) {
   throw new Error(
     `Timed out opening gateway websocket at ${resolved.url}: ${
       lastError instanceof Error ? lastError.message : String(lastError ?? "unknown")
-    }`
+    }${healthResult?.ok === false && healthResult.error ? `; health probe: ${healthResult.error}` : ""}`
   );
 }
 

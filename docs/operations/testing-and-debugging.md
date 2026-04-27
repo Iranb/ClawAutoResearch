@@ -392,6 +392,17 @@ node scripts/run_auto_workflow_e2e_test.mjs \
 
 真实模式默认按时间戳生成隔离 project id，避免旧项目的 runtime queue、session 或 hook retry budget 污染新测试。只有在要复盘同一项目时才使用 `--reuse-project` 或手工指定 `--project-id`。
 
+如果要强制使用本机部署的 PaperNexus HTTP MCP，而不是 OpenClaw 全局配置里的远端地址，使用：
+
+```bash
+npm run test:autoresearch:real -- \
+  --topic "Generalized Category Discovery" \
+  --use-local-papernexus \
+  --papernexus-shared-corpus GCD
+```
+
+`--use-local-papernexus` 会读取 `~/.papernexus/config.json` 的 `serve.host`、`serve.port`、`serve.mcp.path` 和 `serve.apiToken`，把 workflow PaperNexus 访问临时覆盖成 `remote_mcp`，并只通过测试进程环境变量注入 token。runner 的 summary 只记录 endpoint、token 来源和 access mode，不会把 token 写入命令文件、项目状态或报告。因为 PaperNexus wrapper 默认拒绝 loopback MCP URL，该开关会同时注入 `PAPERNEXUS_ALLOW_LOCAL_MCP=1` 和 `papernexusAllowLocalMcp=true`；生产配置仍默认禁止本地 MCP。需要显式覆盖时可加 `--papernexus-mcp-url`、`--papernexus-api-base-url`、`--papernexus-token-env` 或 `--papernexus-local-config-path`。如果本机有多个 corpus，务必传 `--papernexus-shared-corpus <name>`；runner 会同步设置 `papernexusSharedCorpus` 和 `PAPERNEXUS_CORPUS`，这样 graph-build worker、直接 batch executor 和兼容 wrapper 会使用同一个 corpus。
+
 常用的 live 调试超时参数：
 
 ```bash
@@ -399,10 +410,11 @@ npm run test:autoresearch:real -- \
   --topic "Generalized Category Discovery" \
   --bootstrap-timeout-ms 180000 \
   --project-root-timeout-ms 60000 \
+  --workflow-local-fallback-after-ms 30000 \
   --max-no-progress-turns 1
 ```
 
-`--bootstrap-timeout-ms` 限制 `/auto-research` / `/auto-review` 启动阶段等待时间；`--project-root-timeout-ms` 限制 bootstrap 返回后等待项目目录写出的时间；`--max-no-progress-turns` 控制真实阶段连续无进展后是否快速失败。provider quota、rate limit、gateway bootstrap 失败会被记录为 summary failure，而不是让测试进程一直挂起。
+`--bootstrap-timeout-ms` 限制 `/auto-research` / `/auto-review` 启动阶段等待时间；`--project-root-timeout-ms` 限制 bootstrap 返回后等待项目目录写出的时间；`--max-no-progress-turns` 控制真实阶段连续无进展后是否快速失败。live + local bootstrap 的 no-Discord runner 默认会把 `OPENCLAW_CODE_REVIEW_LOCAL_FALLBACK_AFTER_MS` 和 `OPENCLAW_AUTO_MODE_DISCUSSION_LOCAL_FALLBACK_AFTER_MS` 注入为 `30000`，使本地真实测试能在 discussion/code-review runtime 超时后快速走 deterministic local fallback。需要模拟生产默认等待时传 `--workflow-local-fallback-after-ms 180000`；需要分别覆盖时传 `--code-review-local-fallback-after-ms` 或 `--auto-mode-discussion-local-fallback-after-ms`。provider quota、rate limit、gateway bootstrap 失败会被记录为 summary failure，而不是让测试进程一直挂起。
 
 ### 8.1 provider 429 与本地接管 relay
 

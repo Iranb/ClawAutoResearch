@@ -20,6 +20,7 @@ import {
   queueWorkflowMailboxMessage,
 } from "../tools/workflow-collaboration/mailbox.ts";
 import { runAutoCommandEndToEndLive } from "./auto_command_live_orchestrator.mjs";
+import { resolveLocalPapernexusConfig } from "./local_papernexus_config.mjs";
 
 const execFile = promisify(execFileCb);
 
@@ -538,6 +539,7 @@ async function main() {
   const projectsRoot =
     argValue("--projects-root") ??
     (await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auto-command-e2e-")));
+  const localPapernexus = await resolveLocalPapernexusConfig(process.argv);
 
   if (mode === "live") {
     const result = {};
@@ -556,6 +558,8 @@ async function main() {
       agentWaitTimeoutMs: numericArgValue("--agent-wait-timeout-ms", null),
       progressPollMs: numericArgValue("--progress-poll-ms", null),
       isolatedGateway: !hasFlag("--no-isolated-gateway"),
+      pluginConfigOverrides: localPapernexus.pluginOverrides,
+      envOverrides: localPapernexus.envOverrides,
     };
     if (lane === "experiment" || lane === "full") {
       result.experiment = await runAutoCommandEndToEndLive({
@@ -578,7 +582,21 @@ async function main() {
       });
     }
     console.log(
-      JSON.stringify({ topic, lane, mode, bootstrapTransport, conversationId, projectId, projectsRoot, result }, null, 2)
+      JSON.stringify(
+        {
+          topic,
+          lane,
+          mode,
+          bootstrapTransport,
+          conversationId,
+          projectId,
+          projectsRoot,
+          localPapernexus: localPapernexus.summary,
+          result,
+        },
+        null,
+        2
+      )
     );
     return;
   }

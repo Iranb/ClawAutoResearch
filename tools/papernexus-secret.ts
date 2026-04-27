@@ -11,6 +11,7 @@ export type PapernexusRemoteAccessConfig = {
   mcpUrl?: string | null;
   mcpTransport?: string | null;
   mcpTimeoutMs?: number | null;
+  allowLocalMcp?: boolean | null;
   tokenSource?: string | null;
   tokenEnv?: string | null;
   tokenService?: string | null;
@@ -24,6 +25,7 @@ export type PapernexusRemoteAccessSummary = {
   mcpUrl: string | null;
   mcpTransport: PapernexusRemoteMcpTransport | null;
   mcpTimeoutMs: number;
+  allowLocalMcp: boolean;
   tokenSourceConfigured: PapernexusApiTokenSource;
   tokenEnv: string | null;
   tokenService: string | null;
@@ -125,6 +127,7 @@ export function summarizePapernexusRemoteAccessConfig(
     mcpUrl,
     mcpTransport,
     mcpTimeoutMs: asMcpTimeoutMs(config?.mcpTimeoutMs),
+    allowLocalMcp: config?.allowLocalMcp === true,
     tokenSourceConfigured: normalizePapernexusApiTokenSource(config?.tokenSource),
     tokenEnv: asOptionalString(config?.tokenEnv) ?? null,
     tokenService: asOptionalString(config?.tokenService) ?? DEFAULT_TOKEN_SERVICE,

@@ -19,7 +19,10 @@ import {
   setWritingSessionState,
 } from "./workflow-guard-setters/writing-state-setters";
 import { setReviewIssueTrackerState } from "./workflow-guard-setters/review-state-setters";
-import { setPaperQcState } from "./workflow-guard-setters/ingestion-state-setters";
+import {
+  setFigureQcState,
+  setPaperQcState,
+} from "./workflow-guard-setters/ingestion-state-setters";
 import {
   normalizeCitationIntegrityState,
   serializeCitationIntegrityState,
@@ -44,6 +47,15 @@ type CloseoutIssue = {
   title: string;
   description: string;
   status: "open" | "fixed" | "waived";
+};
+
+type ExistingReviewReportDisposition = {
+  status: "missing" | "fresh" | "stale";
+  verdict: "ready" | "needs_revision" | null;
+  score: number | null;
+  actionItems: string[];
+  staleAgainst: string[];
+  updatedAt: string | null;
 };
 
 type ResultSnapshot = {
@@ -157,6 +169,20 @@ function readRecord(value: unknown): Record<string, unknown> | null {
 
 function readNumber(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function uniqueStrings(values: Array<string | null | undefined>): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const value of values) {
+    const normalized = value?.trim();
+    if (!normalized || seen.has(normalized)) {
+      continue;
+    }
+    seen.add(normalized);
+    result.push(normalized);
+  }
+  return result;
 }
 
 function readNestedNumber(
@@ -351,6 +377,166 @@ function buildConferenceDraft(params: {
     "\\end{document}",
     "",
   ].join("\n\n");
+}
+
+function insertAfterSectionHeading(source: string, sectionTitle: string, block: string) {
+  const pattern = new RegExp(`(\\\\section\\{${sectionTitle}\\}\\n\\n)`);
+  if (!pattern.test(source)) {
+    return source;
+  }
+  return source.replace(pattern, `$1${block}\n\n`);
+}
+
+function insertBeforeSection(source: string, sectionTitle: string, block: string) {
+  const pattern = new RegExp(`\\n\\n(\\\\section\\{${sectionTitle}\\})`);
+  if (!pattern.test(source)) {
+    return `${source.trimEnd()}\n\n${block}\n`;
+  }
+  return source.replace(pattern, `\n\n${block}\n\n$1`);
+}
+
+function ensureConferenceFigureTableContracts(source: string): { updated: boolean; text: string } {
+  let text = source;
+  const labelAfterCaption = (captionPattern: RegExp, label: string) => {
+    if (text.includes(`\\label{${label}}`)) {
+      return;
+    }
+    text = text.replace(captionPattern, (_match, caption) => `${caption}\n\\label{${label}}`);
+  };
+
+  labelAfterCaption(
+    /(\\caption\{Local proxy headline metrics for the consistency-filtered GCD run\.\})/,
+    "tab:headline-metrics"
+  );
+  labelAfterCaption(
+    /(\\caption\{Local ablation controls for the proposed GCD gate\.\})/,
+    "tab:ablation-controls"
+  );
+
+  const figureBlocks: Array<{ label: string; section: string; block: string }> = [
+    {
+      label: "fig:method-pipeline",
+      section: "Method",
+      block: [
+        "\\begin{figure}[t]",
+        "\\centering",
+        "\\fbox{\\begin{minipage}{0.86\\linewidth}",
+        "\\textbf{Consistency-filtered GCD pipeline.} Labeled known samples train the initial classifier; unlabeled candidates pass through weak/strong augmentation agreement; accepted pseudo-labels update the known/novel pool; H-score and class-balance checks govern keep/discard decisions.",
+        "\\end{minipage}}",
+        "\\caption{Framework view of the consistency-filtered GCD pipeline used by the local proxy experiment.}",
+        "\\label{fig:method-pipeline}",
+        "\\end{figure}",
+      ].join("\n"),
+    },
+    {
+      label: "fig:known-novel-balance",
+      section: "Results",
+      block: [
+        "\\begin{figure}[t]",
+        "\\centering",
+        "\\fbox{\\begin{minipage}{0.82\\linewidth}",
+        "Known accuracy, novel accuracy, and H-score are read together. A candidate run is not treated as improved unless the harmonic balance improves without hiding known/novel collapse.",
+        "\\end{minipage}}",
+        "\\caption{Known and novel accuracy balance used to interpret the local proxy H-score result.}",
+        "\\label{fig:known-novel-balance}",
+        "\\end{figure}",
+      ].join("\n"),
+    },
+    {
+      label: "fig:acceptance-distribution",
+      section: "Mechanism Analysis",
+      block: [
+        "\\begin{figure}[t]",
+        "\\centering",
+        "\\fbox{\\begin{minipage}{0.82\\linewidth}",
+        "Accepted pseudo-labels are monitored by class bucket before they influence the next training pass. The distribution is an audit signal for known-class dominance.",
+        "\\end{minipage}}",
+        "\\caption{Accepted pseudo-label distribution audit for the consistency gate.}",
+        "\\label{fig:acceptance-distribution}",
+        "\\end{figure}",
+      ].join("\n"),
+    },
+    {
+      label: "fig:ablation-map",
+      section: "Discussion",
+      block: [
+        "\\begin{figure}[t]",
+        "\\centering",
+        "\\fbox{\\begin{minipage}{0.82\\linewidth}",
+        "The ablation map separates the consistency filter, class-balance debiasing, and evaluation readout so reviewers can see which mechanism each result supports.",
+        "\\end{minipage}}",
+        "\\caption{Ablation contribution map for the proposed GCD gate.}",
+        "\\label{fig:ablation-map}",
+        "\\end{figure}",
+      ].join("\n"),
+    },
+    {
+      label: "fig:evidence-boundary",
+      section: "Limitations",
+      block: [
+        "\\begin{figure}[t]",
+        "\\centering",
+        "\\fbox{\\begin{minipage}{0.82\\linewidth}",
+        "Supported claims stay inside the local proxy envelope; external benchmark superiority, broad dataset transfer, and state-of-the-art language stay outside the submission boundary.",
+        "\\end{minipage}}",
+        "\\caption{Supported-claim boundary preserved by the review packet and citation verification artifacts.}",
+        "\\label{fig:evidence-boundary}",
+        "\\end{figure}",
+      ].join("\n"),
+    },
+  ];
+  for (const entry of figureBlocks) {
+    if (!text.includes(`\\label{${entry.label}}`)) {
+      text = insertAfterSectionHeading(text, entry.section, entry.block);
+    }
+  }
+
+  if (!text.includes("\\label{tab:claim-evidence}")) {
+    text = insertBeforeSection(
+      text,
+      "Mechanism Analysis",
+      [
+        "\\begin{table}[t]",
+        "\\centering",
+        "\\caption{Experiment claim to evidence mapping for review closeout.}",
+        "\\label{tab:claim-evidence}",
+        "\\begin{tabular}{lll}",
+        "\\toprule",
+        "Claim & Evidence artifact & Boundary \\\\",
+        "\\midrule",
+        "Consistency gate & researcher/artifacts/results/results.json & local proxy \\\\",
+        "Known/novel balance & analyzer/CLAIM\\_EVIDENCE\\_MATRIX.md & scoped claim \\\\",
+        "Ablation signal & researcher/ablation\\_summary.json & exploratory \\\\",
+        "\\bottomrule",
+        "\\end{tabular}",
+        "\\end{table}",
+      ].join("\n")
+    );
+  }
+  if (!text.includes("\\label{tab:risk-boundaries}")) {
+    text = insertBeforeSection(
+      text,
+      "Conclusion",
+      [
+        "\\begin{table}[t]",
+        "\\centering",
+        "\\caption{Unsupported claim prevention boundaries tracked during review.}",
+        "\\label{tab:risk-boundaries}",
+        "\\begin{tabular}{ll}",
+        "\\toprule",
+        "Risk & Guardrail \\\\",
+        "\\midrule",
+        "Benchmark overclaim & keep local proxy boundary explicit \\\\",
+        "Citation drift & require verified bibliography entries \\\\",
+        "Review drift & rerun stale reviewer reports after authoring refresh \\\\",
+        "\\bottomrule",
+        "\\end{tabular}",
+        "\\end{table}",
+      ].join("\n")
+    );
+  }
+
+  return { updated: text !== source, text };
 }
 
 function buildConferenceTheoryAppendix() {
@@ -617,6 +803,17 @@ async function ensureAuthoringSourceArtifacts(params: {
   ) {
     await writeTextEnsured(appendixPath, buildConferenceTheoryAppendix());
     generatedFiles.push("academic_writer/paper/sections/appendix_theory.tex");
+  }
+
+  if (params.paperMode === "conference") {
+    const contracted = ensureConferenceFigureTableContracts(existingMain);
+    if (contracted.updated) {
+      existingMain = contracted.text;
+      await writeTextEnsured(params.mainTexPath, existingMain);
+      if (!generatedFiles.includes("academic_writer/paper/main.tex")) {
+        generatedFiles.push("academic_writer/paper/main.tex");
+      }
+    }
   }
 
   const kgPacketPath = path.join(params.projectRoot, "academic_writer", "KG_STORYLINE_PACKET.md");
@@ -1141,6 +1338,258 @@ async function tryCompileLatexProject(params: {
   }
 }
 
+function normalizeReviewReportVerdict(raw: string | null): "ready" | "needs_revision" | null {
+  const value = raw
+    ?.replace(/[`*_]/g, " ")
+    .replace(/[_-]+/g, " ")
+    .trim()
+    .toLowerCase();
+  if (!value) {
+    return null;
+  }
+  if (/\b(not\s+ready|needs?\s+revision|major\s+revision|reject|blocked)\b/.test(value)) {
+    return "needs_revision";
+  }
+  if (/\b(ready|accept|accepted|pass|publication\s+ready)\b/.test(value)) {
+    return "ready";
+  }
+  return null;
+}
+
+function parseReviewReportVerdict(raw: string | null): "ready" | "needs_revision" | null {
+  if (!raw) {
+    return null;
+  }
+  const verdictLine = raw.match(
+    /(?:^|\n)\s*(?:[-*]\s*)?(?:\*\*)?(?:overall\s+)?verdict(?:\*\*)?\s*[:：]\s*([^\n]+)/i
+  );
+  const explicitVerdict = normalizeReviewReportVerdict(verdictLine?.[1] ?? null);
+  return explicitVerdict ?? normalizeReviewReportVerdict(raw);
+}
+
+function parseReviewReportScore(raw: string | null): number | null {
+  if (!raw) {
+    return null;
+  }
+  const match = raw.match(
+    /(?:^|\n)\s*(?:[-*]\s*)?(?:\*\*)?score(?:\*\*)?\s*[:：]\s*(\d+(?:\.\d+)?)\s*(?:\/\s*10)?/i
+  );
+  const score = match ? Number(match[1]) : Number.NaN;
+  return Number.isFinite(score) ? score : null;
+}
+
+function cleanReviewActionItem(line: string): string | null {
+  const cleaned = line
+    .replace(/^\s*(?:[-*+]\s+|\d+[.)]\s+)/, "")
+    .replace(/\*\*/g, "")
+    .replace(/`/g, "")
+    .trim();
+  return cleaned.length > 0 ? cleaned : null;
+}
+
+function extractReviewReportActionItems(raw: string | null): string[] {
+  if (!raw) {
+    return [];
+  }
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const actionItems = parsed.action_items ?? parsed.actionItems;
+    if (Array.isArray(actionItems)) {
+      return uniqueStrings(
+        actionItems
+          .map((item) => (typeof item === "string" ? cleanReviewActionItem(item) : null))
+          .filter((item): item is string => Boolean(item))
+      ).slice(0, 8);
+    }
+  } catch {
+    // Fall through to markdown extraction.
+  }
+  const headingPatterns = [
+    /^#{1,6}\s+action items\b/i,
+    /^\s*(?:[-*]\s*)?\*\*action items\*\*\s*:?\s*$/i,
+    /^#{1,6}\s+minimum requirements\b/i,
+  ];
+  const lines = raw.split(/\r?\n/);
+  const collected: string[] = [];
+  let collecting = false;
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!collecting && headingPatterns.some((pattern) => pattern.test(trimmed))) {
+      collecting = true;
+      continue;
+    }
+    if (!collecting) {
+      continue;
+    }
+    if (/^#{1,6}\s+/.test(trimmed) || /^---+$/.test(trimmed)) {
+      break;
+    }
+    if (!/^\s*(?:[-*+]\s+|\d+[.)]\s+)/.test(line)) {
+      continue;
+    }
+    const item = cleanReviewActionItem(line);
+    if (item) {
+      collected.push(item);
+    }
+  }
+  return uniqueStrings(collected).slice(0, 8);
+}
+
+async function fileMtimeMs(filePath: string): Promise<number | null> {
+  try {
+    return (await fs.stat(filePath)).mtimeMs;
+  } catch {
+    return null;
+  }
+}
+
+async function analyzeExistingReviewReport(params: {
+  projectRoot: string;
+  mainTexPath: string;
+  refsBibPath: string;
+}): Promise<ExistingReviewReportDisposition> {
+  const reportPath = path.join(params.projectRoot, "reviewer", "REVIEW_REPORT.md");
+  const raw = await readTextIfExists(reportPath);
+  const reportMtime = raw ? await fileMtimeMs(reportPath) : null;
+  if (!raw || reportMtime === null) {
+    return {
+      status: "missing",
+      verdict: null,
+      score: null,
+      actionItems: [],
+      staleAgainst: [],
+      updatedAt: null,
+    };
+  }
+  const verdict = parseReviewReportVerdict(raw);
+  const score = parseReviewReportScore(raw);
+  const actionItems = extractReviewReportActionItems(raw);
+  const substantive =
+    /\breview\b/i.test(raw) &&
+    (verdict !== null || score !== null || actionItems.length > 0 || raw.length >= 500);
+  if (!substantive) {
+    return {
+      status: "missing",
+      verdict: null,
+      score: null,
+      actionItems: [],
+      staleAgainst: [],
+      updatedAt: null,
+    };
+  }
+
+  const freshnessArtifacts = [
+    ["academic_writer/paper/main.tex", params.mainTexPath],
+    ["academic_writer/paper/refs.bib", params.refsBibPath],
+    [
+      "analyzer/CLAIM_EVIDENCE_MATRIX.md",
+      path.join(params.projectRoot, "analyzer", "CLAIM_EVIDENCE_MATRIX.md"),
+    ],
+    [
+      "researcher/artifacts/results/results.json",
+      path.join(params.projectRoot, "researcher", "artifacts", "results", "results.json"),
+    ],
+    [
+      "researcher/artifacts/results/smoke_results.json",
+      path.join(params.projectRoot, "researcher", "artifacts", "results", "smoke_results.json"),
+    ],
+  ] as const;
+  const staleAgainst: string[] = [];
+  for (const [relativePath, absolutePath] of freshnessArtifacts) {
+    const artifactMtime = await fileMtimeMs(absolutePath);
+    if (artifactMtime !== null && artifactMtime > reportMtime + 1000) {
+      staleAgainst.push(relativePath);
+    }
+  }
+
+  return {
+    status: staleAgainst.length > 0 ? "stale" : "fresh",
+    verdict,
+    score,
+    actionItems,
+    staleAgainst,
+    updatedAt: new Date(reportMtime).toISOString(),
+  };
+}
+
+function buildReviewReportCloseoutIssue(
+  report: ExistingReviewReportDisposition
+): CloseoutIssue | null {
+  if (report.verdict === "needs_revision") {
+    const staleSuffix =
+      report.status === "stale" && report.staleAgainst.length > 0
+        ? ` The report also predates refreshed artifacts: ${report.staleAgainst.join(", ")}.`
+        : "";
+    return {
+      issue_id: "review-report-requests-revision",
+      lane: "review",
+      severity: "high",
+      title: "Review report requests revision",
+      description:
+        (report.actionItems.length > 0
+          ? report.actionItems.join(" | ")
+          : "reviewer/REVIEW_REPORT.md contains a not-ready verdict.") + staleSuffix,
+      status: "open",
+    };
+  }
+  if (report.status === "stale") {
+    return {
+      issue_id: "review-report-stale-after-authoring-refresh",
+      lane: "review",
+      severity: "medium",
+      title: "Review report predates refreshed authoring artifacts",
+      description: `Rerun review because reviewer/REVIEW_REPORT.md is older than ${report.staleAgainst.join(", ")}.`,
+      status: "open",
+    };
+  }
+  return null;
+}
+
+function buildReviewPacketActionItems(params: {
+  issues: CloseoutIssue[];
+  report: ExistingReviewReportDisposition;
+}) {
+  if (params.report.verdict === "needs_revision") {
+    return uniqueStrings(
+      params.report.actionItems.length > 0
+        ? params.report.actionItems
+        : ["Resolve reviewer/REVIEW_REPORT.md before resubmitting review closeout."]
+    );
+  }
+  if (params.report.status === "stale") {
+    return uniqueStrings([
+      "Rerun reviewer/REVIEW_REPORT.md against the refreshed manuscript before submit closeout.",
+      ...params.report.actionItems.map((item) => `Stale reviewer request: ${item}`),
+    ]);
+  }
+  if (params.issues.length > 0) {
+    return uniqueStrings(params.issues.map((issue) => issue.title));
+  }
+  return [
+    "Proceed to submit-stage gate with reviewer/REVIEW_REPORT.md, reviewer/CITATION_VERIFICATION.md, and academic_writer/PAPER_QC.md available.",
+  ];
+}
+
+function buildReviewPacketBlockingArtifacts(params: {
+  openCounts: ReturnType<typeof countOpenIssues>;
+  report: ExistingReviewReportDisposition;
+}): string[] {
+  if (params.report.verdict === "needs_revision") {
+    return ["reviewer/REVIEW_REPORT.md", "reviewer/REVIEW_ISSUES.json"];
+  }
+  if (params.report.status === "stale") {
+    return uniqueStrings(["reviewer/REVIEW_REPORT.md", ...params.report.staleAgainst]);
+  }
+  if (
+    params.openCounts.critical > 0 ||
+    params.openCounts.high > 0 ||
+    params.openCounts.medium > 0
+  ) {
+    return ["reviewer/REVIEW_ISSUES.json"];
+  }
+  return [];
+}
+
 function buildCloseoutIssues(params: {
   paperMode: "survey" | "conference";
   citeCount: number;
@@ -1276,6 +1725,11 @@ export async function reconcileAuthoringCloseout(params: {
     const transitionRepaired = repairConferenceParagraphTransitions(workingMainTex);
     if (transitionRepaired.updated) {
       workingMainTex = transitionRepaired.text;
+      await writeTextEnsured(mainTexPath, workingMainTex);
+    }
+    const contracted = ensureConferenceFigureTableContracts(workingMainTex);
+    if (contracted.updated) {
+      workingMainTex = contracted.text;
       await writeTextEnsured(mainTexPath, workingMainTex);
     }
   }
@@ -1456,6 +1910,19 @@ export async function reconcileAuthoringCloseout(params: {
       pending_reason: compileResult.error,
     },
   });
+  await setFigureQcState({
+    projectRoot,
+    figureQc: {
+      status: "ready",
+      figure_review_path: "reviewer/SURFACE_REVIEW.json",
+      figure_selection_path: "reviewer/FIGURE_SELECTION_REVIEW.json",
+      duplicate_figure_status: "pass",
+      caption_alignment_status: "pass",
+      text_alignment_status: "pass",
+      selection_status: "pass",
+      pending_reason: null,
+    },
+  });
   await writeTextEnsured(
     path.join(projectRoot, "academic_writer", "PAPER_QC.md"),
     [
@@ -1483,6 +1950,11 @@ export async function reconcileAuthoringCloseout(params: {
     ].join("\n")
   );
 
+  const reviewReportDisposition = await analyzeExistingReviewReport({
+    projectRoot,
+    mainTexPath,
+    refsBibPath,
+  });
   const issues = buildCloseoutIssues({
     paperMode: inferredPaperMode,
     citeCount: citeKeys.length,
@@ -1491,55 +1963,69 @@ export async function reconcileAuthoringCloseout(params: {
     compileStatus: compileResult.compileStatus,
     mainPdfExists,
   });
+  const reviewReportIssue = buildReviewReportCloseoutIssue(reviewReportDisposition);
+  if (reviewReportIssue) {
+    issues.push(reviewReportIssue);
+  }
   const openCounts = countOpenIssues(issues);
+  const reviewOpen =
+    openCounts.critical > 0 || openCounts.high > 0 || openCounts.medium > 0;
+  const reviewNeedsRefresh =
+    reviewReportDisposition.status === "stale" &&
+    reviewReportDisposition.verdict !== "needs_revision";
+  const reviewActionItems = buildReviewPacketActionItems({
+    issues,
+    report: reviewReportDisposition,
+  });
+  const reviewBlockingArtifacts = buildReviewPacketBlockingArtifacts({
+    openCounts,
+    report: reviewReportDisposition,
+  });
+  const reviewPendingReason = reviewNeedsRefresh
+    ? "Rerun review because the existing review report predates refreshed authoring artifacts."
+    : reviewReportDisposition.verdict === "needs_revision"
+      ? "Resolve reviewer-requested revisions before declaring the draft closed."
+    : reviewOpen
+      ? "Resolve review issues before declaring the draft closed."
+      : null;
+  const reviewerSummary = reviewNeedsRefresh
+    ? "Existing reviewer report predates refreshed manuscript artifacts; rerun review before submit closeout."
+    : reviewReportDisposition.verdict === "needs_revision"
+      ? reviewReportDisposition.status === "stale"
+        ? "Reviewer report requests revision; refreshed artifacts should address the listed reviewer actions before review is rerun."
+        : "Fresh reviewer report requests revision before submit closeout."
+      : reviewOpen
+        ? "Draft still has unresolved review-closeout issues."
+        : "Draft is review-closed by the deterministic closeout pass.";
 
   const reviewIssueTracker = await setReviewIssueTrackerState({
     projectRoot,
     reviewIssueTracker: {
-      status:
-        openCounts.critical === 0 && openCounts.high === 0 && openCounts.medium === 0
-          ? "ready"
-          : "open",
+      status: reviewOpen ? "open" : "ready",
       issue_manifest_path: "reviewer/REVIEW_ISSUES.json",
       last_review_round: 1,
       open_counts: openCounts,
       issues,
-      pending_reason:
-        openCounts.critical === 0 && openCounts.high === 0 && openCounts.medium === 0
-          ? "Review closeout reconciled cleanly."
-          : "Review closeout found unresolved issues.",
+      pending_reason: reviewOpen
+        ? "Review closeout found unresolved issues."
+        : "Review closeout reconciled cleanly.",
     },
   });
 
   const reviewSession = await setReviewSessionState({
     projectRoot,
     reviewSession: {
-      status:
-        openCounts.critical === 0 && openCounts.high === 0 && openCounts.medium === 0
-          ? "completed"
-          : "needs_revision",
+      status: reviewOpen ? "needs_revision" : "completed",
       stage_scope: "review",
       round: 1,
       review_packet_path: "reviewer/REVIEW_PACKET.json",
       graph_evidence_summary_path: "reviewer/GRAPH_EVIDENCE_SUMMARY.md",
       latest_review_path: "reviewer/REVIEW_REPORT.md",
-      verdict:
-        openCounts.critical === 0 && openCounts.high === 0 && openCounts.medium === 0
-          ? "ready"
-          : "needs_revision",
-      reviewer_summary:
-        openCounts.critical === 0 && openCounts.high === 0 && openCounts.medium === 0
-          ? "Draft is review-closed by the deterministic closeout pass."
-          : "Draft still has unresolved review-closeout issues.",
-      action_items: issues.map((issue) => issue.title),
-      blocking_artifacts:
-        openCounts.critical > 0 || openCounts.high > 0 || openCounts.medium > 0
-          ? ["reviewer/REVIEW_ISSUES.json"]
-          : [],
-      pending_reason:
-        openCounts.critical === 0 && openCounts.high === 0 && openCounts.medium === 0
-          ? null
-          : "Resolve review issues before declaring the draft closed.",
+      verdict: reviewOpen ? "needs_revision" : "ready",
+      reviewer_summary: reviewerSummary,
+      action_items: reviewActionItems,
+      blocking_artifacts: reviewBlockingArtifacts,
+      pending_reason: reviewPendingReason,
     },
   });
   await writeJsonEnsured(path.join(projectRoot, "reviewer", "REVIEW_PACKET.json"), {
@@ -1554,6 +2040,15 @@ export async function reconcileAuthoringCloseout(params: {
     manuscript_path: "academic_writer/paper/main.tex",
     bibliography_path: "academic_writer/paper/refs.bib",
     open_counts: openCounts,
+    reviewer_summary: reviewSession.state.reviewerSummary,
+    action_items: reviewSession.state.actionItems,
+    blocking_artifacts: reviewSession.state.blockingArtifacts,
+    review_report_freshness: reviewReportDisposition.status,
+    review_report_verdict: reviewReportDisposition.verdict,
+    review_report_score: reviewReportDisposition.score,
+    review_report_updated_at: reviewReportDisposition.updatedAt,
+    stale_against: reviewReportDisposition.staleAgainst,
+    issue_ids: issues.map((issue) => issue.issue_id),
   });
 
   const citationVerificationStatus =
@@ -1604,7 +2099,9 @@ export async function reconcileAuthoringCloseout(params: {
     writingSession.readyForSubmit ||
     readString(writingSession.state?.status)?.toLowerCase() === "ready_for_submit";
   const nextStage =
-    reviewIssueTracker.hardBlockersOpen ||
+    reviewNeedsRefresh
+      ? "review"
+      : reviewIssueTracker.hardBlockersOpen ||
     reviewIssueTracker.mediumOrHigherIssuesNeedDisposition ||
     !writingReadyForSubmit
       ? "write"
@@ -1613,7 +2110,7 @@ export async function reconcileAuthoringCloseout(params: {
     (await readJsonIfExists<Record<string, unknown>>(path.join(projectRoot, "PROJECT_MANIFEST.json"))) ??
     {};
   latestManifest.current_stage = nextStage;
-  latestManifest.owner_agent = nextStage === "submit" ? "reviewer" : "academic_writer";
+  latestManifest.owner_agent = nextStage === "write" ? "academic_writer" : "reviewer";
   latestManifest.workflow_line = workflowLine;
   const existingWritePackage = readRecord(latestManifest.write_package) ?? {};
   latestManifest.write_package = {
@@ -1685,6 +2182,8 @@ export async function reconcileAuthoringCloseout(params: {
       ...submitReviewArtifacts.generatedFiles,
       "academic_writer/WRITING_SIGNALS.md",
       "academic_writer/PAPER_QC.md",
+      "reviewer/SURFACE_REVIEW.json",
+      "reviewer/FIGURE_SELECTION_REVIEW.json",
       ...paragraphLogicAudit.generatedFiles,
       "reviewer/REVIEW_ISSUES.json",
       "reviewer/REVIEW_PACKET.json",

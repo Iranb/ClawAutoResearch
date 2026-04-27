@@ -6,6 +6,7 @@ import path from "node:path";
 
 import {
   buildGatewayRuntimeMessage,
+  healthUrlsForGateway,
   inspectGatewayAgentSessionFromStore,
   isGatewayConnectHandshakeFailure,
   isGatewayProviderCapacityFailure,
@@ -90,6 +91,14 @@ test("gateway runtime treats connect handshake timeouts as retryable startup fai
     isGatewayConnectHandshakeFailure(new Error("timeout waiting for chat.send response")),
     false
   );
+});
+
+test("gateway runtime probes both legacy and current gateway health paths", () => {
+  assert.deepEqual(healthUrlsForGateway("ws://127.0.0.1:58408"), [
+    "http://127.0.0.1:58408/health",
+    "http://127.0.0.1:58408/healthz",
+  ]);
+  assert.deepEqual(healthUrlsForGateway("not a url"), []);
 });
 
 test("gateway runtime identifies provider quota and rate-limit failures", () => {

@@ -4993,6 +4993,83 @@ test("auto iterator advances analyze without theory appendix artifacts when proo
   );
 });
 
+test("auto iterator commits ready experiment review stage without waiting for reviewer ack", async (t) => {
+  const projectRoot = await makeTempProject();
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await seedProjectReadyForSubmit(projectRoot);
+
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.current_stage = "analyze";
+  manifest.current_micro_stage = "analysis_requested";
+  manifest.owner_agent = "analyzer";
+  manifest.writing_contract.proof_appendix_required = false;
+  manifest.experiment_search = {
+    status: "ready_for_analysis",
+    current_main_stage: "ablation_studies",
+    current_substage: "multi_seed_aggregation",
+    best_node_id: "node-best",
+    completed_node_ids: ["node-1", "node-2"],
+    multi_seed_status: "ready",
+    evaluation_summary_path: "researcher/evaluation_summary.json",
+    plot_pack_status: "ready",
+    plot_pack_path: "researcher/plot_pack.json",
+    baseline_fairness_status: "ready",
+    implementation_confidence: "trusted",
+    ablation_status: "ready",
+  };
+  manifest.orchestration_state = {
+    ...(manifest.orchestration_state ?? {}),
+    status: "running",
+    current_owner: "analyzer",
+    next_owner: "reviewer",
+    next_transition_candidate: "review",
+    pending_handoff_id: null,
+    pending_owner_candidate: null,
+    pending_stage_candidate: null,
+    handoff_phase: "idle",
+  };
+  await writeJson(manifestPath, manifest);
+
+  await writeJson(path.join(projectRoot, "researcher", "evaluation_summary.json"), {
+    metric: "acc",
+    value: 0.91,
+  });
+  await writeJson(path.join(projectRoot, "researcher", "plot_pack.json"), {
+    plots: [{ figure_id: "fig-1", caption: "Main results." }],
+  });
+
+  const result = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+  });
+
+  assert.equal(result.stageBefore, "analyze");
+  assert.equal(result.stageAfter, "review");
+  assert.equal(result.pendingHandoff, false);
+  assert.equal(result.ownerAfter, "reviewer");
+
+  const savedManifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  assert.equal(savedManifest.current_stage, "review");
+  assert.equal(savedManifest.owner_agent, "reviewer");
+  assert.equal(savedManifest.orchestration_state.pending_stage_candidate, null);
+  assert.equal(savedManifest.orchestration_state.handoff_phase, "idle");
+
+  const diagnostics = await readWorkflowDiagnosticEvents(projectRoot);
+  assert.ok(
+    diagnostics.some(
+      (event) =>
+        event.component === "auto_iterator" &&
+        event.action === "owner_handoff_decoupled_from_state_commit" &&
+        event.stage === "review"
+    )
+  );
+});
+
 test("auto iterator keeps top-tier analyze stage blocked until mechanism and venue competition evidence are graph-grounded", async (t) => {
   const projectRoot = await makeTempProject();
   t.after(async () => {
@@ -6396,6 +6473,145 @@ test("auto iterator materializes a local coder experiment bundle when code stage
   await fs.access(path.join(bundleDir, "README.md"));
 });
 
+test("auto iterator repairs coder experiment bundles that still carry the stale track registry contract", async (t) => {
+  const projectRoot = await makeTempProject();
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  const { trackId } = await seedProjectReadyForCode(projectRoot);
+  const staleHypothesis = "Original user topic before plan-state refinement.";
+  const staleNoveltyBasis = "Original bootstrap novelty before plan-state refinement.";
+  await writeJson(path.join(projectRoot, "TRACK_REGISTRY.json"), {
+    tracks: [
+      {
+        track_id: trackId,
+        status: "active",
+        hypothesis: staleHypothesis,
+        novelty_basis: staleNoveltyBasis,
+      },
+    ],
+    active_tracks: 1,
+  });
+  await writeText(path.join(projectRoot, "coder", "EXPERIMENT_INDEX.md"));
+  const bundleDir = path.join(
+    projectRoot,
+    "coder",
+    "experiments",
+    trackId,
+    "exp-1__baseline"
+  );
+  await writeText(path.join(bundleDir, "train.py"), "print('ok')\n");
+  await writeText(path.join(bundleDir, "README.md"));
+  await writeJson(
+    path.join(bundleDir, "EXPERIMENT_MANIFEST.json"),
+    buildAlignedExperimentManifest(trackId, {
+      status: "dry_run_passed",
+      hypothesis: staleHypothesis,
+      novelty_basis: staleNoveltyBasis,
+      dry_run: { status: "completed" },
+    })
+  );
+
+  const result = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+  });
+  const repairedManifest = JSON.parse(
+    await fs.readFile(path.join(bundleDir, "EXPERIMENT_MANIFEST.json"), "utf8")
+  );
+
+  assert.equal(result.stageBefore, "code");
+  assert.equal(result.stageAfter, "experiment");
+  assert.ok(["dry_run_passed", "completed"].includes(repairedManifest.status));
+  assert.deepEqual(repairedManifest.dry_run, { status: "completed" });
+  assert.equal(repairedManifest.hypothesis, "Graph grounding improves support precision.");
+  assert.equal(
+    repairedManifest.novelty_basis,
+    "It couples frontier packets with section drafting."
+  );
+});
+
+test("auto iterator repairs stale coder bundles even when another bundle is already aligned", async (t) => {
+  const projectRoot = await makeTempProject();
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  const { trackId } = await seedProjectReadyForCode(projectRoot);
+  const staleHypothesis = "Original user topic before plan-state refinement.";
+  const staleNoveltyBasis = "Original bootstrap novelty before plan-state refinement.";
+  await writeJson(path.join(projectRoot, "TRACK_REGISTRY.json"), {
+    tracks: [
+      {
+        track_id: trackId,
+        status: "active",
+        hypothesis: staleHypothesis,
+        novelty_basis: staleNoveltyBasis,
+      },
+    ],
+    active_tracks: 1,
+  });
+  await writeText(path.join(projectRoot, "coder", "EXPERIMENT_INDEX.md"));
+
+  const alignedBundleDir = path.join(
+    projectRoot,
+    "coder",
+    "experiments",
+    trackId,
+    "exp-0__aligned_baseline"
+  );
+  await writeText(path.join(alignedBundleDir, "train.py"), "print('ok')\n");
+  await writeText(path.join(alignedBundleDir, "README.md"));
+  await writeJson(
+    path.join(alignedBundleDir, "EXPERIMENT_MANIFEST.json"),
+    buildAlignedExperimentManifest(trackId, {
+      experiment_id: "exp-0",
+      status: "dry_run_passed",
+    })
+  );
+
+  const staleBundleDir = path.join(
+    projectRoot,
+    "coder",
+    "experiments",
+    trackId,
+    "exp-1__stale_candidate"
+  );
+  await writeText(path.join(staleBundleDir, "train.py"), "print('ok')\n");
+  await writeText(path.join(staleBundleDir, "README.md"));
+  await writeJson(
+    path.join(staleBundleDir, "EXPERIMENT_MANIFEST.json"),
+    buildAlignedExperimentManifest(trackId, {
+      experiment_id: "exp-1",
+      status: "dry_run_passed",
+      hypothesis: staleHypothesis,
+      novelty_basis: staleNoveltyBasis,
+    })
+  );
+
+  const result = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+  });
+  const repairedStaleManifest = JSON.parse(
+    await fs.readFile(path.join(staleBundleDir, "EXPERIMENT_MANIFEST.json"), "utf8")
+  );
+
+  assert.equal(result.stageBefore, "code");
+  assert.equal(result.stageAfter, "experiment");
+  assert.equal(
+    repairedStaleManifest.hypothesis,
+    "Graph grounding improves support precision."
+  );
+  assert.equal(
+    repairedStaleManifest.novelty_basis,
+    "It couples frontier packets with section drafting."
+  );
+});
+
 test("auto iterator keeps code stage blocked when experiment bundle is not aligned to the active innovation track", async (t) => {
   const projectRoot = await makeTempProject();
   t.after(async () => {
@@ -7652,6 +7868,78 @@ test("auto iterator keeps write stage blocked when paper QC reports a hard compi
   assert.ok(
     result.missingStageSignals.some((signal) =>
       /paper_qc.*compile_status = pass/i.test(signal)
+    )
+  );
+});
+
+test("auto iterator allows active writer revision cycles to enter write with open review issues", async (t) => {
+  const projectRoot = await makeTempProject();
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await seedProjectReadyForSubmit(projectRoot);
+
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.current_stage = "write";
+  manifest.current_micro_stage = "revision_requested";
+  manifest.paper_qc = {
+    status: "blocked",
+    compile_status: "fail",
+    compile_round_count: 3,
+    chktex_status: "pass",
+    page_budget_status: "pass",
+    unused_figure_status: "pass",
+    invalid_figure_ref_status: "pass",
+    reflection_round_count: 1,
+    latest_report_path: "academic_writer/PAPER_QC.md",
+  };
+  manifest.review_issue_tracker = {
+    status: "open",
+    open_counts: {
+      critical: 0,
+      high: 0,
+      medium: 1,
+      low: 0,
+    },
+    issues: [
+      {
+        issue_id: "review-report-requests-revision",
+        severity: "medium",
+        status: "open",
+      },
+    ],
+  };
+  manifest.revision_control_state = {
+    status: "active",
+    current_owner: "academic_writer",
+    open_sources: [
+      {
+        source_id: "review-report-requests-revision",
+        severity: "medium",
+        status: "open",
+      },
+    ],
+  };
+  await writeJson(manifestPath, manifest);
+
+  const result = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+  });
+
+  assert.equal(result.stageBefore, "write");
+  assert.equal(result.stageAfter, "write");
+  assert.ok(
+    result.missingStageSignals.some((signal) =>
+      /paper_qc.*compile_status = pass/i.test(signal)
+    )
+  );
+  assert.ok(
+    !result.missingStageSignals.some((signal) =>
+      /review_issue_tracker must resolve or waive all medium\+ issues before write handoff/i.test(signal)
     )
   );
 });

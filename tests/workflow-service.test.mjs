@@ -5363,3 +5363,163 @@ test("maybeAdvanceAutoCodeReviewForProject completes local static review when ru
     "passed"
   );
 });
+
+test("maybeAdvanceAutoCodeReviewForProject retires superseded reviewer runtime when packet changes", async (t) => {
+  const projectRoot = await makeProject(await makeProjectsRoot(), "alpha", "code");
+  let runCount = 0;
+
+  t.after(async () => {
+    await fs.rm(path.dirname(projectRoot), { recursive: true, force: true });
+  });
+
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "alpha",
+    current_stage: "code",
+    research_program: {
+      tracks: [
+        {
+          track_id: "track-1",
+          status: "active",
+          hypothesis: "Graph grounding improves support precision.",
+          novelty_basis: "It couples frontier packets with section drafting.",
+        },
+      ],
+    },
+  });
+  await writeJson(path.join(projectRoot, "TRACK_REGISTRY.json"), {
+    tracks: [{ track_id: "track-1", status: "active" }],
+  });
+  await fs.mkdir(path.join(projectRoot, "orchestrator"), { recursive: true });
+  await fs.writeFile(path.join(projectRoot, "orchestrator", "PLAN.md"), "# plan\n", "utf8");
+  await fs.writeFile(path.join(projectRoot, "orchestrator", "TODOS.md"), "# todos\n", "utf8");
+  await fs.writeFile(
+    path.join(projectRoot, "orchestrator", "PLAN_AUDIT.md"),
+    "# audit\n",
+    "utf8"
+  );
+  const bundleDir = path.join(
+    projectRoot,
+    "coder",
+    "experiments",
+    "track-1",
+    "exp-1__baseline"
+  );
+  await fs.mkdir(bundleDir, { recursive: true });
+  await fs.writeFile(path.join(projectRoot, "coder", "EXPERIMENT_INDEX.md"), "# index\n", "utf8");
+  await fs.writeFile(path.join(bundleDir, "train.py"), "print('ok')\n", "utf8");
+  await fs.writeFile(path.join(bundleDir, "README.md"), "# experiment\n", "utf8");
+  await writeJson(path.join(bundleDir, "EXPERIMENT_MANIFEST.json"), {
+    experiment_id: "exp-1",
+    project_id: "alpha",
+    track_id: "track-1",
+    question: "Does graph grounding improve support precision?",
+    hypothesis: "Graph grounding improves support precision.",
+    novelty_basis: "It couples frontier packets with section drafting.",
+    baseline_reference: "baseline-a",
+    primary_baseline_metric: "acc",
+    target_improvement: "Improve acc by >= 2 points over baseline-a.",
+    baseline_training_protocol: "Reuse baseline-a training settings.",
+    baseline_eval_protocol: "Reuse baseline-a evaluation protocol.",
+    innovation_points: ["Graph-grounded support routing"],
+    validation_steps: [
+      {
+        step_id: "step-1",
+        objective: "Enable graph-grounded support routing only.",
+        covers: ["Graph-grounded support routing"],
+      },
+    ],
+    ablation_plan: [
+      {
+        ablation_id: "minus-routing",
+        objective: "Disable graph routing.",
+        covers: ["Graph-grounded support routing"],
+      },
+    ],
+    implementation_proof: {
+      changed_files: ["train.py"],
+      integration_points: [
+        {
+          point_id: "routing-hook",
+          path: "train.py",
+          symbol: "graph_router_forward",
+          covers: ["Graph-grounded support routing"],
+        },
+      ],
+      activation_signals: [
+        {
+          point_id: "routing-log",
+          summary: "Logs report graph routing enabled.",
+          covers: ["Graph-grounded support routing"],
+        },
+      ],
+      execution_command: "python train.py",
+    },
+  });
+
+  const policy = {
+    autoMode: "aggressive",
+    autoGate: {
+      ...defaultAutoGateConfig(),
+      enabled: true,
+    },
+    enableChannelProjectBindings: true,
+    projectsRoot: path.dirname(projectRoot),
+    heartbeatBackgroundChecks: true,
+    agentContactCooldownSeconds: 300,
+    enableWorkflowMailbox: true,
+  };
+  const autoIteratorResult = {
+    gateBlocking: true,
+    gateReason:
+      "CODE innovation review is pending; wait for the reviewer panel to validate baseline alignment, execution viability, and innovation-step coverage.",
+    stageAfter: "code",
+    missingStageSignals: [],
+    recommendedActions: [],
+  };
+  const workflowRuntime = {
+    async run() {
+      runCount += 1;
+      return { runId: `code-review-run-${runCount}` };
+    },
+  };
+
+  const first = await maybeAdvanceAutoCodeReviewForProject({
+    workflowRuntime,
+    workflowPolicy: policy,
+    projectRoot,
+    projectId: "alpha",
+    autoIteratorResult,
+  });
+  assert.equal(first.reason, "started");
+  const firstStore = await readCodeReviewStore(projectRoot);
+  const firstQueueKeys = new Set(
+    firstStore.currentRound?.attempts.map((attempt) => attempt.queueKey).filter(Boolean) ??
+      []
+  );
+  assert.equal(firstQueueKeys.size, 3);
+
+  const manifestPath = path.join(bundleDir, "EXPERIMENT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.target_improvement = "Improve acc by >= 3 points over baseline-a.";
+  await writeJson(manifestPath, manifest);
+
+  const second = await maybeAdvanceAutoCodeReviewForProject({
+    workflowRuntime,
+    workflowPolicy: policy,
+    projectRoot,
+    projectId: "alpha",
+    autoIteratorResult,
+  });
+  assert.equal(second.reason, "started");
+  assert.equal(runCount, 6);
+
+  const runtimeQueueStore = await readWorkflowRuntimeQueueStore(projectRoot);
+  const retiredQueueEntries = runtimeQueueStore.entries.filter((entry) =>
+    firstQueueKeys.has(entry.queueKey)
+  );
+  assert.equal(retiredQueueEntries.length, 3);
+  assert.deepEqual(
+    retiredQueueEntries.map((entry) => entry.status).sort(),
+    ["completed", "completed", "completed"]
+  );
+});

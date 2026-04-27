@@ -43,7 +43,10 @@ import {
   materializeFrontierMappingState,
   shouldMaterializeFrontierMappingState,
 } from "../workflow-guard-materializers/frontier-mapping-materializer";
-import { materializeCodeExperimentBundleImpl } from "../workflow-guard-materializers/code-experiment-bundle-materializer";
+import {
+  materializeCodeExperimentBundleImpl,
+  shouldMaterializeCodeExperimentBundleImpl,
+} from "../workflow-guard-materializers/code-experiment-bundle-materializer";
 import { materializeLocalCodeReviewFallback } from "../workflow-guard-materializers/code-review-local-materializer";
 import { materializeLocalExperimentExecutionImpl } from "../workflow-guard-materializers/experiment-execution-materializer";
 import { materializeAnalysisArtifactsImpl } from "../workflow-guard-materializers/analysis-artifacts-materializer";
@@ -70,6 +73,11 @@ import { normalizeResultsStorylineState } from "../workflow-guard-state/results-
 import { normalizeStorylinePlannerState } from "../workflow-guard-state/storyline-planner";
 import { normalizeTitleAbstractIntroWorkbenchState } from "../workflow-guard-state/title-abstract-intro-workbench";
 import { loadExperimentReviewState } from "../workflow-auto-experiment-review";
+import {
+  isBlockingActiveExperimentStatus,
+  isTerminalExperimentStatus,
+  normalizeExperimentLedger,
+} from "../workflow-guard-experiment-history";
 import {
   isNonEmptyDirectory,
   pathExists,
@@ -297,7 +305,7 @@ const LOCAL_ANALYSIS_ARTIFACTS_PREP_STAGES = new Set([
   "analyze",
   "review",
 ]);
-const LOCAL_AUTHORING_CLOSEOUT_PREP_STAGES = new Set(["write", "submit"]);
+const LOCAL_AUTHORING_CLOSEOUT_PREP_STAGES = new Set(["write", "review", "submit"]);
 
 function parseTimestampMs(value: string | null | undefined): number | null {
   if (!value) {
@@ -653,10 +661,10 @@ async function shouldMaterializeCodeExperimentBundle(params: {
   if (activeTracks.length === 0) {
     return false;
   }
-  if (await anyArtifactMissing(params.projectRoot, ["coder/EXPERIMENT_INDEX.md"])) {
-    return true;
-  }
-  return !(await hasCompleteExperimentBundle(params.projectRoot));
+  return shouldMaterializeCodeExperimentBundleImpl({
+    projectRoot: params.projectRoot,
+    manifest: params.manifest,
+  });
 }
 
 async function shouldMaterializeLocalExperimentExecution(params: {
@@ -691,10 +699,20 @@ async function shouldMaterializeLocalExperimentExecution(params: {
         "researcher/EXPERIMENT_LEDGER.json"
       ) ?? ""
     )) ?? {};
-  const experiments = Array.isArray(ledger.experiments)
-    ? (ledger.experiments as Array<Record<string, unknown>>)
-    : [];
-  if (experiments.length > 0) {
+  const projectId =
+    typeof params.manifest.project_id === "string"
+      ? params.manifest.project_id
+      : typeof params.manifest.projectId === "string"
+        ? params.manifest.projectId
+        : null;
+  const normalizedLedger = normalizeExperimentLedger(ledger, projectId);
+  if (
+    normalizedLedger.summary.activeExperimentIds.length > 0 ||
+    normalizedLedger.experiments.some((entry) =>
+      isBlockingActiveExperimentStatus(entry.status) ||
+      isTerminalExperimentStatus(entry.status)
+    )
+  ) {
     return false;
   }
   return await hasCompleteExperimentBundle(params.projectRoot);
@@ -1458,7 +1476,7 @@ function isExplicitFailureStatus(status: string | null) {
   return ["blocked", "failed", "fail", "needs_revision", "rejected"].includes(status ?? "");
 }
 
-function hasExplicitAuthoringBlocker(manifest: ManifestLike) {
+function hasHardAuthoringBlocker(manifest: ManifestLike) {
   const paperQcStatus = readManifestStatus(manifest.paper_qc, ["status"]);
   const compileStatus = readManifestStatus(manifest.paper_qc, [
     "compile_status",
@@ -1508,15 +1526,52 @@ function hasExplicitAuthoringBlocker(manifest: ManifestLike) {
   if (
     isExplicitFailureStatus(citationStatus) ||
     hallucinatedCitationCount > 0 ||
-    citationRecord.all_citations_real === false
+      citationRecord.all_citations_real === false
   ) {
     return true;
   }
 
+  return false;
+}
+
+function hasStaleReviewCloseoutIssue(manifest: ManifestLike) {
   const issueTracker = normalizeReviewIssueTrackerState(manifest.review_issue_tracker);
-  const openMediumOrHigher =
-    issueTracker.openCounts.critical + issueTracker.openCounts.high + issueTracker.openCounts.medium;
-  return openMediumOrHigher > 0;
+  return issueTracker.issues.some((issue) => {
+    if (issue.status === "resolved" || issue.status === "waived") {
+      return false;
+    }
+    return issue.issueId === "review-report-stale-after-authoring-refresh";
+  });
+}
+
+async function reviewReportContainsNegativeVerdict(projectRoot: string): Promise<boolean> {
+  const reviewReportPath = resolveProjectArtifactPath(
+    projectRoot,
+    "reviewer/REVIEW_REPORT.md"
+  );
+  const reviewReport = await readTextIfExists(reviewReportPath);
+  if (!reviewReport) {
+    return false;
+  }
+  try {
+    const parsed = JSON.parse(reviewReport) as Record<string, unknown>;
+    const status = normalizeStageValue(parsed.status);
+    const verdict = normalizeStageValue(parsed.verdict);
+    const negativeVerdicts = [
+      "needs_revision",
+      "not_ready",
+      "major_revision",
+      "reject",
+      "rejected",
+    ];
+    return [status, verdict].some((value) =>
+      negativeVerdicts.includes(value ?? "")
+    );
+  } catch {
+    return /needs[_ -]?revision|not[_ -]?ready|major[_ -]?revision|\\breject(?:ed)?\\b/i.test(
+      reviewReport
+    );
+  }
 }
 
 async function shouldReconcileAuthoringCloseout(params: {
@@ -1542,7 +1597,7 @@ async function shouldReconcileAuthoringCloseout(params: {
   if (paperStory.status !== "ready") {
     return false;
   }
-  if (hasExplicitAuthoringBlocker(params.manifest)) {
+  if (hasHardAuthoringBlocker(params.manifest)) {
     return false;
   }
   if (params.stage === "submit") {
@@ -1563,7 +1618,7 @@ async function shouldReconcileAuthoringCloseout(params: {
   const writePackage = normalizeWritePackageState(params.manifest.write_package);
   if (
     !["ready", "assembled", "approved"].includes(normalizeStageValue(writePackage.status) ?? "") &&
-    params.stage !== "write"
+    !["write", "review"].includes(params.stage)
   ) {
     return false;
   }
@@ -1631,6 +1686,28 @@ async function shouldReconcileAuthoringCloseout(params: {
     "reviewer/REVIEW_PACKET.json"
   );
   if (!reviewPacketPath || !(await pathExists(reviewPacketPath))) {
+    return true;
+  }
+  const surfaceReviewPath = resolveProjectArtifactPath(
+    params.projectRoot,
+    "reviewer/SURFACE_REVIEW.json"
+  );
+  const figureSelectionReviewPath = resolveProjectArtifactPath(
+    params.projectRoot,
+    "reviewer/FIGURE_SELECTION_REVIEW.json"
+  );
+  if (
+    !surfaceReviewPath ||
+    !figureSelectionReviewPath ||
+    !(await pathExists(surfaceReviewPath)) ||
+    !(await pathExists(figureSelectionReviewPath))
+  ) {
+    return true;
+  }
+  if (
+    hasStaleReviewCloseoutIssue(params.manifest) &&
+    (await reviewReportContainsNegativeVerdict(params.projectRoot))
+  ) {
     return true;
   }
   if (readManifestStatus(params.manifest.paragraph_logic_audit, ["status"]) !== "ready") {

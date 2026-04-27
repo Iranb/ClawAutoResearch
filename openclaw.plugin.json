@@ -131,6 +131,11 @@
         "default": 30000,
         "description": "Timeout for PaperNexus MCP requests. Applies to both local stdio MCP and remote HTTP MCP."
       },
+      "papernexusAllowLocalMcp": {
+        "type": "boolean",
+        "default": false,
+        "description": "Allow PaperNexus HTTP MCP wrapper calls to loopback URLs such as 127.0.0.1. Keep false for production; enable only for explicit local PaperNexus E2E runs."
+      },
       "papernexusApiTokenEnv": {
         "type": "string",
         "default": "",
@@ -385,6 +390,9 @@
     },
     "papernexusMcpTimeoutMs": {
       "label": "PaperNexus MCP Timeout (ms)"
+    },
+    "papernexusAllowLocalMcp": {
+      "label": "Allow Local PaperNexus MCP"
     },
     "papernexusApiTokenEnv": {
       "label": "PaperNexus API Token Env"

@@ -60,6 +60,30 @@ test("local experiment execution materializer runs and reconciles a code bundle 
     agentId: "coder",
   });
   assert.equal(bundle.experimentId, "exp-1");
+  await writeJson(path.join(projectRoot, "researcher", "EXPERIMENT_LEDGER.json"), {
+    schema_version: 1,
+    project_id: "local-exp",
+    updated_at: "2026-04-27T00:00:00.000Z",
+    summary: {
+      active_experiment_ids: ["exp-1"],
+      last_completed_experiment_id: null,
+      last_failed_experiment_id: null,
+      best_known_config_ref: bundle.bundleDir,
+      last_decision_summary: "dry-run completed successfully",
+      papernexus_sync_required: false,
+      papernexus_last_sync_at: null,
+    },
+    experiments: [
+      {
+        experiment_id: "exp-1",
+        track_id: "track-main",
+        config_ref: bundle.bundleDir,
+        status: "dry_run_complete",
+        updated_at: "2026-04-27T00:00:00.000Z",
+        summary: "Code-stage dry run completed before experiment launch.",
+      },
+    ],
+  });
 
   const result = await materializeLocalExperimentExecutionImpl({
     projectRoot,
@@ -75,6 +99,10 @@ test("local experiment execution materializer runs and reconciles a code bundle 
     await fs.readFile(path.join(projectRoot, "PROJECT_MANIFEST.json"), "utf8")
   );
   assert.equal(manifest.experiment_search.status, "ready_for_analysis");
+  assert.equal(manifest.experiment_search.inner_loop_mode, "karpathy_fast_keep_discard");
+  assert.equal(manifest.experiment_search.keep_discard_rule, "primary_metric_keep_discard");
+  assert.equal(manifest.experiment_search.last_trial_outcome, "keep");
+  assert.equal(manifest.experiment_search.comparable_trial_budget_status, "within_budget");
   assert.equal(manifest.experiment_search.multi_seed_status, "complete");
   assert.equal(manifest.experiment_search.plot_pack_status, "complete");
   assert.equal(manifest.experiment_search.one_change_validation_status, "ready");
@@ -84,7 +112,18 @@ test("local experiment execution materializer runs and reconciles a code bundle 
     "synthetic-gcd-proxy",
   ]);
   assert.equal(manifest.experiment_memory.last_completed_experiment_id, "exp-1");
+  assert.equal(manifest.experiment_memory.karpathy_inner_loop_status, "completed");
+  assert.equal(manifest.experiment_memory.karpathy_keep_discard_decision, "keep");
   assert.equal(manifest.execution_proof.status, "ready");
+
+  const karpathyLoop = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "researcher", "KARPATHY_EXPERIMENT_LOOP.json"), "utf8")
+  );
+  assert.equal(karpathyLoop.status, "completed");
+  assert.equal(karpathyLoop.mode, "karpathy_fast_keep_discard");
+  assert.equal(karpathyLoop.keep_discard_decision, "keep");
+  assert.equal(karpathyLoop.comparable_trial_budget_status, "within_budget");
+  assert.equal(karpathyLoop.primary_metric.direction, "higher_is_better");
 
   const ledger = JSON.parse(
     await fs.readFile(path.join(projectRoot, "researcher", "EXPERIMENT_LEDGER.json"), "utf8")
@@ -97,6 +136,8 @@ test("local experiment execution materializer runs and reconciles a code bundle 
     ledger.experiments[0].metadata.one_change_signature,
     manifest.experiment_search.one_change_signature
   );
+  assert.equal(ledger.experiments[0].metadata.karpathy_inner_loop.mode, "karpathy_fast_keep_discard");
+  assert.equal(ledger.experiments[0].metadata.karpathy_inner_loop.keep_discard_decision, "keep");
 
   const decision = evaluateExperimentSearchDecision({
     experimentSearch: manifest.experiment_search,

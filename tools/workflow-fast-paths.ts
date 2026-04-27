@@ -131,6 +131,7 @@ function buildPapernexusRemoteAccessConfigFromPolicy(
     mcpUrl: workflowPolicy.papernexusMcpUrl,
     mcpTransport: workflowPolicy.papernexusMcpTransport,
     mcpTimeoutMs: workflowPolicy.papernexusMcpTimeoutMs,
+    allowLocalMcp: workflowPolicy.papernexusAllowLocalMcp,
     tokenSource: workflowPolicy.papernexusApiTokenSource,
     tokenEnv: workflowPolicy.papernexusApiTokenEnv,
     tokenService: workflowPolicy.papernexusApiTokenService,
@@ -368,6 +369,7 @@ type BackgroundWorkflowQueueEntry = {
   projectRoot: string | null;
   queuedAt: string;
   lastAttemptedAt: string | null;
+  nextRetryAt: string | null;
   attemptCount: number;
   summary: string | null;
   status:
@@ -598,8 +600,14 @@ function isBackgroundQueueEntryPending(entry: BackgroundWorkflowQueueEntry): boo
   return ["queued", "launching", "degraded", "needs_repair"].includes(entry.status);
 }
 
+function isBackgroundQueueEntryBlockingPending(
+  entry: BackgroundWorkflowQueueEntry
+): boolean {
+  return ["queued", "launching", "degraded"].includes(entry.status);
+}
+
 function isReusableBackgroundQueueEntry(entry: BackgroundWorkflowQueueEntry): boolean {
-  return ["queued", "launching", "running", "degraded", "needs_repair"].includes(entry.status);
+  return ["queued", "launching", "running", "degraded"].includes(entry.status);
 }
 
 function isRunningBackgroundQueueEntry(entry: BackgroundWorkflowQueueEntry): boolean {
@@ -615,6 +623,17 @@ function isBackgroundQueueOrphanCheckDue(
     Number.isFinite(referenceMs) &&
     nowMs - referenceMs >= BACKGROUND_QUEUE_ORPHAN_GRACE_MS
   );
+}
+
+function getBackgroundQueueRetryDelayMs(
+  entry: BackgroundWorkflowQueueEntry,
+  nowMs: number
+): number {
+  const nextRetryAtMs = Date.parse(entry.nextRetryAt ?? "");
+  if (!Number.isFinite(nextRetryAtMs)) {
+    return 0;
+  }
+  return Math.max(0, nextRetryAtMs - nowMs);
 }
 
 function hasActiveRegistryEntryForQueueEntry(params: {
@@ -798,6 +817,7 @@ function toPersistedQueueEntry(
     queuedAt: entry.queuedAt,
     lastAttemptedAt: entry.lastAttemptedAt,
     lastCheckedAt: entry.lastAttemptedAt,
+    nextRetryAt: entry.nextRetryAt,
     attemptCount: entry.attemptCount,
     summary: entry.summary,
     status: entry.status,
@@ -848,6 +868,7 @@ function fromPersistedQueueEntry(
     projectRoot: readString(entry.projectRoot) ?? null,
     queuedAt,
     lastAttemptedAt: readString(entry.lastAttemptedAt) ?? null,
+    nextRetryAt: readString(entry.nextRetryAt) ?? null,
     attemptCount: Math.max(0, Math.floor(Number(entry.attemptCount ?? 0))),
     summary: readString(entry.summary) ?? null,
     status: entry.status,
@@ -1039,6 +1060,8 @@ async function readBackgroundWorkflowQueue(
         const projectRoot = readString(record.projectRoot) ?? null;
         const queuedAt = readString(record.queuedAt);
         const lastAttemptedAt = readString(record.lastAttemptedAt) ?? null;
+        const nextRetryAt =
+          readString(record.nextRetryAt ?? record.next_retry_at) ?? null;
         const attemptCount = Number.isFinite(record.attemptCount)
           ? Math.max(0, Math.floor(Number(record.attemptCount)))
           : 0;
@@ -1185,6 +1208,7 @@ async function readBackgroundWorkflowQueue(
           projectRoot,
           queuedAt,
           lastAttemptedAt,
+          nextRetryAt,
           attemptCount,
           summary,
           status,
@@ -1338,7 +1362,10 @@ async function upsertBackgroundWorkflowQueueEntry(
       created: false,
     };
   }
-  const next = [...current, entry];
+  const next = [
+    ...current.filter((candidate) => candidate.queueKey !== entry.queueKey),
+    entry,
+  ];
   next.sort((a, b) => Date.parse(a.queuedAt) - Date.parse(b.queuedAt));
   await writeBackgroundWorkflowQueue(next, entryScope);
   return {
@@ -1373,6 +1400,7 @@ async function removeBackgroundWorkflowQueueEntries(
             ...entry,
             status: "running" as const,
             lastAttemptedAt: new Date().toISOString(),
+            nextRetryAt: null,
           }
         : entry
     );
@@ -1388,6 +1416,7 @@ async function removeBackgroundWorkflowQueueEntries(
             ...entry,
             status: "running" as const,
             lastAttemptedAt: new Date().toISOString(),
+            nextRetryAt: null,
           }
         : entry
     );
@@ -1415,6 +1444,7 @@ async function touchBackgroundWorkflowQueueEntry(params: {
             attemptCount: entry.attemptCount + 1,
             summary: params.error ? params.error : entry.summary,
             lastError: params.error ? params.error : entry.lastError,
+            nextRetryAt: params.status === "needs_repair" ? entry.nextRetryAt : null,
             status:
               params.status ??
               (params.error ? "degraded" : entry.status),
@@ -1516,6 +1546,7 @@ async function reconcileBackgroundWorkflowQueueWithRegistry(params: {
       const repaired = {
         ...entry,
         status: "needs_repair" as const,
+        nextRetryAt: entry.nextRetryAt ?? null,
         lastError:
           entry.lastError ??
           "Background workflow queue entry was marked running but has no active runtime session; it was returned to the replay queue.",
@@ -1569,7 +1600,7 @@ export async function hasPendingBackgroundWorkflowQueueKey(params: {
   });
   const queued = queueEntries.some(
     (entry) =>
-      isBackgroundQueueEntryPending(entry) &&
+      isBackgroundQueueEntryBlockingPending(entry) &&
       entry.queueKey === queueKey &&
       backgroundRunRegistryEntryMatchesProject(
         {
@@ -1975,6 +2006,7 @@ export async function enqueueQueuedBackgroundWorkflowRun(params: {
     projectRoot: readString(params.projectRoot) ?? null,
     queuedAt: new Date().toISOString(),
     lastAttemptedAt: null,
+    nextRetryAt: null,
     attemptCount: 0,
     summary: readString(params.summary) ?? null,
     status: "queued",
@@ -2045,6 +2077,12 @@ export async function drainQueuedBackgroundWorkflowRuns(params: {
 
   for (const entry of queue) {
     if (!isBackgroundQueueEntryPending(entry)) {
+      continue;
+    }
+    if (
+      params.ignoreRetryBackoff !== true &&
+      getBackgroundQueueRetryDelayMs(entry, Date.now()) > 0
+    ) {
       continue;
     }
     const lastAttemptedAtMs = entry.lastAttemptedAt

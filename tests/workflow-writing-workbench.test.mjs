@@ -542,6 +542,178 @@ test("maybePrepareWorkflowStageContracts materializes results storyline and titl
   assert.equal(updatedManifest.title_abstract_intro_workbench.status, "ready");
 });
 
+test("review preflight can run local authoring closeout before write_package exists", async (t) => {
+  const projectRoot = await makeWorkbenchProjectRoot();
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  const closeoutCalls = [];
+  const manifest = await readManifest(projectRoot);
+  const result = await maybePrepareWorkflowStageContracts({
+    projectRoot,
+    manifest,
+    stage: "review",
+    deps: {
+      ...makeNoopPreflightDeps(),
+      reconcileAuthoringCloseout: async (params) => {
+        closeoutCalls.push(params);
+        const latest = await readManifest(projectRoot);
+        latest.write_package = {
+          status: "ready",
+          assembly_status: "ready",
+        };
+        latest.paragraph_logic_audit = {
+          status: "ready",
+        };
+        latest.citation_integrity = {
+          enabled: true,
+          verification_required: true,
+          verification_status: "verified",
+          all_citations_real: true,
+        };
+        await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), latest);
+        return {
+          generatedFiles: [
+            "academic_writer/paper/main.tex",
+            "reviewer/CITATION_VERIFICATION.md",
+          ],
+        };
+      },
+    },
+  });
+
+  assert.equal(result.materializedContracts.includes("authoring_closeout"), true);
+  assert.equal(closeoutCalls.length, 1);
+  assert.equal(closeoutCalls[0].currentStageOverride, "review");
+  assert.equal(closeoutCalls[0].compilePdf, true);
+});
+
+test("write preflight repairs stale review closeout artifacts during active writer revision", async (t) => {
+  const projectRoot = await makeWorkbenchProjectRoot();
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await writeText(
+    path.join(projectRoot, "academic_writer", "paper", "main.tex"),
+    [
+      "\\documentclass{article}",
+      "\\begin{document}",
+      "\\section{Abstract}",
+      "\\section{Introduction}",
+      "\\section{Method}",
+      "\\section{Results}",
+      "\\section{Discussion}",
+      "\\section{Conclusion}",
+      "\\end{document}",
+      "",
+    ].join("\n")
+  );
+  await writeText(
+    path.join(projectRoot, "academic_writer", "paper", "refs.bib"),
+    Array.from(
+      { length: 6 },
+      (_, index) => `@article{ref${index},title={Reference ${index}}}`
+    ).join("\n")
+  );
+  await writeJson(path.join(projectRoot, "reviewer", "REVIEW_PACKET.json"), {
+    verdict: "needs_revision",
+    action_items: [
+      "Rerun reviewer/REVIEW_REPORT.md against the refreshed manuscript before submit closeout.",
+    ],
+  });
+  await writeText(
+    path.join(projectRoot, "reviewer", "REVIEW_REPORT.md"),
+    JSON.stringify(
+      {
+        status: "needs_revision",
+        verdict: "not_ready",
+        action_items: ["Add a real GCD baseline."],
+      },
+      null,
+      2
+    )
+  );
+
+  const manifest = await readManifest(projectRoot);
+  manifest.current_stage = "write";
+  manifest.write_package = {
+    status: "ready",
+    assembly_status: "ready",
+  };
+  manifest.writing_session = {
+    status: "ready_for_submit",
+    process_status: "ready_for_submit",
+  };
+  manifest.citation_integrity = {
+    enabled: true,
+    verification_required: true,
+    verification_status: "verified",
+    all_citations_real: true,
+  };
+  manifest.paragraph_logic_audit = {
+    status: "ready",
+  };
+  manifest.review_issue_tracker = {
+    status: "open",
+    open_counts: {
+      critical: 0,
+      high: 0,
+      medium: 1,
+      low: 0,
+    },
+    issues: [
+      {
+        issue_id: "review-report-stale-after-authoring-refresh",
+        severity: "medium",
+        status: "open",
+      },
+    ],
+  };
+  manifest.revision_control_state = {
+    status: "active",
+    current_owner: "academic_writer",
+    open_sources: [
+      {
+        source_id: "review-report-stale-after-authoring-refresh",
+        severity: "medium",
+        status: "open",
+      },
+    ],
+  };
+  manifest.figure_qc = {
+    status: "pending",
+    figure_review_path: "reviewer/SURFACE_REVIEW.json",
+    figure_selection_path: "reviewer/FIGURE_SELECTION_REVIEW.json",
+  };
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), manifest);
+
+  const closeoutCalls = [];
+  const result = await maybePrepareWorkflowStageContracts({
+    projectRoot,
+    manifest,
+    stage: "write",
+    deps: {
+      ...makeNoopPreflightDeps(),
+      reconcileAuthoringCloseout: async (params) => {
+        closeoutCalls.push(params);
+        return {
+          generatedFiles: [
+            "reviewer/SURFACE_REVIEW.json",
+            "reviewer/FIGURE_SELECTION_REVIEW.json",
+          ],
+        };
+      },
+    },
+  });
+
+  assert.equal(result.materializedContracts.includes("authoring_closeout"), true);
+  assert.equal(closeoutCalls.length, 1);
+  assert.equal(closeoutCalls[0].currentStageOverride, "write");
+  assert.equal(closeoutCalls[0].compilePdf, true);
+});
+
 test("research_workflow exposes results storyline and title/abstract/intro workbench summaries", async (t) => {
   const projectRoot = await makeWorkbenchProjectRoot();
   const previousProjectRoot = process.env.OPENCLAW_PROJECT;

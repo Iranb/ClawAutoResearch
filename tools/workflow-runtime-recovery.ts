@@ -44,12 +44,46 @@ function isStaleIso(iso: string | null, staleSessionAgeMs: number): boolean {
   return Date.now() - timestamp > staleSessionAgeMs;
 }
 
-function isStaleQueueEntry(entry: WorkflowRuntimeQueueEntry, staleSessionAgeMs: number): boolean {
-  if (!["queued", "launching", "degraded", "needs_repair"].includes(entry.status)) {
+function queueSessionCandidates(entry: WorkflowRuntimeQueueEntry): Set<string> {
+  return new Set(
+    [
+      entry.preferredSessionKey,
+      entry.requesterSessionKey,
+      ...(entry.dispatchPayload?.preferredSessionKeys ?? []),
+    ].filter((value): value is string => Boolean(readString(value)))
+  );
+}
+
+function hasFreshActiveSessionForQueue(
+  entry: WorkflowRuntimeQueueEntry,
+  sessions: WorkflowRuntimeSessionEntry[],
+  staleSessionAgeMs: number
+): boolean {
+  const candidates = queueSessionCandidates(entry);
+  return sessions.some((session) => {
+    if (session.status !== "active" || isStaleSessionEntry(session, staleSessionAgeMs)) {
+      return false;
+    }
+    return session.queueKey === entry.queueKey || candidates.has(session.sessionKey);
+  });
+}
+
+function isStaleQueueEntry(
+  entry: WorkflowRuntimeQueueEntry,
+  staleSessionAgeMs: number,
+  sessions: WorkflowRuntimeSessionEntry[] = []
+): boolean {
+  if (!["queued", "launching", "running", "degraded"].includes(entry.status)) {
     return false;
   }
   const freshness = entry.lastAttemptedAt ?? entry.queuedAt;
-  return isStaleIso(freshness, staleSessionAgeMs);
+  if (!isStaleIso(freshness, staleSessionAgeMs)) {
+    return false;
+  }
+  if (entry.status === "running") {
+    return !hasFreshActiveSessionForQueue(entry, sessions, staleSessionAgeMs);
+  }
+  return true;
 }
 
 function isStaleSessionEntry(
@@ -144,7 +178,9 @@ export async function buildWorkflowRuntimeRecoveryPlan(params: {
       .filter((entry) => entry.deliveryStatus !== "delivered" && entry.deliveryStatus !== "superseded")
       .map((entry) => entry.idempotencyKey),
     staleQueueKeys: queueStore.entries
-      .filter((entry) => isStaleQueueEntry(entry, staleSessionAgeMs))
+      .filter((entry) =>
+        isStaleQueueEntry(entry, staleSessionAgeMs, sessionsStore.entries)
+      )
       .map((entry) => entry.queueKey),
     staleSessionKeys: sessionsStore.entries
       .filter((entry) => isStaleSessionEntry(entry, staleSessionAgeMs))
@@ -271,10 +307,13 @@ export async function recoverWorkflowRuntimeState(params: {
           skipped: broadcastStore.entries,
         };
 
-  const queueStore = await readWorkflowRuntimeQueueStore(projectRoot);
+  const [queueStore, sessionsStore] = await Promise.all([
+    readWorkflowRuntimeQueueStore(projectRoot),
+    readWorkflowRuntimeSessionsStore(projectRoot),
+  ]);
   const repairedQueue: WorkflowRuntimeQueueEntry[] = [];
   const nextQueueEntries = queueStore.entries.map((entry) => {
-    if (!isStaleQueueEntry(entry, staleSessionAgeMs)) {
+    if (!isStaleQueueEntry(entry, staleSessionAgeMs, sessionsStore.entries)) {
       return entry;
     }
     const repaired = {
@@ -303,7 +342,6 @@ export async function recoverWorkflowRuntimeState(params: {
     });
   }
 
-  const sessionsStore = await readWorkflowRuntimeSessionsStore(projectRoot);
   const repairedSessions: WorkflowRuntimeSessionEntry[] = [];
   const nextSessionEntries = sessionsStore.entries.map((entry) => {
     if (!isStaleSessionEntry(entry, staleSessionAgeMs)) {

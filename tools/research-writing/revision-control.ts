@@ -65,6 +65,33 @@ function countRegistryEntries(record: Record<string, unknown> | null): number {
   return Array.isArray(entries) ? entries.length : 0;
 }
 
+function compareIso(left: string | null | undefined, right: string | null | undefined): number {
+  if (!left && !right) {
+    return 0;
+  }
+  if (!left) {
+    return -1;
+  }
+  if (!right) {
+    return 1;
+  }
+  return left.localeCompare(right);
+}
+
+async function projectArtifactExists(
+  projectRoot: string,
+  artifactPath: string | null | undefined
+): Promise<boolean> {
+  if (!artifactPath) {
+    return false;
+  }
+  const resolved = resolveProjectArtifactPath(projectRoot, artifactPath);
+  if (!resolved) {
+    return false;
+  }
+  return (await readTextIfExists(resolved)) !== null;
+}
+
 async function readFigureTableBudget(projectRoot: string): Promise<{
   frameworkFigureCount: number;
   experimentTableCount: number;
@@ -99,6 +126,12 @@ async function isResolvedBuiltinAutoModeRiskSource(params: {
   const summary = params.source.summary ?? "";
   if (/results_storyline\.status/i.test(summary)) {
     return readRecord(params.manifest.results_storyline)?.status === "ready";
+  }
+  if (/paragraph_logic_audit\.status/i.test(summary)) {
+    return normalizeParagraphLogicAuditState(params.manifest.paragraph_logic_audit).status === "ready";
+  }
+  if (/citation_integrity\.verification_status/i.test(summary)) {
+    return readRecord(params.manifest.citation_integrity)?.verification_status === "verified";
   }
   if (/figure\/table contract/i.test(summary)) {
     const budget = await readFigureTableBudget(params.projectRoot);
@@ -273,14 +306,15 @@ function buildParagraphLogicAuditSource(
   ];
 }
 
-function buildHookSources(
+async function buildHookSources(
+  projectRoot: string,
   hookStore: Awaited<ReturnType<typeof readWorkflowHooksStateStore>>
-): {
+): Promise<{
   sources: RevisionControlSource[];
   lastRevisionDispatchAt: string | null;
   aggregateRevisionPacketPath: string | null;
   nextReviewerRole: string | null;
-} {
+}> {
   const sources: RevisionControlSource[] = [];
   let lastRevisionDispatchAt: string | null = null;
   let aggregateRevisionPacketPath: string | null = null;
@@ -290,19 +324,44 @@ function buildHookSources(
     if (state.status !== "revise_requested" && state.status !== "failed" && state.status !== "escalated") {
       continue;
     }
+    const aggregate = hookStore.hookPoints[state.hookPoint]?.[state.stage ?? ""] ?? null;
+    if (
+      aggregate?.aggregateStatus === "passed" &&
+      compareIso(aggregate.updatedAt, state.updatedAt) >= 0
+    ) {
+      continue;
+    }
+    const reportMarkdownPath = state.activeRound?.reportMarkdownPath ?? null;
+    const reportMarkdownExists = await projectArtifactExists(
+      projectRoot,
+      reportMarkdownPath
+    );
+    const resultRecord = readRecord(state.activeRound?.result);
+    const resultSummary =
+      typeof resultRecord?.summary === "string" && resultRecord.summary.trim()
+        ? resultRecord.summary.trim()
+        : null;
+    const pendingRuntimeOnly =
+      state.activeRound?.status === "pending" &&
+      !resultRecord &&
+      !reportMarkdownExists;
+    if (pendingRuntimeOnly && (state.status === "failed" || state.status === "escalated")) {
+      continue;
+    }
     const source: RevisionControlSource = {
       sourceType: "file_audit" as const,
       sourceId: state.hookId,
       severity: state.status === "failed" || state.status === "escalated" ? "high" : "medium",
       status: "open" as const,
       summary:
-        state.activeRound?.reportMarkdownPath ??
+        (reportMarkdownExists ? reportMarkdownPath : null) ??
+        resultSummary ??
         state.blockedReason ??
         state.escalationReason ??
         null,
       artifactPaths: uniqueStrings([
         state.activeRound?.filePath,
-        state.activeRound?.reportMarkdownPath,
+        reportMarkdownExists ? reportMarkdownPath : null,
         state.activeRound?.packetPath,
       ]),
       reviewerRole: "reviewer",
@@ -425,7 +484,7 @@ export async function deriveRevisionControlState(params: {
   const hookStore = await readWorkflowHooksStateStore(params.projectRoot);
   const paperStory = normalizePaperStoryState(manifest.paper_story_state);
 
-  const hookSummary = buildHookSources(hookStore);
+  const hookSummary = await buildHookSources(params.projectRoot, hookStore);
   hookSummary.sources = await filterResolvedHookSources({
     projectRoot: params.projectRoot,
     manifest,

@@ -1,3 +1,4 @@
+import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import {
   asRecord,
@@ -7,6 +8,7 @@ import {
 } from "../workflow-guard-core/coercion";
 import {
   readJsonIfExists,
+  readTextIfExists,
   writeJsonEnsured,
   writeTextEnsured,
 } from "../workflow-guard-core/fs";
@@ -28,6 +30,15 @@ const CODE_EXPERIMENT_ARTIFACTS = {
   manifest: "EXPERIMENT_MANIFEST.json",
 } as const;
 
+type ExistingCodeBundle = {
+  dir: string;
+  relativeDir: string;
+  manifestPath: string;
+  manifest: Record<string, unknown> | null;
+  hasTrain: boolean;
+  hasReadme: boolean;
+};
+
 function firstNonEmpty(...values: Array<string | null | undefined>): string | null {
   return (
     values.find((value) => typeof value === "string" && value.trim().length > 0) ?? null
@@ -36,6 +47,18 @@ function firstNonEmpty(...values: Array<string | null | undefined>): string | nu
 
 function isSafePathSegment(value: string): boolean {
   return /^[A-Za-z0-9._-]+$/u.test(value) && value !== "." && value !== "..";
+}
+
+function normalizeContractText(value: string | null | undefined): string | null {
+  if (!value) {
+    return null;
+  }
+  const normalized = value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim()
+    .replace(/\s+/g, " ");
+  return normalized.length > 0 ? normalized : null;
 }
 
 function inferTopic(params: {
@@ -68,6 +91,198 @@ function selectActiveTrack(
     }
   }
   return activeTracks[0] ?? null;
+}
+
+async function pathExists(filePath: string): Promise<boolean> {
+  try {
+    await fs.access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function listExistingCodeBundles(
+  projectRoot: string,
+  trackId: string
+): Promise<ExistingCodeBundle[]> {
+  const trackDir = path.join(projectRoot, "coder", "experiments", trackId);
+  let entries: Array<{ name: string; isDirectory(): boolean }>;
+  try {
+    entries = await fs.readdir(trackDir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const bundles: ExistingCodeBundle[] = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory()) {
+      continue;
+    }
+    const dir = path.join(trackDir, entry.name);
+    const relativeDir = path
+      .relative(projectRoot, dir)
+      .split(path.sep)
+      .join(path.posix.sep);
+    const manifestPath = path.join(dir, CODE_EXPERIMENT_ARTIFACTS.manifest);
+    bundles.push({
+      dir,
+      relativeDir,
+      manifestPath,
+      manifest: await readJsonIfExists<Record<string, unknown>>(manifestPath),
+      hasTrain: await pathExists(path.join(dir, CODE_EXPERIMENT_ARTIFACTS.train)),
+      hasReadme: await pathExists(path.join(dir, CODE_EXPERIMENT_ARTIFACTS.readme)),
+    });
+  }
+  return bundles.sort((left, right) => left.relativeDir.localeCompare(right.relativeDir));
+}
+
+function getRegistryTrack(
+  trackRegistry: Record<string, unknown>,
+  trackId: string
+): Record<string, unknown> | null {
+  const tracks = Array.isArray(trackRegistry.tracks) ? trackRegistry.tracks : [];
+  for (const entry of tracks) {
+    const record = asRecord(entry);
+    if (!record) {
+      continue;
+    }
+    if (pickString(record, ["track_id", "trackId", "id"]) === trackId) {
+      return record;
+    }
+  }
+  return null;
+}
+
+function isAlignedToTrackContract(params: {
+  bundleManifest: Record<string, unknown> | null;
+  track: ResearchProgramTrack;
+}): boolean {
+  if (!params.bundleManifest) {
+    return false;
+  }
+  const trackId = pickString(params.bundleManifest, ["track_id", "trackId"]);
+  if (trackId !== params.track.trackId) {
+    return false;
+  }
+  const bundleHypothesis = normalizeContractText(
+    pickString(params.bundleManifest, ["hypothesis", "track_hypothesis", "trackHypothesis"])
+  );
+  const bundleNoveltyBasis = normalizeContractText(
+    pickString(params.bundleManifest, ["novelty_basis", "noveltyBasis"])
+  );
+  const expectedHypothesis = normalizeContractText(params.track.hypothesis);
+  const expectedNoveltyBasis = normalizeContractText(params.track.noveltyBasis);
+  return (
+    (!expectedHypothesis || bundleHypothesis === expectedHypothesis) &&
+    (!expectedNoveltyBasis || bundleNoveltyBasis === expectedNoveltyBasis)
+  );
+}
+
+function isRepairableStaleContract(params: {
+  bundleManifest: Record<string, unknown> | null;
+  track: ResearchProgramTrack;
+  registryTrack: Record<string, unknown> | null;
+  manifest: ManifestLike;
+}): boolean {
+  if (!params.bundleManifest || !params.registryTrack) {
+    return false;
+  }
+  const trackId = pickString(params.bundleManifest, ["track_id", "trackId"]);
+  if (trackId !== params.track.trackId) {
+    return false;
+  }
+  if (isAlignedToTrackContract({ bundleManifest: params.bundleManifest, track: params.track })) {
+    return false;
+  }
+
+  const bundleHypothesis = normalizeContractText(
+    pickString(params.bundleManifest, ["hypothesis", "track_hypothesis", "trackHypothesis"])
+  );
+  const bundleNoveltyBasis = normalizeContractText(
+    pickString(params.bundleManifest, ["novelty_basis", "noveltyBasis"])
+  );
+  const registryHypothesis = normalizeContractText(
+    pickString(params.registryTrack, ["hypothesis", "track_hypothesis", "trackHypothesis"])
+  );
+  const registryNoveltyBasis = normalizeContractText(
+    pickString(params.registryTrack, ["novelty_basis", "noveltyBasis"])
+  );
+  const topic = normalizeContractText(
+    pickString(params.manifest, ["title", "topic", "research_topic", "researchTopic"])
+  );
+  const hasRegistryContract = Boolean(registryHypothesis || registryNoveltyBasis);
+  const matchesRegistry =
+    hasRegistryContract &&
+    (!registryHypothesis || bundleHypothesis === registryHypothesis) &&
+    (!registryNoveltyBasis || bundleNoveltyBasis === registryNoveltyBasis);
+  const matchesBootstrapTopic =
+    Boolean(topic) &&
+    bundleHypothesis === topic &&
+    (!bundleNoveltyBasis || bundleNoveltyBasis === topic);
+  return matchesRegistry || matchesBootstrapTopic;
+}
+
+function selectRepairableBundles(params: {
+  bundles: ExistingCodeBundle[];
+  track: ResearchProgramTrack;
+  registryTrack: Record<string, unknown> | null;
+  manifest: ManifestLike;
+}): ExistingCodeBundle[] {
+  const completeBundles = params.bundles.filter(
+    (bundle) => bundle.manifest && bundle.hasTrain && bundle.hasReadme
+  );
+  return completeBundles.filter((bundle) =>
+    isRepairableStaleContract({
+      bundleManifest: bundle.manifest,
+      track: params.track,
+      registryTrack: params.registryTrack,
+      manifest: params.manifest,
+    })
+  );
+}
+
+export async function shouldMaterializeCodeExperimentBundleImpl(params: {
+  projectRoot: string;
+  manifest: ManifestLike;
+}): Promise<boolean> {
+  const projectRoot = path.resolve(params.projectRoot);
+  const researchProgram = normalizeResearchProgramState(params.manifest.research_program);
+  const track = selectActiveTrack(researchProgram);
+  if (!track || !isSafePathSegment(track.trackId)) {
+    return false;
+  }
+  const indexPath = path.join(projectRoot, CODE_EXPERIMENT_ARTIFACTS.index);
+  const bundles = await listExistingCodeBundles(projectRoot, track.trackId);
+  if (!(await pathExists(indexPath))) {
+    return true;
+  }
+  if (bundles.length === 0) {
+    return true;
+  }
+  const trackRegistry =
+    (await readJsonIfExists<Record<string, unknown>>(
+      path.join(projectRoot, "TRACK_REGISTRY.json")
+    )) ?? {};
+  const repairableBundles = selectRepairableBundles({
+    bundles,
+    track,
+    registryTrack: getRegistryTrack(trackRegistry, track.trackId),
+    manifest: params.manifest,
+  });
+  if (repairableBundles.length > 0) {
+    return true;
+  }
+  if (
+    bundles.some(
+      (bundle) =>
+        bundle.hasTrain &&
+        bundle.hasReadme &&
+        isAlignedToTrackContract({ bundleManifest: bundle.manifest, track })
+    )
+  ) {
+    return false;
+  }
+  return false;
 }
 
 function defaultInnovationPoints(topic: string): string[] {
@@ -386,13 +601,14 @@ function buildExperimentIndex(params: {
   manifest: Record<string, unknown>;
 }): string {
   const metric = pickString(params.manifest, ["primary_baseline_metric"]) ?? "primary metric";
+  const status = pickString(params.manifest, ["status"]) ?? "draft";
   return `# Coder Experiment Index
 
 ## Active Bundles
 
 | Experiment | Track | Bundle | Metric | Status |
 | --- | --- | --- | --- | --- |
-| ${params.experimentId} | ${params.track.trackId} | ${params.bundleRelativeDir} | ${metric} | draft |
+| ${params.experimentId} | ${params.track.trackId} | ${params.bundleRelativeDir} | ${metric} | ${status} |
 
 ## Current Execution Contract
 
@@ -419,6 +635,10 @@ export async function materializeCodeExperimentBundleImpl(params: {
   const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
   const manifest =
     (await readJsonIfExists<ManifestLike>(manifestPath)) ?? {};
+  const trackRegistry =
+    (await readJsonIfExists<Record<string, unknown>>(
+      path.join(projectRoot, "TRACK_REGISTRY.json")
+    )) ?? {};
   const researchProgram = normalizeResearchProgramState(manifest.research_program);
   const track = selectActiveTrack(researchProgram);
   if (!track || !isSafePathSegment(track.trackId)) {
@@ -436,14 +656,26 @@ export async function materializeCodeExperimentBundleImpl(params: {
   const slug = /\bgcd\b|generalized category discovery|fixmatch/u.test(topic.toLowerCase())
     ? "fixmatch_gcd_consistency_debiasing"
     : "local_consistency_debiasing_probe";
-  const bundleRelativeDir = path.posix.join(
-    "coder",
-    "experiments",
-    track.trackId,
-    `${experimentId}__${slug}`
-  );
-  const bundleDir = path.join(projectRoot, bundleRelativeDir);
-  const experimentManifest = buildExperimentManifest({
+  const existingBundles = await listExistingCodeBundles(projectRoot, track.trackId);
+  const repairableBundles = selectRepairableBundles({
+    bundles: existingBundles,
+    track,
+    registryTrack: getRegistryTrack(trackRegistry, track.trackId),
+    manifest,
+  });
+  const repairableBundle = repairableBundles[0] ?? null;
+  const bundleRelativeDir =
+    repairableBundle?.relativeDir ??
+    path.posix.join(
+      "coder",
+      "experiments",
+      track.trackId,
+      `${experimentId}__${slug}`
+    );
+  const bundleDir =
+    repairableBundle?.dir ??
+    path.join(projectRoot, bundleRelativeDir);
+  const defaultExperimentManifest = buildExperimentManifest({
     projectRoot,
     manifest,
     researchProgram,
@@ -452,14 +684,41 @@ export async function materializeCodeExperimentBundleImpl(params: {
     bundleRelativeDir,
     topic,
   });
+  const existingManifest = repairableBundle?.manifest ?? null;
+  const experimentManifest: Record<string, unknown> = {
+    ...defaultExperimentManifest,
+    ...(existingManifest ?? {}),
+    experiment_id:
+      pickString(existingManifest ?? {}, ["experiment_id", "experimentId"]) ??
+      experimentId,
+    project_id:
+      pickString(existingManifest ?? {}, ["project_id", "projectId"]) ??
+      pickString(defaultExperimentManifest, ["project_id", "projectId"]),
+    track_id: track.trackId,
+    question:
+      track.hypothesis ??
+      pickString(defaultExperimentManifest, ["question", "experiment_question"]),
+    hypothesis:
+      track.hypothesis ??
+      pickString(defaultExperimentManifest, ["hypothesis", "track_hypothesis"]),
+    novelty_basis:
+      track.noveltyBasis ??
+      pickString(defaultExperimentManifest, ["novelty_basis", "noveltyBasis"]),
+  };
+  const status = pickString(existingManifest ?? {}, ["status"]);
+  if (status) {
+    experimentManifest.status = status;
+  }
   const executionCommand =
     pickString(
       asRecord(experimentManifest.implementation_proof) ?? {},
       ["execution_command"]
     ) ?? `python ${bundleRelativeDir}/train.py --seed 42`;
 
-  await writeTextEnsured(path.join(bundleDir, CODE_EXPERIMENT_ARTIFACTS.train), buildTrainPy());
-  generatedFiles.push(`${bundleRelativeDir}/${CODE_EXPERIMENT_ARTIFACTS.train}`);
+  if (!repairableBundle || !repairableBundle.hasTrain) {
+    await writeTextEnsured(path.join(bundleDir, CODE_EXPERIMENT_ARTIFACTS.train), buildTrainPy());
+    generatedFiles.push(`${bundleRelativeDir}/${CODE_EXPERIMENT_ARTIFACTS.train}`);
+  }
 
   await writeJsonEnsured(
     path.join(bundleDir, CODE_EXPERIMENT_ARTIFACTS.manifest),
@@ -467,25 +726,87 @@ export async function materializeCodeExperimentBundleImpl(params: {
   );
   generatedFiles.push(`${bundleRelativeDir}/${CODE_EXPERIMENT_ARTIFACTS.manifest}`);
 
-  await writeTextEnsured(
-    path.join(bundleDir, CODE_EXPERIMENT_ARTIFACTS.readme),
-    buildReadme({
-      topic,
-      track,
-      experimentId,
-      bundleRelativeDir,
-      command: executionCommand,
-      manifest: experimentManifest,
-    })
+  const existingReadme = await readTextIfExists(
+    path.join(bundleDir, CODE_EXPERIMENT_ARTIFACTS.readme)
   );
-  generatedFiles.push(`${bundleRelativeDir}/${CODE_EXPERIMENT_ARTIFACTS.readme}`);
+  const shouldRewriteReadme =
+    !repairableBundle ||
+    !repairableBundle.hasReadme ||
+    existingReadme?.includes("local no-Discord implementation fallback") === true;
+  if (shouldRewriteReadme) {
+    await writeTextEnsured(
+      path.join(bundleDir, CODE_EXPERIMENT_ARTIFACTS.readme),
+      buildReadme({
+        topic,
+        track,
+        experimentId:
+          pickString(experimentManifest, ["experiment_id", "experimentId"]) ?? experimentId,
+        bundleRelativeDir,
+        command: executionCommand,
+        manifest: experimentManifest,
+      })
+    );
+    generatedFiles.push(`${bundleRelativeDir}/${CODE_EXPERIMENT_ARTIFACTS.readme}`);
+  }
+
+  for (const staleBundle of repairableBundles.slice(1)) {
+    const staleExperimentId =
+      pickString(staleBundle.manifest ?? {}, ["experiment_id", "experimentId"]) ??
+      experimentId;
+    const staleManifest: Record<string, unknown> = {
+      ...defaultExperimentManifest,
+      ...(staleBundle.manifest ?? {}),
+      experiment_id: staleExperimentId,
+      project_id:
+        pickString(staleBundle.manifest ?? {}, ["project_id", "projectId"]) ??
+        pickString(defaultExperimentManifest, ["project_id", "projectId"]),
+      track_id: track.trackId,
+      question:
+        track.hypothesis ??
+        pickString(defaultExperimentManifest, ["question", "experiment_question"]),
+      hypothesis:
+        track.hypothesis ??
+        pickString(defaultExperimentManifest, ["hypothesis", "track_hypothesis"]),
+      novelty_basis:
+        track.noveltyBasis ??
+        pickString(defaultExperimentManifest, ["novelty_basis", "noveltyBasis"]),
+    };
+    const staleStatus = pickString(staleBundle.manifest ?? {}, ["status"]);
+    if (staleStatus) {
+      staleManifest.status = staleStatus;
+    }
+    await writeJsonEnsured(staleBundle.manifestPath, staleManifest);
+    generatedFiles.push(`${staleBundle.relativeDir}/${CODE_EXPERIMENT_ARTIFACTS.manifest}`);
+
+    const staleReadme = await readTextIfExists(
+      path.join(staleBundle.dir, CODE_EXPERIMENT_ARTIFACTS.readme)
+    );
+    if (staleReadme?.includes("local no-Discord implementation fallback") === true) {
+      const staleExecutionCommand =
+        pickString(asRecord(staleManifest.implementation_proof) ?? {}, ["execution_command"]) ??
+        `python ${staleBundle.relativeDir}/train.py --seed 42`;
+      await writeTextEnsured(
+        path.join(staleBundle.dir, CODE_EXPERIMENT_ARTIFACTS.readme),
+        buildReadme({
+          topic,
+          track,
+          experimentId: staleExperimentId,
+          bundleRelativeDir: staleBundle.relativeDir,
+          command: staleExecutionCommand,
+          manifest: staleManifest,
+        })
+      );
+      generatedFiles.push(`${staleBundle.relativeDir}/${CODE_EXPERIMENT_ARTIFACTS.readme}`);
+    }
+  }
 
   await writeTextEnsured(
     path.join(projectRoot, CODE_EXPERIMENT_ARTIFACTS.index),
     buildExperimentIndex({
       topic,
       track,
-      experimentId,
+      experimentId:
+        pickString(experimentManifest, ["experiment_id", "experimentId"]) ?? experimentId,
       bundleRelativeDir,
       command: executionCommand,
       manifest: experimentManifest,

@@ -141,8 +141,20 @@ type ProjectsStateLike = {
 };
 
 const AUTO_ITERATOR_GRAPH_REFRESH_MIN_INTERVAL_MS = 15_000;
-const TRANSITION_BOOTSTRAP_PREP_STAGES = new Set(["experiment", "analyze", "write"]);
-const LOCAL_TARGET_READY_COMMIT_STAGES = new Set(["experiment", "analyze"]);
+const TRANSITION_BOOTSTRAP_PREP_STAGES = new Set([
+  "experiment",
+  "analyze",
+  "review",
+  "write",
+  "submit",
+]);
+const EXPERIMENT_LOCAL_TARGET_READY_COMMIT_STAGES = new Set([
+  "experiment",
+  "analyze",
+  "review",
+  "write",
+  "submit",
+]);
 type StagePreflightResult = Awaited<ReturnType<typeof maybePrepareWorkflowStageContracts>>;
 
 const EXPERIMENT_DECISIONS_HOLDING_STAGE = new Set([
@@ -1753,7 +1765,11 @@ export async function runWorkflowAutoIteratorImpl(
     stageRepairCommand = null;
   }
   const targetStageReadyForImmediateCommit =
-    Boolean(stageAfter && LOCAL_TARGET_READY_COMMIT_STAGES.has(stageAfter)) &&
+    Boolean(
+      stageAfter &&
+        !surveyWorkflow &&
+        EXPERIMENT_LOCAL_TARGET_READY_COMMIT_STAGES.has(stageAfter)
+    ) &&
     stageAfter !== stageBefore &&
     !regressed &&
     !gateEvaluation.blocking &&

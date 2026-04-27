@@ -1424,6 +1424,13 @@ test("materialize_plan_state repairs malformed plan payloads into auto-iterator-
   assert.ok(materialized.generatedFiles.includes("orchestrator/PLAN.md"));
   assert.ok(materialized.generatedFiles.includes("orchestrator/TODOS.md"));
   assert.ok(materialized.generatedFiles.includes("orchestrator/PLAN_AUDIT.md"));
+  assert.ok(materialized.generatedFiles.includes("TRACK_REGISTRY.json"));
+  const trackRegistry = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "TRACK_REGISTRY.json"), "utf8")
+  );
+  assert.equal(trackRegistry.tracks[0].track_id, "track-main");
+  assert.equal(trackRegistry.tracks[0].hypothesis, "Demo hypothesis");
+  assert.equal(trackRegistry.tracks[0].novelty_basis, "Demo novelty");
   const planText = await fs.readFile(path.join(projectRoot, "orchestrator", "PLAN.md"), "utf8");
   assert.match(planText, /Implementation Strategy/);
   const auditText = await fs.readFile(

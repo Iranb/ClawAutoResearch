@@ -351,6 +351,9 @@ async function buildPapernexusCommandEnv(
   if (summary.mcpUrl && !readString(env.PAPERNEXUS_MCP_URL)) {
     env.PAPERNEXUS_MCP_URL = summary.mcpUrl;
   }
+  if (summary.allowLocalMcp && !readString(env.PAPERNEXUS_ALLOW_LOCAL_MCP)) {
+    env.PAPERNEXUS_ALLOW_LOCAL_MCP = "1";
+  }
 
   const configuredTokenEnv = readString(summary.tokenEnv);
   if (readString(env.PAPERNEXUS_API_TOKEN)) {

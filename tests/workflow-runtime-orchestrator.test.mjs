@@ -141,6 +141,39 @@ test("migrateWorkflowRuntimeState lazily initializes runtime files without rewri
   assert.equal(broadcastStore.entries.length, 0);
 });
 
+test("migrateWorkflowRuntimeState does not rewrite manifest audit after initialization", async (t) => {
+  const projectRoot = await makeProjectRoot();
+
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await makeProject(projectRoot, "alpha-noop");
+  await migrateWorkflowRuntimeState({
+    projectRoot,
+    compatibilityMode: "sessions_spawn_runtime",
+    reason: "test_bootstrap",
+  });
+
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const initializedManifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  initializedManifest.updated_at = "2026-04-27T00:00:00.000Z";
+  await writeJson(manifestPath, initializedManifest);
+
+  const remigration = await migrateWorkflowRuntimeState({
+    projectRoot,
+    compatibilityMode: "sessions_spawn_runtime",
+    reason: "append_runtime_event",
+  });
+
+  const manifestAfterRemigration = JSON.parse(
+    await fs.readFile(manifestPath, "utf8")
+  );
+  assert.equal(remigration.migrated, false);
+  assert.equal(manifestAfterRemigration.updated_at, "2026-04-27T00:00:00.000Z");
+  assert.deepEqual(manifestAfterRemigration.audit, initializedManifest.audit);
+});
+
 test("orchestrateWorkflowTransition persists the intent before spawn and skips spawn when persistence fails", async (t) => {
   const projectRoot = await makeProjectRoot();
 
@@ -561,6 +594,141 @@ test("recoverWorkflowRuntimeState marks orphan active sessions as needs_repair a
     ),
     true
   );
+});
+
+test("recoverWorkflowRuntimeState repairs stale running queue entries with no active session", async (t) => {
+  const projectRoot = await makeProjectRoot();
+
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await makeProject(projectRoot, "stale-running-queue");
+  const oldIso = "2026-03-30T00:00:00.000Z";
+  const freshIso = new Date().toISOString();
+  await writeWorkflowRuntimeQueueStore({
+    projectRoot,
+    projectId: "stale-running-queue",
+    entries: [
+      {
+        transitionId: "orphan-transition",
+        queueId: "orphan-transition",
+        queueKey: "queue-orphan-running",
+        source: "workflow_auto_stage",
+        entryType: "dispatch_task",
+        ownerAgent: "academic_writer",
+        channelKey: "local:conversation:test",
+        requesterSessionKey: "agent:researcher:local:conversation:test",
+        messageChannel: "local",
+        preferredSessionKey: "agent:academic_writer:local:conversation:test",
+        family: "research",
+        kind: "workflow_stage_dispatch",
+        projectId: "stale-running-queue",
+        projectRoot,
+        queuedAt: oldIso,
+        lastAttemptedAt: oldIso,
+        attemptCount: 1,
+        summary: "orphan running dispatch",
+        status: "running",
+        fallbackMode: null,
+        lastError: null,
+        parentSessionKey: null,
+        threadBindingKey: null,
+        depth: 0,
+        runPayload: null,
+        dispatchPayload: null,
+      },
+      {
+        transitionId: "active-transition",
+        queueId: "active-transition",
+        queueKey: "queue-active-running",
+        source: "workflow_auto_stage",
+        entryType: "dispatch_task",
+        ownerAgent: "academic_writer",
+        channelKey: "local:conversation:test",
+        requesterSessionKey: "agent:researcher:local:conversation:test",
+        messageChannel: "local",
+        preferredSessionKey: "agent:academic_writer:local:conversation:fresh",
+        family: "research",
+        kind: "workflow_stage_dispatch",
+        projectId: "stale-running-queue",
+        projectRoot,
+        queuedAt: oldIso,
+        lastAttemptedAt: oldIso,
+        attemptCount: 1,
+        summary: "active running dispatch",
+        status: "running",
+        fallbackMode: null,
+        lastError: null,
+        parentSessionKey: null,
+        threadBindingKey: null,
+        depth: 0,
+        runPayload: null,
+        dispatchPayload: null,
+      },
+    ],
+  });
+  await writeWorkflowRuntimeSessionsStore({
+    projectRoot,
+    projectId: "stale-running-queue",
+    entries: [
+      {
+        sessionKey: "agent:academic_writer:local:conversation:fresh",
+        sessionId: "session-fresh",
+        runtime: "subagent",
+        role: "academic_writer",
+        agentId: "academic_writer",
+        ownerAgent: "academic_writer",
+        family: "research",
+        kind: "workflow_stage_dispatch",
+        channelKey: "local:conversation:test",
+        requesterSessionKey: "agent:researcher:local:conversation:test",
+        projectId: "stale-running-queue",
+        projectRoot,
+        parentSessionKey: null,
+        threadBindingKey: null,
+        depth: 0,
+        status: "active",
+        runId: "run-fresh",
+        queueKey: "queue-active-running",
+        startedAt: freshIso,
+        lastHeartbeatAt: freshIso,
+        lastAnnounceAt: null,
+        lastCheckedAt: freshIso,
+        lastFinishedAt: null,
+        lastError: null,
+      },
+    ],
+  });
+
+  const result = await recoverWorkflowRuntimeState({
+    projectRoot,
+    projectId: "stale-running-queue",
+    staleSessionAgeMs: 60 * 60 * 1000,
+  });
+
+  assert.deepEqual(
+    result.queue.repaired.map((entry) => entry.queueKey),
+    ["queue-orphan-running"]
+  );
+  assert.equal(result.sessions.repaired.length, 0);
+
+  const queueStore = await readWorkflowRuntimeQueueStore(projectRoot);
+  assert.equal(
+    queueStore.entries.find((entry) => entry.queueKey === "queue-orphan-running")?.status,
+    "needs_repair"
+  );
+  assert.equal(
+    queueStore.entries.find((entry) => entry.queueKey === "queue-active-running")?.status,
+    "running"
+  );
+
+  const idempotent = await recoverWorkflowRuntimeState({
+    projectRoot,
+    projectId: "stale-running-queue",
+    staleSessionAgeMs: 60 * 60 * 1000,
+  });
+  assert.equal(idempotent.queue.repaired.length, 0);
 });
 
 test("consumeWorkflowAnnounceOutbox groups by parent session, skips duplicates, and leaves orphans pending", async (t) => {

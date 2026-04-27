@@ -1520,6 +1520,77 @@ async function retireWorkflowPanelRuntimeAttemptState(params: {
   };
 }
 
+async function retireSupersededCodeReviewQueuesForPacket(params: {
+  projectRoot: string;
+  projectId: string | null;
+  packetFingerprint: string;
+  reason: string;
+  logger?: WorkflowCoordinatorLogger;
+}) {
+  const currentAt = nowIso();
+  const retiredQueueKeys = new Set<string>();
+  await updateWorkflowRuntimeQueueStore({
+    projectRoot: params.projectRoot,
+    projectId: params.projectId,
+    updater: (store) =>
+      store.entries.map((entry) => {
+        if (
+          entry.kind !== "workflow_auto_code_review" ||
+          entry.queueKey.includes(`:${params.packetFingerprint}:`) ||
+          !ACTIVE_WORKFLOW_PANEL_QUEUE_STATUSES.has(entry.status)
+        ) {
+          return entry;
+        }
+        retiredQueueKeys.add(entry.queueKey);
+        return {
+          ...entry,
+          status: "completed",
+          lastCheckedAt: currentAt,
+          nextRetryAt: null,
+          lastError: entry.lastError ?? params.reason,
+        };
+      }),
+  });
+  const retiredQueueKeyList = [...retiredQueueKeys];
+  if (retiredQueueKeyList.length === 0) {
+    return retiredQueueKeyList;
+  }
+  await appendWorkflowRuntimeEvent({
+    projectRoot: params.projectRoot,
+    projectId: params.projectId,
+    kind: "auto_code_review_runtime_retired",
+    summary: `Retired ${retiredQueueKeyList.length} superseded code review queue entry(s).`,
+    details: {
+      reason: params.reason,
+      packetFingerprint: params.packetFingerprint,
+      queueKeys: retiredQueueKeyList,
+    },
+  });
+  await appendWorkflowDiagnosticEvent({
+    projectRoot: params.projectRoot,
+    projectId: params.projectId,
+    component: "service",
+    action: "auto_code_review_superseded_queues_retired",
+    status: "completed",
+    summary: "Retired superseded code review queue entries for older packet fingerprints.",
+    details: {
+      reason: params.reason,
+      packetFingerprint: params.packetFingerprint,
+      queueKeys: retiredQueueKeyList,
+    },
+  });
+  params.logger?.debug?.(
+    "Retired superseded code review queue entries for older packet fingerprints.",
+    {
+      projectId: params.projectId,
+      projectRoot: params.projectRoot,
+      packetFingerprint: params.packetFingerprint,
+      queueKeys: retiredQueueKeyList,
+    }
+  );
+  return retiredQueueKeyList;
+}
+
 function extractAutoModeDiscussionFingerprint(queueKey: string): string | null {
   const parts = queueKey.split(":");
   if (parts.length >= 6 && parts[0] === "openclaw-research" && parts[1] === "auto-discussion") {
@@ -4739,6 +4810,47 @@ export async function maybeAdvanceAutoCodeReviewForProject(params: {
         });
       }
 
+      let supersededCodeReviewFromFingerprint: string | null = null;
+      const supersededCodeReviewAttempts:
+        Array<{ queueKey: string; sessionKey: string | null }> = [];
+      if (
+        currentRound?.gateId === "CODE-REVIEW" &&
+        currentRound.status === "reviewing" &&
+        currentRound.packetFingerprint !== packet.packetFingerprint
+      ) {
+        supersededCodeReviewFromFingerprint = currentRound.packetFingerprint;
+        for (const attempt of currentRound.attempts) {
+          const queueKey = readString(attempt.queueKey);
+          if (queueKey) {
+            supersededCodeReviewAttempts.push({ queueKey, sessionKey: null });
+          }
+        }
+      }
+      if (supersededCodeReviewAttempts.length > 0) {
+        await retireWorkflowPanelRuntimeAttemptState({
+          projectRoot: params.projectRoot,
+          projectId: params.projectId,
+          attempts: supersededCodeReviewAttempts,
+          source: "workflow_auto_code_review",
+          kind: "workflow_auto_code_review",
+          reason:
+            `Code review packet changed from ${supersededCodeReviewFromFingerprint ?? "unknown"} to ${packet.packetFingerprint}; retiring superseded reviewer runtime.`,
+          eventKind: "auto_code_review_runtime_retired",
+          diagnosticAction: "auto_code_review_superseded_runtime_retired",
+          diagnosticSummary:
+            "Retired superseded code review runtime state after the packet fingerprint changed.",
+          logger: params.logger,
+        });
+      }
+      await retireSupersededCodeReviewQueuesForPacket({
+        projectRoot: params.projectRoot,
+        projectId: params.projectId,
+        packetFingerprint: packet.packetFingerprint,
+        reason:
+          `Code review packet ${packet.packetFingerprint} superseded older code review queue entries.`,
+        logger: params.logger,
+      });
+
       if (store.roundsStarted >= params.workflowPolicy.autoGate.maxReviewRounds) {
         return finish({
           launched: false,
@@ -4800,6 +4912,31 @@ export async function maybeAdvanceAutoCodeReviewForProject(params: {
             }),
             reviewerRole
           ),
+      });
+
+      if (supersededCodeReviewAttempts.length > 0) {
+        await retireWorkflowPanelRuntimeAttemptState({
+          projectRoot: params.projectRoot,
+          projectId: params.projectId,
+          attempts: supersededCodeReviewAttempts,
+          source: "workflow_auto_code_review",
+          kind: "workflow_auto_code_review",
+          reason:
+            `Code review packet changed from ${currentRound?.packetFingerprint ?? "unknown"} to ${packet.packetFingerprint}; retiring superseded reviewer runtime after relaunch.`,
+          eventKind: "auto_code_review_runtime_retired",
+          diagnosticAction: "auto_code_review_superseded_runtime_retired",
+          diagnosticSummary:
+            "Retired superseded code review queue state after launching the replacement reviewer round.",
+          logger: params.logger,
+        });
+      }
+      await retireSupersededCodeReviewQueuesForPacket({
+        projectRoot: params.projectRoot,
+        projectId: params.projectId,
+        packetFingerprint: packet.packetFingerprint,
+        reason:
+          `Code review packet ${packet.packetFingerprint} superseded older code review queue entries after relaunch.`,
+        logger: params.logger,
       });
 
       if (

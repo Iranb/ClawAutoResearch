@@ -148,6 +148,32 @@ export function isTerminalExperimentStatus(status: string | null): boolean {
   );
 }
 
+export function isPrelaunchExperimentStatus(status: string | null): boolean {
+  return Boolean(
+    status &&
+      [
+        "draft",
+        "planned",
+        "prepared",
+        "ready",
+        "ready_to_launch",
+        "dry_run",
+        "dry_run_complete",
+        "dry_run_passed",
+        "preflight",
+        "preflight_complete",
+        "implementation_ready",
+      ].includes(status)
+  );
+}
+
+export function isBlockingActiveExperimentStatus(status: string | null): boolean {
+  if (!status) {
+    return false;
+  }
+  return !isTerminalExperimentStatus(status) && !isPrelaunchExperimentStatus(status);
+}
+
 export function normalizePapernexusSync(
   value: unknown
 ): ExperimentPapernexusSyncLike {
@@ -311,7 +337,7 @@ export function buildExperimentLedgerSummary(
     getExperimentSortTimestamp(right).localeCompare(getExperimentSortTimestamp(left))
   );
   const activeExperimentIds = ordered
-    .filter((entry) => !isTerminalExperimentStatus(entry.status))
+    .filter((entry) => isBlockingActiveExperimentStatus(entry.status))
     .map((entry) => entry.experimentId);
   const lastCompleted = ordered.find((entry) => ["done", "completed"].includes(entry.status ?? ""));
   const lastFailed = ordered.find((entry) =>

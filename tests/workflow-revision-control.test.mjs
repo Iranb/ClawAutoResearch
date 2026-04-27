@@ -170,6 +170,117 @@ test("materializeRevisionControlState includes blocked paragraph logic audit as 
   assert.equal(result.state.nextReviewerRole, "cross-reviewer");
 });
 
+test("materializeRevisionControlState drops stale resolved hook sources and runtime-only pending audits", async (t) => {
+  const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-revision-control-stale-"));
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "demo-project",
+    current_stage: "review",
+    paragraph_logic_audit: {
+      status: "ready",
+      pending_reason: null,
+    },
+    citation_integrity: {
+      verification_status: "verified",
+    },
+    paper_story_state: {
+      status: "ready",
+      revision_cycle_path: "academic_writer/PAPER_REVISION_STATE.json",
+    },
+    external_review_state: {
+      status: "missing",
+    },
+  });
+  await writeJson(path.join(projectRoot, ".openclaw-research", "workflow-hooks-state.json"), {
+    schemaVersion: 1,
+    updated_at: "2026-04-27T16:50:00.000Z",
+    hook_points: {
+      before_stage_handoff: {
+        review: {
+          aggregate_status: "revise_requested",
+          aggregate_verdict: "revise",
+          updated_at: "2026-04-27T16:40:00.000Z",
+        },
+      },
+      artifact_materialized: {
+        write: {
+          aggregate_status: "passed",
+          aggregate_verdict: "pass",
+          updated_at: "2026-04-27T16:50:00.000Z",
+        },
+      },
+      before_handoff_activation: {
+        write: {
+          aggregate_status: "escalated",
+          aggregate_verdict: "block",
+          updated_at: "2026-04-27T16:50:00.000Z",
+        },
+      },
+    },
+    hooks: {
+      "builtin.auto-mode-risk:review": {
+        hook_id: "builtin.auto-mode-risk:review",
+        stage: "review",
+        hook_point: "before_stage_handoff",
+        status: "revise_requested",
+        blocked_reason:
+          "PROJECT_MANIFEST.json.paragraph_logic_audit.status must be ready before REVIEW closeout (current: pending)",
+        updated_at: "2026-04-27T16:40:00.000Z",
+      },
+      "paper-plan-figure-anchor-audit": {
+        hook_id: "paper-plan-figure-anchor-audit",
+        stage: "write",
+        hook_point: "artifact_materialized",
+        status: "escalated",
+        blocked_reason: "Workflow hook review is currently running.",
+        escalation_reason: "Workflow hook exceeded the configured retry budget.",
+        active_round: {
+          status: "pending",
+          filePath: "academic_writer/FIGURE_ANCHOR_PLAN.md",
+          packetPath: "reviewer/file-audits/paper-plan-figure-anchor-audit/round-1/AUDIT_PACKET.md",
+          reportMarkdownPath:
+            "reviewer/file-audits/paper-plan-figure-anchor-audit/round-1/AUDIT_REPORT.md",
+          result: null,
+        },
+        updated_at: "2026-04-27T16:49:59.000Z",
+      },
+      "main-tex-consistency-audit": {
+        hook_id: "main-tex-consistency-audit",
+        stage: "write",
+        hook_point: "before_handoff_activation",
+        status: "escalated",
+        blocked_reason: "Workflow hook review is currently running.",
+        escalation_reason: "Workflow hook exceeded the configured retry budget.",
+        active_round: {
+          status: "pending",
+          filePath: "academic_writer/paper/main.tex",
+          packetPath: "reviewer/file-audits/main-tex-consistency-audit/round-3/AUDIT_PACKET.md",
+          reportMarkdownPath:
+            "reviewer/file-audits/main-tex-consistency-audit/round-3/AUDIT_REPORT.md",
+          result: null,
+        },
+        updated_at: "2026-04-27T16:50:00.000Z",
+      },
+    },
+  });
+
+  const result = await materializeRevisionControlState({
+    projectRoot,
+    stage: "review",
+  });
+
+  assert.equal(result.state.status, "idle");
+  assert.deepEqual(result.state.openSources, []);
+  const packet = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "reviewer", "REVISION_CONTROL_PACKET.json"), "utf8")
+  );
+  assert.equal(packet.status, "idle");
+  assert.deepEqual(packet.open_sources, []);
+});
+
 test("materializeRevisionControlState ignores external reviews that only require human decision", async (t) => {
   const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-revision-control-human-"));
   t.after(async () => {

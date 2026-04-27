@@ -6,6 +6,7 @@ import {
   normalizePapernexusAccessMode,
   normalizePapernexusApiTokenSource,
   resolvePapernexusAccessPath,
+  summarizePapernexusRemoteAccessConfig,
 } from "../tools/papernexus-secret.ts";
 
 test("normalizePapernexusApiTokenSource defaults unknown values to auto", () => {
@@ -21,6 +22,16 @@ test("normalizePapernexusAccessMode recognizes remote_mcp", () => {
   assert.equal(normalizePapernexusAccessMode("local_mcp"), "local_mcp");
   assert.equal(normalizePapernexusAccessMode("remote_api"), "remote_api");
   assert.equal(normalizePapernexusAccessMode("weird"), "auto");
+});
+
+test("summarizePapernexusRemoteAccessConfig carries explicit local MCP allowance", () => {
+  const summary = summarizePapernexusRemoteAccessConfig({
+    mcpUrl: "http://127.0.0.1:4821/mcp",
+    allowLocalMcp: true,
+  });
+
+  assert.equal(summary.mcpUrl, "http://127.0.0.1:4821/mcp");
+  assert.equal(summary.allowLocalMcp, true);
 });
 
 test("inspectPapernexusRemoteAccess resolves token from env when configured", async () => {
