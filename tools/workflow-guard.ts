@@ -2275,6 +2275,7 @@ export type AutoIteratorAction = {
   mailboxMessageId: string | null;
   cooldownRemainingSeconds: number | null;
   blocking: boolean;
+  dispatchDespiteMissingSignals?: boolean;
 };
 
 export type AutoIteratorResult = {

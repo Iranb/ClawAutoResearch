@@ -294,6 +294,31 @@ test("selectDispatchableAutoStageAction withholds drive_stage when stage signals
   assert.equal(action, null);
 });
 
+test("selectDispatchableAutoStageAction allows explicitly self-driven stage output repair", () => {
+  const action = selectDispatchableAutoStageAction({
+    autoIteratorResult: {
+      gateBlocking: false,
+      missingStageSignals: ["{PROJ}/researcher/FRONTIER_REPORT.md"],
+      recommendedActions: [
+        {
+          kind: "drive_stage",
+          stage: "frontier_mapping",
+          owner: "researcher",
+          summary: "Package graph-grounded frontiers for ideation.",
+          command: "/frontier-mapping",
+          mailboxQueued: false,
+          mailboxMessageId: null,
+          cooldownRemainingSeconds: null,
+          blocking: false,
+          dispatchDespiteMissingSignals: true,
+        },
+      ],
+    },
+  });
+
+  assert.equal(action?.stage, "frontier_mapping");
+});
+
 test("maybeAdvanceWorkflowHookPointForProject skips before-handoff audits while stage signals are missing", async (t) => {
   const projectsRoot = await makeProjectsRoot();
   const projectRoot = path.join(projectsRoot, "alpha");
@@ -1319,6 +1344,60 @@ test("maybeLaunchAutoStageForProject dispatches a prepared owner handoff even wh
   assert.equal(launch.sessionKey, "agent:academic_writer:discord:group:paper-lab");
   assert.equal(runs.length, 1);
   assert.match(runs[0].message, /Immediate command: \/paper-phase/);
+});
+
+test("maybeLaunchAutoStageForProject launches self-driven frontier mapping despite missing stage outputs", async (t) => {
+  const projectsRoot = await makeProjectsRoot();
+  const projectRoot = path.join(projectsRoot, "alpha");
+  const runs = [];
+  t.after(async () => {
+    await fs.rm(projectsRoot, { recursive: true, force: true });
+  });
+  await fs.mkdir(projectRoot, { recursive: true });
+
+  const launch = await maybeLaunchAutoStageForProject({
+    workflowRuntime: {
+      async run(params) {
+        runs.push(params);
+        return { runId: `frontier-run-${runs.length}` };
+      },
+    },
+    workflowPolicy: {
+      autoMode: "aggressive",
+      autoGate: defaultAutoGateConfig(),
+      enableChannelProjectBindings: false,
+      projectsRoot,
+      heartbeatBackgroundChecks: true,
+      agentContactCooldownSeconds: 300,
+      enableWorkflowMailbox: true,
+    },
+    projectRoot,
+    projectId: "alpha",
+    autoIteratorResult: {
+      gateBlocking: false,
+      stageAfter: "frontier_mapping",
+      missingStageSignals: ["{PROJ}/researcher/FRONTIER_REPORT.md"],
+      recommendedActions: [
+        {
+          kind: "drive_stage",
+          owner: "researcher",
+          stage: "frontier_mapping",
+          summary: "Package graph-grounded frontiers for ideation.",
+          command: "/frontier-mapping",
+          mailboxMessageId: null,
+          cooldownRemainingSeconds: 0,
+          blocking: false,
+          dispatchDespiteMissingSignals: true,
+        },
+      ],
+    },
+    launchedStageKeys: new Map(),
+  });
+
+  assert.equal(launch.launched, true);
+  assert.equal(launch.reason, "started");
+  assert.equal(runs.length, 1);
+  assert.match(runs[0].message, /\/frontier-mapping/);
 });
 
 test("maybeLaunchAutoStageForProject runs researcher-owned work on a dedicated subagent session", async (t) => {

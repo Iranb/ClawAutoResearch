@@ -553,22 +553,54 @@ export function selectDispatchableAutoStageAction(params: {
   const allowPreparedOwnerHandoff =
     params.autoIteratorResult.pendingHandoff === true &&
     params.autoIteratorResult.pendingHandoffPhase === "prepared";
+  const action =
+    params.autoIteratorResult.recommendedActions.find(
+      (entry) =>
+        entry.kind === "drive_stage" &&
+        entry.owner &&
+        entry.command &&
+        entry.blocking !== true &&
+        (params.owner == null || entry.owner === params.owner)
+    ) ?? null;
+  if (!action) {
+    return null;
+  }
   if (
     (params.autoIteratorResult.missingStageSignals ?? []).length > 0 &&
-    !allowPreparedOwnerHandoff
+    !allowPreparedOwnerHandoff &&
+    action.dispatchDespiteMissingSignals !== true
   ) {
     return null;
   }
-  return (
-    params.autoIteratorResult.recommendedActions.find(
-      (action) =>
-        action.kind === "drive_stage" &&
-        action.owner &&
-        action.command &&
-        action.blocking !== true &&
-        (params.owner == null || action.owner === params.owner)
-    ) ?? null
-  );
+  return action;
+}
+
+const SELF_DRIVEN_RESEARCHER_STAGES = new Set([
+  "graph_build",
+  "frontier_mapping",
+  "idea",
+]);
+
+function canDispatchOwnerStageWithMissingSignals(params: {
+  stage: string | null;
+  owner: AutoIteratorAction["owner"] | null;
+  previousOwner: AutoIteratorAction["owner"] | null;
+  missingStageSignals: string[];
+  stageRepairCommand: string | null;
+}): boolean {
+  if (!params.stage || params.missingStageSignals.length === 0) {
+    return false;
+  }
+  if (params.stageRepairCommand != null) {
+    return false;
+  }
+  if (params.owner !== "researcher") {
+    return false;
+  }
+  if (params.previousOwner != null && params.previousOwner !== params.owner) {
+    return false;
+  }
+  return SELF_DRIVEN_RESEARCHER_STAGES.has(params.stage);
 }
 
 type AutoIteratorDeps = {
@@ -1704,6 +1736,15 @@ export async function runWorkflowAutoIteratorImpl(
     !gateEvaluation.blocking &&
     (dispatchStageSignals.length === 0 || experimentDecisionOwnsNextStep) &&
     stageRepairCommand == null;
+  const stageOwnerCanMaterializeMissingSignals =
+    !gateEvaluation.blocking &&
+    canDispatchOwnerStageWithMissingSignals({
+      stage: stageAfter,
+      owner: ownerAfter,
+      previousOwner: deps.normalizeRole(ownerBefore),
+      missingStageSignals: dispatchStageSignals,
+      stageRepairCommand,
+    });
   const stageRepairBackgroundCommand = stageReadinessRepairSummary
     ? stageReadinessRepairSummary
     : dispatchStageSignals.length > 0
@@ -2118,7 +2159,11 @@ export async function runWorkflowAutoIteratorImpl(
       cooldownRemainingSeconds: null,
       blocking: true,
     });
-  } else if (stageReadyForOwnerWork || shouldDispatchPreparedOwnerHandoff) {
+  } else if (
+    stageReadyForOwnerWork ||
+    shouldDispatchPreparedOwnerHandoff ||
+    stageOwnerCanMaterializeMissingSignals
+  ) {
     const mailbox =
       params.queueMailbox === false
         ? {
@@ -2152,6 +2197,7 @@ export async function runWorkflowAutoIteratorImpl(
       mailboxMessageId: mailbox.messageId,
       cooldownRemainingSeconds: mailbox.cooldownRemainingSeconds,
       blocking: false,
+      dispatchDespiteMissingSignals: stageOwnerCanMaterializeMissingSignals,
     });
   } else {
     recommendedActions.push({

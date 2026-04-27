@@ -2648,16 +2648,17 @@ export async function maybeLaunchAutoStageForProject(params: {
     missingStageSignals?: string[];
     pendingHandoff?: boolean;
     pendingHandoffPhase?: string | null;
-    recommendedActions: Array<{
-      kind: string;
-      owner: string | null;
-      stage: string | null;
-      summary: string;
-      command: string | null;
-      mailboxMessageId?: string | null;
-      cooldownRemainingSeconds?: number | null;
-      blocking?: boolean;
-    }>;
+      recommendedActions: Array<{
+        kind: string;
+        owner: string | null;
+        stage: string | null;
+        summary: string;
+        command: string | null;
+        mailboxMessageId?: string | null;
+        cooldownRemainingSeconds?: number | null;
+        blocking?: boolean;
+        dispatchDespiteMissingSignals?: boolean;
+      }>;
   };
   launchedStageKeys: Map<string, { key: string; launchedAt: number }>;
   logger?: WorkflowCoordinatorLogger;
@@ -2819,6 +2820,8 @@ export async function maybeLaunchAutoStageForProject(params: {
             mailboxMessageId: entry.mailboxMessageId ?? null,
             cooldownRemainingSeconds: entry.cooldownRemainingSeconds ?? null,
             blocking: entry.blocking === true,
+            dispatchDespiteMissingSignals:
+              entry.dispatchDespiteMissingSignals === true,
           })
         ),
       };

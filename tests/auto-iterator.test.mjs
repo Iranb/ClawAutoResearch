@@ -4308,6 +4308,11 @@ test("auto iterator advances graph_build to frontier_mapping when graph is ready
   assert.equal(result.stageBefore, "graph_build");
   assert.equal(result.stageAfter, "frontier_mapping");
   assert.equal(result.graphPresenceCheck?.status, "ready");
+  assert.equal(result.recommendedActions[0]?.kind, "drive_stage");
+  assert.equal(
+    result.recommendedActions[0]?.dispatchDespiteMissingSignals,
+    true
+  );
   assert.equal(manifest.current_stage, "frontier_mapping");
   assert.equal(manifest.current_micro_stage, "frontier_mapping_requested");
 });
