@@ -67,6 +67,17 @@ function countBy(entries, key) {
   return counts;
 }
 
+function isBlockingRuntimeIncident(entry) {
+  if (!entry || typeof entry !== "object") {
+    return false;
+  }
+  if (entry.status === "resolved") {
+    return false;
+  }
+  const severity = String(entry.severity ?? "").toLowerCase();
+  return !["debug", "info", "notice", "warning"].includes(severity);
+}
+
 function statusFromChecks(checks) {
   const required = checks.filter((entry) => entry.required);
   if (required.every((entry) => entry.exists)) {
@@ -429,6 +440,7 @@ const activeRepairs = (repairStore.items ?? []).filter((entry) =>
 const activeWriteScopes = (writeScopeStore.claims ?? []).filter(
   (entry) => !entry.releasedAt && Date.parse(entry.leaseExpiresAt ?? 0) > Date.now()
 );
+const blockingOpenIncidents = openIncidents.filter(isBlockingRuntimeIncident);
 
 const artifactStatus = statusFromChecks(artifactChecklist);
 const reviewCloseoutStatus = reviewCloseoutChecks.every((entry) => entry.ok)
@@ -440,7 +452,7 @@ const finalVerdict =
   artifactStatus === "pass" &&
   reviewCloseoutStatus === "pass" &&
   contentQualityStatus !== "fail" &&
-  openIncidents.length === 0 &&
+  blockingOpenIncidents.length === 0 &&
   activeRepairs.length === 0
     ? "pass"
     : artifactStatus === "fail" || contentQualityStatus === "fail"
@@ -521,6 +533,7 @@ ${JSON.stringify(countBy(repairStore.items ?? [], "status"), null, 2)}
 ## Runtime Safety
 
 - open incidents: ${openIncidents.length}
+- blocking open incidents: ${blockingOpenIncidents.length}
 - active handoffs: ${activeHandoffs.length}
 - failed handoffs: ${failedHandoffs.length}
 - active repairs: ${activeRepairs.length}
@@ -557,6 +570,14 @@ await fs.writeFile(
         section_word_counts: sectionWordCounts,
         checks: contentQualityChecks,
       },
+      runtime_safety: {
+        open_incidents: openIncidents.length,
+        blocking_open_incidents: blockingOpenIncidents.length,
+        active_handoffs: activeHandoffs.length,
+        failed_handoffs: failedHandoffs.length,
+        active_repairs: activeRepairs.length,
+        active_write_scopes: activeWriteScopes.length,
+      },
       artifacts: artifactChecklist,
     },
     null,
@@ -582,6 +603,14 @@ console.log(
         paperWordCount,
         sectionWordCounts,
         checks: contentQualityChecks,
+      },
+      runtimeSafety: {
+        openIncidents: openIncidents.length,
+        blockingOpenIncidents: blockingOpenIncidents.length,
+        activeHandoffs: activeHandoffs.length,
+        failedHandoffs: failedHandoffs.length,
+        activeRepairs: activeRepairs.length,
+        activeWriteScopes: activeWriteScopes.length,
       },
       reportPath: path.join(openclawDir, "E2E_RUN_REPORT.md"),
       checklistPath: path.join(openclawDir, "E2E_ARTIFACT_CHECKLIST.json"),

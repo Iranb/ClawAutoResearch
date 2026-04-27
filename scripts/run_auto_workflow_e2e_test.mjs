@@ -396,20 +396,35 @@ function applyAutoWorkflowModelOverride(config, override) {
   if (!override?.enabled) {
     return next;
   }
+  const applyModelOverride = (modelConfig) => {
+    const currentModel =
+      modelConfig && typeof modelConfig === "object" ? modelConfig : {};
+    const overridden = {
+      ...currentModel,
+      ...(override.primary ? { primary: override.primary } : {}),
+    };
+    if (override.primary || override.fallbacks.length > 0) {
+      overridden.fallbacks = override.fallbacks;
+    }
+    return overridden;
+  };
   next.agents = next.agents && typeof next.agents === "object" ? next.agents : {};
   next.agents.defaults =
     next.agents.defaults && typeof next.agents.defaults === "object"
       ? next.agents.defaults
       : {};
-  const currentModel =
-    next.agents.defaults.model && typeof next.agents.defaults.model === "object"
-      ? next.agents.defaults.model
-      : {};
-  next.agents.defaults.model = {
-    ...currentModel,
-    ...(override.primary ? { primary: override.primary } : {}),
-    ...(override.fallbacks.length > 0 ? { fallbacks: override.fallbacks } : {}),
-  };
+  next.agents.defaults.model = applyModelOverride(next.agents.defaults.model);
+  if (Array.isArray(next.agents.list)) {
+    next.agents.list = next.agents.list.map((agent) => {
+      if (!agent || typeof agent !== "object") {
+        return agent;
+      }
+      return {
+        ...agent,
+        model: applyModelOverride(agent.model),
+      };
+    });
+  }
   return next;
 }
 

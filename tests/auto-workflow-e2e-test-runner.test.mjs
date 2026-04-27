@@ -274,7 +274,16 @@ test("auto workflow E2E runner materializes temporary model override config from
               fallbacks: ["bailian/qwen3.6-plus"],
             },
           },
-          list: [{ id: "researcher", agentDir }],
+          list: [
+            {
+              id: "researcher",
+              agentDir,
+              model: {
+                primary: "bailian/qwen3.5-plus",
+                fallbacks: ["bailian/qwen3.6-plus"],
+              },
+            },
+          ],
         },
       },
       null,
@@ -316,6 +325,9 @@ test("auto workflow E2E runner materializes temporary model override config from
   const effectiveConfig = JSON.parse(await fs.readFile(materialized.configPath, "utf8"));
   const sourceConfig = JSON.parse(await fs.readFile(sourceConfigPath, "utf8"));
   assert.equal(effectiveConfig.agents.defaults.model.primary, "codex/gpt-5.4");
+  assert.deepEqual(effectiveConfig.agents.defaults.model.fallbacks, []);
+  assert.equal(effectiveConfig.agents.list[0].model.primary, "codex/gpt-5.4");
+  assert.deepEqual(effectiveConfig.agents.list[0].model.fallbacks, []);
   assert.equal(sourceConfig.agents.defaults.model.primary, "bailian/qwen3.5-plus");
   assert.deepEqual(
     effectiveConfig.models.providers.codex.models.map((entry) => entry.id),
@@ -428,6 +440,55 @@ test("live E2E harness treats durable reviewer revision as a terminal real-run o
   assert.equal(terminal.reason, "live_reviewer_revision_requested");
   assert.equal(terminal.details.reviewIssueCount, 1);
   assert.equal(terminal.details.actionItemCount, 1);
+  assert.equal(terminal.details.blockingActionItemCount, 1);
+});
+
+test("live E2E harness does not treat submit-ready review closeout as revision terminal", async (t) => {
+  const projectRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "openclaw-research-live-submit-ready-")
+  );
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+  await fs.mkdir(path.join(projectRoot, "academic_writer", "paper"), { recursive: true });
+  await fs.mkdir(path.join(projectRoot, "reviewer"), { recursive: true });
+  await fs.mkdir(path.join(projectRoot, "academic_writer"), { recursive: true });
+  await fs.writeFile(path.join(projectRoot, "academic_writer", "paper", "main.pdf"), "pdf");
+  await fs.writeFile(
+    path.join(projectRoot, "reviewer", "REVIEW_PACKET.json"),
+    `${JSON.stringify({
+      status: "completed",
+      verdict: "ready",
+      action_items: ["Proceed to submit-stage gate with review artifacts available."],
+    })}\n`
+  );
+  await fs.writeFile(
+    path.join(projectRoot, "reviewer", "REVIEW_ISSUES.json"),
+    `${JSON.stringify({ open_counts: { critical: 0, high: 0, medium: 0, low: 0 } })}\n`
+  );
+  await fs.writeFile(
+    path.join(projectRoot, "reviewer", "REVISION_CONTROL_PACKET.json"),
+    `${JSON.stringify({ status: "ready" })}\n`
+  );
+  await fs.writeFile(
+    path.join(projectRoot, "academic_writer", "PAPER_REVISION_STATE.json"),
+    `${JSON.stringify({ status: "ready" })}\n`
+  );
+
+  const terminal = await detectLiveSubstantiveRevisionTerminal({
+    projectRoot,
+    manifest: {
+      current_stage: "write",
+      owner_agent: "academic_writer",
+      innovation_synthesis_state: { status: "needs_revision" },
+      review_session: { status: "completed", verdict: "ready" },
+    },
+    lane: "experiment",
+  });
+
+  assert.equal(terminal.terminal, false);
+  assert.equal(terminal.details.reviewReady, true);
+  assert.equal(terminal.details.blockingActionItemCount, 0);
 });
 
 test("auto workflow E2E runner merges default model fallbacks into agent-specific model config", () => {

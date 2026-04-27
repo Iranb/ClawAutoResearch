@@ -83,6 +83,23 @@ test("E2E paper generation harness materializes report, checklist, and timeline"
       await write(targetPath, "# ok\n");
     }
   }
+  await write(
+    path.join(projectRoot, ".openclaw-research", "workflow-runtime-incidents.json"),
+    `${JSON.stringify(
+      {
+        entries: [
+          {
+            kind: "lobster_fallback",
+            severity: "warning",
+            status: "open",
+            summary: "Optional runtime backend fell back to native dispatch.",
+          },
+        ],
+      },
+      null,
+      2
+    )}\n`
+  );
 
   const { stdout } = await execFileAsync(process.execPath, [
     "scripts/run-e2e-paper-generation.mjs",
@@ -93,6 +110,8 @@ test("E2E paper generation harness materializes report, checklist, and timeline"
   ]);
   const result = JSON.parse(stdout);
   assert.equal(result.finalVerdict, "pass");
+  assert.equal(result.runtimeSafety.openIncidents, 1);
+  assert.equal(result.runtimeSafety.blockingOpenIncidents, 0);
   assert.equal(
     await fs.readFile(path.join(projectRoot, ".openclaw-research", "E2E_RUN_REPORT.md"), "utf8").then((text) => /final_verdict: pass/.test(text)),
     true

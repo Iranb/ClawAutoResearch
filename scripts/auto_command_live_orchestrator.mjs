@@ -83,6 +83,36 @@ function issueOpenCount(reviewIssues) {
   return reviewIssues?.status === "open" ? 1 : 0;
 }
 
+function isReadyReviewVerdict(value) {
+  const normalized = readString(value)?.toLowerCase();
+  return [
+    "ready",
+    "pass",
+    "passed",
+    "approved",
+    "accept",
+    "accepted",
+    "complete",
+    "completed",
+  ].includes(normalized ?? "");
+}
+
+function isBlockingRevisionActionItem(value) {
+  const normalized = readString(value)?.toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  if (
+    /\b(proceed|advance|submit|submission|submit-stage|camera-ready|ready)\b/.test(normalized) &&
+    !/\b(revis|fix|address|block|change|strengthen|rewrite|missing|unsupported|overclaim)\b/.test(normalized)
+  ) {
+    return false;
+  }
+  return /\b(revis|fix|address|block|change|strengthen|rewrite|missing|unsupported|overclaim|clarif|correct|add stronger)\b/.test(
+    normalized
+  );
+}
+
 export async function detectLiveSubstantiveRevisionTerminal(params) {
   const manifest = params.manifest ?? {};
   const stage = readString(manifest.current_stage) ?? "";
@@ -125,24 +155,38 @@ export async function detectLiveSubstantiveRevisionTerminal(params) {
     pathExists(revisionPacketMarkdownPath),
     readJsonIfExists(revisionStatePath),
   ]);
-  const actionItemCount = Array.isArray(reviewPacket?.action_items)
-    ? reviewPacket.action_items.length
-    : 0;
+  const actionItems = Array.isArray(reviewPacket?.action_items)
+    ? reviewPacket.action_items
+    : [];
+  const actionItemCount = actionItems.length;
+  const blockingActionItemCount = actionItems.filter(isBlockingRevisionActionItem).length;
   const openIssueCount = issueOpenCount(reviewIssues);
   const synthesisStatus =
     readString(manifest.innovation_synthesis_state?.status) ??
     readString(manifest.innovationSynthesisState?.status);
   const revisionStatus = readString(revisionState?.status);
+  const reviewVerdict =
+    readString(reviewPacket?.verdict) ??
+    readString(manifest.review_session?.verdict) ??
+    readString(manifest.reviewSession?.verdict);
+  const reviewStatus =
+    readString(reviewPacket?.status) ??
+    readString(manifest.review_session?.status) ??
+    readString(manifest.reviewSession?.status);
+  const reviewReady =
+    openIssueCount === 0 &&
+    (isReadyReviewVerdict(reviewVerdict) || isReadyReviewVerdict(reviewStatus));
+  const blockingRevisionStatus =
+    ["active", "needs_revision", "blocked", "required"].includes(
+      revisionStatus?.toLowerCase() ?? ""
+    );
   const terminal =
     pdfExists &&
-    (
-      synthesisStatus === "needs_revision" ||
+    !reviewReady &&
+    (synthesisStatus === "needs_revision" ||
       openIssueCount > 0 ||
-      actionItemCount > 0 ||
-      revisionPacketExists ||
-      revisionPacketMarkdownExists ||
-      ["ready", "active", "needs_revision"].includes(revisionStatus ?? "")
-    );
+      blockingActionItemCount > 0 ||
+      blockingRevisionStatus);
 
   return {
     terminal,
@@ -154,6 +198,10 @@ export async function detectLiveSubstantiveRevisionTerminal(params) {
       synthesisStatus: synthesisStatus ?? null,
       reviewIssueCount: openIssueCount,
       actionItemCount,
+      blockingActionItemCount,
+      reviewVerdict: reviewVerdict ?? null,
+      reviewStatus: reviewStatus ?? null,
+      reviewReady,
       revisionPacketExists: revisionPacketExists || revisionPacketMarkdownExists,
       revisionStatus: revisionStatus ?? null,
     },
