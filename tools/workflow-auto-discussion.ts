@@ -548,6 +548,86 @@ export function buildAutoModeDiscussionPrompt(params: {
   });
 }
 
+function buildLocalAutoModeDiscussionResult(params: {
+  packet: AutoModeDiscussionPacket;
+  reviewerRole: AutoModeDiscussionReviewerRole;
+  runId: string;
+  reason: string;
+  createdAt: string;
+}): AutoModeDiscussionResult {
+  const needsBoundedRemediation =
+    params.packet.riskLevel === "severe" ||
+    params.packet.missingStageSignals.length > 0;
+  const blockers = needsBoundedRemediation
+    ? uniqueStrings([
+        ...params.packet.missingStageSignals,
+        ...params.packet.riskReasons,
+      ]).slice(0, 8)
+    : [];
+  const actionItems = needsBoundedRemediation
+    ? (blockers.length > 0
+        ? blockers.map((item) => `Resolve before continuing auto mode: ${item}`)
+        : ["Run one bounded remediation pass before continuing auto mode."])
+    : [
+        "Continue the current handoff with bounded monitoring; provider capacity prevented live panel review.",
+      ];
+  return {
+    reviewerRole: params.reviewerRole,
+    riskAssessment: needsBoundedRemediation ? "needs_changes" : "resolved",
+    confidence: needsBoundedRemediation ? 6.2 : 7.4,
+    recommendedOwner:
+      normalizeOwner(params.packet.ownerAfter) ??
+      (needsBoundedRemediation ? "researcher" : null),
+    actionItems,
+    blockers,
+    summary: needsBoundedRemediation
+      ? `Local ${params.reviewerRole} auto-mode risk review requested one bounded remediation pass because hard risk signals remain.`
+      : `Local ${params.reviewerRole} auto-mode risk review allowed the current handoff to continue because the risk packet is caution-level and required stage signals are present.`,
+    createdAt: params.createdAt,
+    runId: params.runId,
+    rawText: JSON.stringify({
+      source: "local_static_auto_mode_discussion",
+      reason: params.reason,
+      reviewerRole: params.reviewerRole,
+      riskAssessment: needsBoundedRemediation ? "needs_changes" : "resolved",
+      riskLevel: params.packet.riskLevel,
+      missingStageSignalCount: params.packet.missingStageSignals.length,
+      blockerCount: blockers.length,
+    }),
+  };
+}
+
+export function buildLocalAutoModeDiscussionAttempts(params: {
+  packet: AutoModeDiscussionPacket;
+  packetFingerprint: string;
+  participants?: AutoModeDiscussionReviewerRole[];
+  reason: string;
+  createdAt?: string | null;
+}): AutoModeDiscussionAttempt[] {
+  const createdAt = readString(params.createdAt) ?? new Date().toISOString();
+  const participants = params.participants ?? defaultAutoModeDiscussionPanel();
+  return participants.map((reviewerRole) => {
+    const runId = `local-auto-discussion:${params.packetFingerprint}:${reviewerRole}`;
+    return {
+      reviewerRole,
+      sessionKey: `local:auto-mode-discussion:${reviewerRole}`,
+      runId,
+      queueKey: null,
+      status: "completed",
+      launchedAt: createdAt,
+      completedAt: createdAt,
+      error: null,
+      result: buildLocalAutoModeDiscussionResult({
+        packet: params.packet,
+        reviewerRole,
+        runId,
+        reason: params.reason,
+        createdAt,
+      }),
+    };
+  });
+}
+
 export function parseAutoModeDiscussionResult(
   text: string,
   reviewerRole: AutoModeDiscussionReviewerRole

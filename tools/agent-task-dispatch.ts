@@ -262,7 +262,7 @@ async function findActiveTargetOwnerSession(params: {
       )
       .map((entry) => entry.sessionKey)
   );
-  if (preferredRegistrySession?.sessionKey && candidates.includes(preferredRegistrySession.sessionKey)) {
+  if (preferredRegistrySession?.sessionKey && activeSet.has(preferredRegistrySession.sessionKey)) {
     return preferredRegistrySession.sessionKey;
   }
   return candidates.find((candidate) => activeSet.has(candidate)) ?? null;
@@ -503,7 +503,7 @@ async function runSingleDispatchAttempt(params: {
           beforeCount != null && afterCount != null && afterCount > beforeCount;
         const accepted =
           params.requireMailboxAcknowledgement === true && params.mailboxMessageId
-            ? false
+            ? acceptedByTranscript
             : acceptedByTranscript || params.retryOnTimeout !== true;
         return {
           accepted,

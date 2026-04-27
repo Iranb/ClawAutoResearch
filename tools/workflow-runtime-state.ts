@@ -819,6 +819,96 @@ function normalizeBroadcastEntry(value: unknown): WorkflowRuntimeBroadcastEntry 
   };
 }
 
+function shouldCoerceProjectScopedEntry(
+  entryProjectRoot: string | null | undefined,
+  normalizedProjectRoot: string
+): boolean {
+  const entryRoot = readString(entryProjectRoot);
+  return !entryRoot || path.resolve(entryRoot) === normalizedProjectRoot;
+}
+
+function normalizeQueueEntriesForProject(
+  entries: WorkflowRuntimeQueueEntry[],
+  projectRoot: string,
+  projectId: string | null
+): WorkflowRuntimeQueueEntry[] {
+  const normalizedProjectRoot = normalizeProjectRoot(projectRoot);
+  return entries.map((entry) => {
+    if (!shouldCoerceProjectScopedEntry(entry.projectRoot, normalizedProjectRoot)) {
+      return entry;
+    }
+    const dispatchPayload =
+      entry.dispatchPayload &&
+      shouldCoerceProjectScopedEntry(
+        entry.dispatchPayload.projectRoot,
+        normalizedProjectRoot
+      )
+        ? {
+            ...entry.dispatchPayload,
+            projectRoot: normalizedProjectRoot,
+            projectId,
+          }
+        : entry.dispatchPayload;
+    return {
+      ...entry,
+      projectId,
+      projectRoot: normalizedProjectRoot,
+      dispatchPayload,
+    };
+  });
+}
+
+function normalizeSessionEntriesForProject(
+  entries: WorkflowRuntimeSessionEntry[],
+  projectRoot: string,
+  projectId: string | null
+): WorkflowRuntimeSessionEntry[] {
+  const normalizedProjectRoot = normalizeProjectRoot(projectRoot);
+  return entries.map((entry) =>
+    shouldCoerceProjectScopedEntry(entry.projectRoot, normalizedProjectRoot)
+      ? {
+          ...entry,
+          projectId,
+          projectRoot: normalizedProjectRoot,
+        }
+      : entry
+  );
+}
+
+function normalizeAnnounceEntriesForProject(
+  entries: WorkflowRuntimeAnnounceEntry[],
+  projectRoot: string,
+  projectId: string | null
+): WorkflowRuntimeAnnounceEntry[] {
+  const normalizedProjectRoot = normalizeProjectRoot(projectRoot);
+  return entries.map((entry) =>
+    shouldCoerceProjectScopedEntry(entry.projectRoot, normalizedProjectRoot)
+      ? {
+          ...entry,
+          projectId,
+          projectRoot: normalizedProjectRoot,
+        }
+      : entry
+  );
+}
+
+function normalizeBroadcastEntriesForProject(
+  entries: WorkflowRuntimeBroadcastEntry[],
+  projectRoot: string,
+  projectId: string | null
+): WorkflowRuntimeBroadcastEntry[] {
+  const normalizedProjectRoot = normalizeProjectRoot(projectRoot);
+  return entries.map((entry) =>
+    shouldCoerceProjectScopedEntry(entry.projectRoot, normalizedProjectRoot)
+      ? {
+          ...entry,
+          projectId,
+          projectRoot: normalizedProjectRoot,
+        }
+      : entry
+  );
+}
+
 function normalizeQueueStore(
   projectRoot: string,
   projectId: string | null,
@@ -832,6 +922,7 @@ function normalizeQueueStore(
         .map((entry) => normalizeQueueEntry(entry))
         .filter((entry): entry is WorkflowRuntimeQueueEntry => Boolean(entry))
     : [];
+  const normalizedProjectRoot = normalizeProjectRoot(projectRoot);
   return {
     ...buildStoreMeta({
       compatibilityMode: normalizeCompatibilityMode(
@@ -841,8 +932,8 @@ function normalizeQueueStore(
       updatedAt: readString(record?.updatedAt ?? record?.updated_at),
     }),
     projectId,
-    projectRoot: normalizeProjectRoot(projectRoot),
-    entries,
+    projectRoot: normalizedProjectRoot,
+    entries: normalizeQueueEntriesForProject(entries, normalizedProjectRoot, projectId),
   };
 }
 
@@ -859,6 +950,7 @@ function normalizeSessionsStore(
         .map((entry) => normalizeSessionEntry(entry))
         .filter((entry): entry is WorkflowRuntimeSessionEntry => Boolean(entry))
     : [];
+  const normalizedProjectRoot = normalizeProjectRoot(projectRoot);
   return {
     ...buildStoreMeta({
       compatibilityMode: normalizeCompatibilityMode(
@@ -868,8 +960,8 @@ function normalizeSessionsStore(
       updatedAt: readString(record?.updatedAt ?? record?.updated_at),
     }),
     projectId,
-    projectRoot: normalizeProjectRoot(projectRoot),
-    entries,
+    projectRoot: normalizedProjectRoot,
+    entries: normalizeSessionEntriesForProject(entries, normalizedProjectRoot, projectId),
   };
 }
 
@@ -886,6 +978,7 @@ function normalizeAnnounceStore(
         .map((entry) => normalizeAnnounceEntry(entry))
         .filter((entry): entry is WorkflowRuntimeAnnounceEntry => Boolean(entry))
     : [];
+  const normalizedProjectRoot = normalizeProjectRoot(projectRoot);
   return {
     ...buildStoreMeta({
       compatibilityMode: normalizeCompatibilityMode(
@@ -895,8 +988,8 @@ function normalizeAnnounceStore(
       updatedAt: readString(record?.updatedAt ?? record?.updated_at),
     }),
     projectId,
-    projectRoot: normalizeProjectRoot(projectRoot),
-    entries,
+    projectRoot: normalizedProjectRoot,
+    entries: normalizeAnnounceEntriesForProject(entries, normalizedProjectRoot, projectId),
   };
 }
 
@@ -913,6 +1006,7 @@ function normalizeBroadcastStore(
         .map((entry) => normalizeBroadcastEntry(entry))
         .filter((entry): entry is WorkflowRuntimeBroadcastEntry => Boolean(entry))
     : [];
+  const normalizedProjectRoot = normalizeProjectRoot(projectRoot);
   return {
     ...buildStoreMeta({
       compatibilityMode: normalizeCompatibilityMode(
@@ -922,8 +1016,8 @@ function normalizeBroadcastStore(
       updatedAt: readString(record?.updatedAt ?? record?.updated_at),
     }),
     projectId,
-    projectRoot: normalizeProjectRoot(projectRoot),
-    entries,
+    projectRoot: normalizedProjectRoot,
+    entries: normalizeBroadcastEntriesForProject(entries, normalizedProjectRoot, projectId),
   };
 }
 
@@ -945,8 +1039,8 @@ export async function migrateWorkflowRuntimeState(params: {
   const compatibilityMode = normalizeCompatibilityMode(params.compatibilityMode);
   const manifest = await readManifest(projectRoot);
   const projectId =
-    readString(params.projectId) ??
     readString(manifest.project_id) ??
+    readString(params.projectId) ??
     path.basename(projectRoot);
   const runtimeDir = getWorkflowRuntimeDir(projectRoot);
   const migration = defaultMigrationInfo({
@@ -1107,7 +1201,11 @@ export async function writeWorkflowRuntimeQueueStore(params: {
     }),
     projectId: context.projectId,
     projectRoot: context.projectRoot,
-    entries: params.entries,
+    entries: normalizeQueueEntriesForProject(
+      params.entries,
+      context.projectRoot,
+      context.projectId
+    ),
   };
   const targetPath = getWorkflowRuntimeQueuePath(context.projectRoot);
   await withRuntimeStoreLock(targetPath, async () => {
@@ -1136,7 +1234,11 @@ export async function updateWorkflowRuntimeQueueStore(params: {
       }),
       projectId: context.projectId,
       projectRoot: context.projectRoot,
-      entries: nextEntries,
+      entries: normalizeQueueEntriesForProject(
+        nextEntries,
+        context.projectRoot,
+        context.projectId
+      ),
     };
     await writeJson(targetPath, store);
     return store;
@@ -1189,7 +1291,11 @@ export async function writeWorkflowRuntimeSessionsStore(params: {
     }),
     projectId: context.projectId,
     projectRoot: context.projectRoot,
-    entries: params.entries,
+    entries: normalizeSessionEntriesForProject(
+      params.entries,
+      context.projectRoot,
+      context.projectId
+    ),
   };
   const targetPath = getWorkflowRuntimeSessionsPath(context.projectRoot);
   await withRuntimeStoreLock(targetPath, async () => {
@@ -1218,7 +1324,11 @@ export async function updateWorkflowRuntimeSessionsStore(params: {
       }),
       projectId: context.projectId,
       projectRoot: context.projectRoot,
-      entries: nextEntries,
+      entries: normalizeSessionEntriesForProject(
+        nextEntries,
+        context.projectRoot,
+        context.projectId
+      ),
     };
     await writeJson(targetPath, store);
     return store;
@@ -1271,7 +1381,11 @@ export async function writeWorkflowAnnounceOutboxStore(params: {
     }),
     projectId: context.projectId,
     projectRoot: context.projectRoot,
-    entries: params.entries,
+    entries: normalizeAnnounceEntriesForProject(
+      params.entries,
+      context.projectRoot,
+      context.projectId
+    ),
   };
   await writeJson(getWorkflowAnnounceOutboxPath(context.projectRoot), store);
   return store;
@@ -1323,7 +1437,11 @@ export async function writeWorkflowBroadcastOutboxStore(params: {
     }),
     projectId: context.projectId,
     projectRoot: context.projectRoot,
-    entries: params.entries,
+    entries: normalizeBroadcastEntriesForProject(
+      params.entries,
+      context.projectRoot,
+      context.projectId
+    ),
   };
   await writeJson(getWorkflowBroadcastOutboxPath(context.projectRoot), store);
   return store;
@@ -1337,14 +1455,14 @@ export async function appendWorkflowRuntimeEvent(params: {
   details?: Record<string, unknown> | null;
 }): Promise<WorkflowRuntimeEvent> {
   const projectRoot = normalizeProjectRoot(params.projectRoot);
-  await migrateWorkflowRuntimeState({
+  const migration = await migrateWorkflowRuntimeState({
     projectRoot,
     projectId: params.projectId,
     reason: "append_runtime_event",
   });
   const event: WorkflowRuntimeEvent = {
     recordedAt: nowIso(),
-    projectId: readString(params.projectId) ?? path.basename(projectRoot),
+    projectId: migration.projectId,
     projectRoot,
     kind: params.kind,
     summary: readString(params.summary) ?? null,

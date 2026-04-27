@@ -24,6 +24,7 @@ import {
   readWorkflowRuntimeEvents,
   readWorkflowRuntimeQueueStore,
   readWorkflowRuntimeSessionsStore,
+  writeWorkflowRuntimeQueueStore,
 } from "../tools/workflow-runtime-state.ts";
 import {
   buildPapernexusWrapperCommand,
@@ -39,8 +40,10 @@ import {
   maybeTriggerQueuedPaperIngestionRequest,
   clearBackgroundWorkflowRunRegistryForTests,
   enqueueQueuedBackgroundWorkflowRun,
+  hasPendingBackgroundWorkflowQueueKey,
   listBackgroundWorkflowRuns,
   pruneBackgroundWorkflowRuns,
+  recordBackgroundWorkflowRun,
   retireBackgroundWorkflowRuns,
   startBackgroundWorkflowRun,
 } from "../tools/workflow-fast-paths.ts";
@@ -225,6 +228,53 @@ test.afterEach(async () => {
   await clearBackgroundWorkflowQueueForTests();
 });
 
+test("pending background queue check releases provider-capacity active runs", async (t) => {
+  const workspaceRoot = await makeTempWorkspace();
+  const projectRoot = path.join(workspaceRoot, "capacity-project");
+  const queueKey = "background-run:provider-capacity";
+
+  t.after(async () => {
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  });
+
+  await fs.mkdir(projectRoot, { recursive: true });
+  await recordBackgroundWorkflowRun({
+    ownerAgent: "researcher",
+    channelKey: "local:conversation:capacity",
+    requesterSessionKey: "agent:researcher:local:conversation:capacity",
+    backgroundSessionKey: "agent:researcher:local:conversation:capacity:subagent:run",
+    runId: "run-provider-capacity",
+    queueKey,
+    kind: "workflow_stage_dispatch",
+    family: "research",
+    projectId: "capacity-project",
+    projectRoot,
+  });
+
+  const pending = await hasPendingBackgroundWorkflowQueueKey({
+    queueKey,
+    projectId: "capacity-project",
+    projectRoot,
+    workflowRuntime: {
+      async waitForRun(params) {
+        assert.equal(params.runId, "run-provider-capacity");
+        return {
+          status: "error",
+          error: "429 usage allocated quota exceeded. please try again later.",
+        };
+      },
+    },
+  });
+
+  assert.deepEqual(pending, { queued: false, active: false });
+  const runs = await listBackgroundWorkflowRuns({
+    projectId: "capacity-project",
+    projectRoot,
+  });
+  assert.equal(runs.entries.length, 1);
+  assert.equal(runs.entries[0].status, "needs_repair");
+});
+
 test("background queue refuses ephemeral fallback without project scope", async (t) => {
   const previousQueuePath = process.env.OPENCLAW_RESEARCH_BACKGROUND_QUEUE_PATH;
 
@@ -257,6 +307,78 @@ test("background queue refuses ephemeral fallback without project scope", async 
       delete process.env.OPENCLAW_RESEARCH_BACKGROUND_QUEUE_PATH;
     }
   }
+});
+
+test("drainQueuedBackgroundWorkflowRuns replays running queue entries with no active registry session", async (t) => {
+  const workspaceRoot = await makeTempWorkspace();
+  const projectsRoot = path.join(workspaceRoot, "projects");
+  const projectRoot = path.join(projectsRoot, "orphan-queue-project");
+  const queueKey = "orphan-running-background-run";
+  const runCalls = [];
+
+  t.after(async () => {
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  });
+
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "orphan-queue-project",
+    current_stage: "graph_build",
+    owner_agent: "researcher",
+  });
+  await enqueueQueuedBackgroundWorkflowRun({
+    source: "start_background_run",
+    ownerAgent: "researcher",
+    requesterSessionKey: "agent:researcher:local:conversation:orphan",
+    messageChannel: "local",
+    preferredSessionKey:
+      "agent:researcher:local:conversation:orphan:subagent:workflow-research-pipeline:orphan",
+    family: "research",
+    kind: "research_pipeline",
+    projectId: "orphan-queue-project",
+    projectRoot,
+    projectsRoot,
+    queueKey,
+    summary: "Replay an orphaned running background queue entry.",
+    runPayload: {
+      message: "/research-pipeline orphan",
+      lane: "nested",
+      deliver: false,
+      idempotencyKey: null,
+      extraSystemPrompt: null,
+    },
+  });
+  const queueStore = await readWorkflowRuntimeQueueStore(projectRoot);
+  queueStore.entries = queueStore.entries.map((entry) =>
+    entry.queueKey === queueKey
+      ? {
+          ...entry,
+          status: "running",
+          lastAttemptedAt: new Date(Date.now() - 60_000).toISOString(),
+        }
+      : entry
+  );
+  await writeWorkflowRuntimeQueueStore({
+    projectRoot,
+    projectId: "orphan-queue-project",
+    entries: queueStore.entries,
+  });
+
+  const drained = await drainQueuedBackgroundWorkflowRuns({
+    workflowRuntime: {
+      async run(params) {
+        runCalls.push(params);
+        return { runId: "run-replayed-orphan" };
+      },
+      async waitForRun() {
+        return { status: "timeout" };
+      },
+    },
+    projectsRoot,
+  });
+
+  assert.equal(runCalls.length, 1);
+  assert.equal(drained.started.length, 1);
+  assert.equal(drained.started[0].runId, "run-replayed-orphan");
 });
 
 test("finished papernexus wrapper runs reconcile runtime queue and durable paper_ingestion state", async (t) => {

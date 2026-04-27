@@ -15,8 +15,6 @@ import {
   runBrainstormCycle,
   runWorkflowAutoIterator,
   setExperimentSearchState,
-  setOrchestrationState,
-  setResearchProgramState,
   setWritePackageState,
 } from "../tools/workflow-guard.ts";
 import { createPluginRegistrationContext } from "../tools/plugin-registration-shared.ts";
@@ -1423,6 +1421,16 @@ test("materialize_plan_state repairs malformed plan payloads into auto-iterator-
     materialized.validationErrors.some((signal) => signal.includes("plan_selection")),
     false
   );
+  assert.ok(materialized.generatedFiles.includes("orchestrator/PLAN.md"));
+  assert.ok(materialized.generatedFiles.includes("orchestrator/TODOS.md"));
+  assert.ok(materialized.generatedFiles.includes("orchestrator/PLAN_AUDIT.md"));
+  const planText = await fs.readFile(path.join(projectRoot, "orchestrator", "PLAN.md"), "utf8");
+  assert.match(planText, /Implementation Strategy/);
+  const auditText = await fs.readFile(
+    path.join(projectRoot, "orchestrator", "PLAN_AUDIT.md"),
+    "utf8"
+  );
+  assert.match(auditText, /Handoff Decision/);
 });
 
 test("write-package assembler derives secondary artifacts and marks the package ready", async (t) => {
@@ -1547,162 +1555,16 @@ test("auto iterator enforces research program semantics, experiment-search readi
     mode: "phase-3-plan-gate",
     queueMailbox: false,
   });
-  assert.equal(result.stageAfter, "plan");
-  assert.ok(
-    result.missingStageSignals.some((signal) => signal.includes("research_program"))
-  );
-
-  await setResearchProgramState({
-    projectRoot,
-    researchProgram: {
-      status: "approved",
-      goal: "Incomplete program",
-      tracks: [
-        {
-          track_id: "track-main",
-          status: "active",
-          hypothesis: "Demo hypothesis",
-          novelty_basis: "Demo novelty",
-          required_baselines: [],
-          required_ablations: [],
-          stop_rules: [],
-          rollback_triggers: [],
-          experiment_stage_matrix: ["baseline_implementation"],
-        },
-      ],
-    },
-  });
-
-  await setOrchestrationState({
-    projectRoot,
-    orchestrationState: {
-      status: "running",
-      current_owner: "orchestrator",
-      next_owner: "coder",
-      next_transition_candidate: "code",
-      retry_budget_remaining: 2,
-      last_contract_eval_result: "pass",
-    },
-  });
-
-  result = await runWorkflowAutoIterator({
-    projectRoot,
-    agentId: "orchestrator",
-    mode: "phase-3-plan-gate",
-    queueMailbox: false,
-  });
-  assert.equal(result.stageAfter, "plan");
-  assert.ok(
-    result.missingStageSignals.some((signal) => signal.includes("baseline"))
-  );
-  assert.ok(
-    result.missingStageSignals.some((signal) =>
-      signal.includes("research_program.plan_alternatives")
-    )
-  );
-  assert.ok(
-    result.missingStageSignals.some((signal) =>
-      signal.includes("research_program.plan_selection")
-    )
-  );
-
-  await setResearchProgramState({
-    projectRoot,
-    researchProgram: {
-      status: "approved",
-      goal: "Complete program",
-      tracks: [
-        {
-          track_id: "track-main",
-          priority: 1,
-          status: "active",
-          hypothesis: "Demo hypothesis",
-          novelty_basis: "Demo novelty",
-          main_metric: "acc",
-          success_threshold: "acc>=0.9",
-          required_baselines: ["baseline-a"],
-          required_ablations: ["ablation-a"],
-          required_controls: ["seed-control"],
-          experiment_stage_matrix: [
-            "baseline_implementation",
-            "baseline_tuning",
-            "creative_research",
-            "ablation_studies",
-          ],
-          budget: {
-            gpu_hours: 8,
-            max_runs: 4,
-            max_debug_iterations: 1,
-          },
-          stop_rules: ["stop after no improvement"],
-          rollback_triggers: ["baseline regression"],
-          write_scope: {
-            allowed_claim_ids: ["claim-1"],
-            allowed_figure_ids: ["fig-1"],
-          },
-        },
-      ],
-      task_graph: [
-        {
-          task_id: "plan-main",
-          stage: "plan",
-          track_id: "track-main",
-          owner: "researcher",
-          dependencies: [],
-          entry_criteria: ["track active"],
-          expected_outputs: ["plan complete"],
-          retry_budget: 1,
-          exit_criteria: ["plan ready"],
-        },
-      ],
-      plan_alternatives: [
-        {
-          option_id: "plan-main",
-          linked_track_id: "track-main",
-          source_direction_id: "dir-main",
-          title: "Graph-grounded main plan",
-          status: "selected",
-          summary: "Advance the graph-grounded routing track into code and experiment.",
-          graph_evidence_paths: [
-            "graph/LIMITATION_FRONTIER.md",
-            "researcher/ideation/GRAPH_IDEATION_PACKET.json",
-          ],
-          key_risks: ["Graph packet integration increases implementation scope."],
-        },
-        {
-          option_id: "plan-fallback",
-          linked_track_id: null,
-          source_direction_id: "dir-fallback",
-          title: "Prompt-only fallback",
-          status: "rejected",
-          summary: "Keep the workflow lightweight at the cost of weaker evidence binding.",
-          graph_evidence_paths: ["researcher/ideation/TOP3_DIRECTION_SUMMARY.md"],
-          key_risks: ["Weakens novelty defense and claim support precision."],
-        },
-      ],
-      plan_selection: {
-        selected_option_id: "plan-main",
-        selected_track_id: "track-main",
-        compared_option_ids: ["plan-main", "plan-fallback"],
-        rationale:
-          "The graph-grounded option best matches the selected ideation contract and closes the support-precision gap.",
-        decisive_graph_evidence_paths: [
-          "graph/LIMITATION_FRONTIER.md",
-          "researcher/ideation/GRAPH_IDEATION_PACKET.json",
-        ],
-        fallback_option_ids: ["plan-fallback"],
-        last_compared_at: "2026-03-26T10:10:00.000Z",
-      },
-    },
-  });
-
-  result = await runWorkflowAutoIterator({
-    projectRoot,
-    agentId: "orchestrator",
-    mode: "phase-3-plan-gate",
-    queueMailbox: false,
-  });
   assert.equal(result.stageAfter, "code");
+  assert.ok(
+    result.materializedArtifacts.some((artifact) => artifact.contract === "plan_state")
+  );
+  assert.equal(
+    result.missingStageSignals.some((signal) => signal.includes("research_program")),
+    false
+  );
+  const planText = await fs.readFile(path.join(projectRoot, "orchestrator", "PLAN.md"), "utf8");
+  assert.match(planText, /Implementation Strategy/);
 
   await seedExperimentProject(projectRoot);
   result = await runWorkflowAutoIterator({
@@ -1778,7 +1640,7 @@ test("auto iterator enforces research program semantics, experiment-search readi
   );
 });
 
-test("frontier and idea stages require a reconciled brainstorm cycle, and aggressive mode keeps the highest-scoring option", async (t) => {
+test("frontier auto-recovers brainstorm state, and aggressive mode keeps the highest-scoring option", async (t) => {
   const projectRoot = await makeProjectRoot();
 
   t.after(async () => {
@@ -1802,10 +1664,10 @@ test("frontier and idea stages require a reconciled brainstorm cycle, and aggres
     mode: "phase-3-brainstorm-frontier-gate",
     queueMailbox: false,
   });
-  assert.equal(result.stageAfter, "frontier_mapping");
-  assert.ok(
-    result.missingStageSignals.some((signal) => signal.includes("brainstorm_cycle"))
-  );
+  assert.equal(result.stageBefore, "frontier_mapping");
+  assert.equal(result.stageAfter, "idea");
+  let refreshedManifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  assert.match(refreshedManifest.brainstorm_cycle?.status ?? "", /ready|reconciled/);
 
   const brainstormCycle = await runBrainstormCycle({
     projectRoot,
@@ -1864,13 +1726,10 @@ test("frontier and idea stages require a reconciled brainstorm cycle, and aggres
   assert.equal(brainstormCycle.state.selectedOptionId, "opt-high");
   assert.equal(brainstormCycle.validationErrors.length, 0);
 
-  result = await runWorkflowAutoIterator({
-    projectRoot,
-    agentId: "researcher",
-    mode: "phase-3-brainstorm-frontier-gate",
-    queueMailbox: false,
-  });
-  assert.equal(result.stageAfter, "idea");
+  refreshedManifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  refreshedManifest.current_stage = "idea";
+  refreshedManifest.owner_agent = "researcher";
+  await writeJson(manifestPath, refreshedManifest);
 
   result = await runWorkflowAutoIterator({
     projectRoot,

@@ -227,4 +227,8 @@ test("classifyWorkflowLobsterFailureReason preserves concrete root causes", () =
     classifyWorkflowLobsterFailureReason("tool execution failed"),
     "lobster_tool_error"
   );
+  assert.equal(
+    classifyWorkflowLobsterFailureReason("OpenClaw tools invoke timed out after 30000ms"),
+    "lobster_gateway_timeout"
+  );
 });

@@ -375,6 +375,7 @@ import {
 } from "./workflow-experiment-git-review.js";
 import { materializePaperStoryStateImpl } from "./workflow-guard-materializers/paper-story-materializer";
 import { materializePlanStateImpl } from "./workflow-guard-materializers/plan-state-materializer";
+import { materializeCodeExperimentBundleImpl } from "./workflow-guard-materializers/code-experiment-bundle-materializer";
 import { materializeReviewPressurePacketImpl } from "./workflow-guard-materializers/review-pressure-materializer";
 import { materializeSurveyReviewStateImpl } from "./workflow-guard-materializers/survey-review-materializer";
 import { materializeInnovationSynthesis } from "./research-writing/innovation-synthesis";
@@ -2275,6 +2276,7 @@ export type AutoIteratorAction = {
   mailboxMessageId: string | null;
   cooldownRemainingSeconds: number | null;
   blocking: boolean;
+  dispatchDespiteMissingSignals?: boolean;
 };
 
 export type AutoIteratorResult = {
@@ -9019,6 +9021,7 @@ export async function materializePlanState(params: {
   onboardingStatus: string;
   onboardingGaps: string[];
   generatedDefaults: string[];
+  generatedFiles: string[];
 }> {
   const result = await materializePlanStateImpl(params);
   const manifest = await readManifestEnsured(params.projectRoot);
@@ -9042,7 +9045,22 @@ export async function materializePlanState(params: {
       projectId,
     }),
     generatedDefaults: result.generatedDefaults,
+    generatedFiles: result.generatedFiles,
   };
+}
+
+export async function materializeCodeExperimentBundle(params: {
+  projectRoot: string;
+  codeMaterialization?: Record<string, unknown>;
+  trigger?: string | null;
+  agentId?: string | null;
+}): Promise<{
+  generatedFiles: string[];
+  experimentId: string | null;
+  trackId: string | null;
+  bundleDir: string | null;
+}> {
+  return materializeCodeExperimentBundleImpl(params);
 }
 
 export async function setExperimentReviewState(params: {

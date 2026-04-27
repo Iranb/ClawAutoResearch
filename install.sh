@@ -1,7 +1,7 @@
 #!/bin/bash
 # ClawAutoResearch Plugin Installer
 # Usage:
-#   bash install.sh [--dry-run] [--preserve-role-files] [--with-agent-create] [--skip-build] [--skip-extra-agents] [--yes]
+#   bash install.sh [--dry-run] [--preserve-role-files] [--with-agent-create] [--skip-build] [--skip-git-pull] [--skip-extra-agents] [--yes]
 #
 # 功能：
 #   1. 可选地添加或检查研究工作流所需的 agents；默认会把仓库中新增加的可选 agents 纳入同步范围
@@ -25,6 +25,7 @@ FORCE_ROLE_FILES=true
 SKIP_AGENT_CREATE=true
 ASSUME_YES=false
 SKIP_BUILD=false
+SKIP_GIT_PULL=false
 SKIP_EXTRA_AGENTS=false
 INSTALL_MODE="full"
 INSTALL_MODE_LABEL="FULL INSTALL"
@@ -64,7 +65,7 @@ trap cleanup_install_script_cache EXIT
 
 usage() {
   cat <<'EOF'
-Usage: bash install.sh [--dry-run] [--preserve-role-files] [--with-agent-create] [--skip-build] [--skip-extra-agents] [--yes]
+Usage: bash install.sh [--dry-run] [--preserve-role-files] [--with-agent-create] [--skip-build] [--skip-git-pull] [--skip-extra-agents] [--yes]
 
 Options:
   --dry-run           只预览，不实际写入
@@ -73,6 +74,7 @@ Options:
   --with-agent-create 显式执行 `openclaw agents add` / `set-identity`
   --skip-agent-create 兼容旧参数；当前默认本来就跳过 agent 创建
   --skip-build        跳过 `npm run build`
+  --skip-git-pull     跳过安装前的 `git pull --ff-only`，直接同步当前工作区
   --skip-extra-agents 只处理核心 7 个 agents，不自动创建/同步仓库里新增的可选 agents
   --yes               非交互模式下默认回答 yes，并采用完整安装流程
   -h, --help          显示帮助
@@ -105,6 +107,9 @@ for arg in "$@"; do
       ;;
     --skip-build)
       SKIP_BUILD=true
+      ;;
+    --skip-git-pull)
+      SKIP_GIT_PULL=true
       ;;
     --skip-extra-agents)
       SKIP_EXTRA_AGENTS=true
@@ -1373,7 +1378,9 @@ if is_git_repo; then
   if ! command -v git >/dev/null 2>&1; then
     die "当前插件目录是 Git 仓库，但未找到 git；无法同步最新代码。请先安装 git。"
   fi
-  if git_has_upstream; then
+  if $SKIP_GIT_PULL; then
+    echo "  -> 已选择跳过 git pull；将直接同步当前工作区"
+  elif git_has_upstream; then
     echo "  -> 将通过 git pull --ff-only 同步当前分支最新代码"
   else
     echo "  -> 当前分支未设置 upstream；将跳过 git pull，继续本地同步"
@@ -1407,7 +1414,9 @@ echo "  -> 配置目录就绪"
 echo ""
 
 echo "[1/8] 同步最新 Git 代码..."
-if is_git_repo && git_has_upstream; then
+if is_git_repo && $SKIP_GIT_PULL; then
+  echo "  -> SKIP Git 同步（--skip-git-pull）"
+elif is_git_repo && git_has_upstream; then
   if $DRY_RUN; then
     echo "  [dry-run] (cd $PLUGIN_DIR && git pull --ff-only)"
   else
@@ -1717,7 +1726,9 @@ echo "║   Installation $([ "$DRY_RUN" = true ] && echo 'Preview Complete      
 echo "╚══════════════════════════════════════════════════════╝"
 echo ""
 if is_git_repo; then
-  if ! git_has_upstream; then
+  if $SKIP_GIT_PULL; then
+    echo "  1. Git: 已通过 --skip-git-pull 跳过，使用当前工作区"
+  elif ! git_has_upstream; then
     echo "  1. Git: 当前分支未设置 upstream，已跳过 git pull"
   elif $DRY_RUN; then
     echo "  1. Git: 将执行 git pull --ff-only 同步当前分支最新代码"

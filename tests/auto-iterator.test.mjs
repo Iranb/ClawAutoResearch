@@ -28,13 +28,19 @@ import { defaultAutoGateConfig } from "../tools/workflow-auto-gate.ts";
 import {
   aggregateCodeReviewRound,
   createCodeReviewRound,
+  readCodeReviewStore,
   saveCodeReviewStore,
 } from "../tools/workflow-code-review.ts";
 import {
   createAutoModeDiscussionRound,
   saveAutoModeDiscussionStore,
 } from "../tools/workflow-auto-discussion.ts";
-import { claimAndActivateWorkflowHandoffForAgent } from "../tools/workflow-handoff/handoff-activation.ts";
+import {
+  claimAndActivateWorkflowHandoffForAgent,
+  syncPreparedWorkflowHandoffToManifest,
+} from "../tools/workflow-handoff/handoff-activation.ts";
+import { createStageOwnerHandoffIntent } from "../tools/workflow-handoff/handoff-router.ts";
+import { readWorkflowHandoffIntentStore } from "../tools/workflow-handoff/handoff-store.ts";
 
 async function makeTempProject() {
   const projectRoot = await fs.mkdtemp(
@@ -4308,11 +4314,16 @@ test("auto iterator advances graph_build to frontier_mapping when graph is ready
   assert.equal(result.stageBefore, "graph_build");
   assert.equal(result.stageAfter, "frontier_mapping");
   assert.equal(result.graphPresenceCheck?.status, "ready");
+  assert.equal(result.recommendedActions[0]?.kind, "drive_stage");
+  assert.equal(
+    result.recommendedActions[0]?.dispatchDespiteMissingSignals,
+    true
+  );
   assert.equal(manifest.current_stage, "frontier_mapping");
   assert.equal(manifest.current_micro_stage, "frontier_mapping_requested");
 });
 
-test("auto iterator surfaces the IDEA-CATALYST micro-stage while idea remains in progress", async (t) => {
+test("auto iterator repairs a missing IDEA_REPORT and advances when IDEA-CATALYST is ready", async (t) => {
   const projectRoot = await makeTempProject();
   t.after(async () => {
     await fs.rm(projectRoot, { recursive: true, force: true });
@@ -4339,8 +4350,14 @@ test("auto iterator surfaces the IDEA-CATALYST micro-stage while idea remains in
 
   const updatedManifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
   assert.equal(result.stageBefore, "idea");
-  assert.equal(result.stageAfter, "idea");
-  assert.equal(updatedManifest.current_micro_stage, "judging");
+  assert.equal(result.stageAfter, "plan");
+  assert.equal(updatedManifest.current_stage, "idea");
+  assert.equal(updatedManifest.orchestration_state?.next_transition_candidate, "plan");
+  const ideaReport = await fs.readFile(
+    path.join(projectRoot, "researcher", "IDEA_REPORT.md"),
+    "utf8"
+  );
+  assert.match(ideaReport, /Selected Direction|Core Contribution/i);
 });
 
 test("auto iterator queues an IDEA-CATALYST requisition and regresses idea back to graph_build uploading", async (t) => {
@@ -5332,13 +5349,70 @@ test("auto iterator blocks on the mandatory submit human gate once submit artifa
     mode: "test",
     queueMailbox: false,
   });
-
   assert.equal(result.stageBefore, "submit");
   assert.equal(result.stageAfter, "submit");
   assert.equal(result.gateBlocking, true);
   assert.match(result.gateReason ?? "", /GATE-5/);
   assert.equal(result.ownerAfter, "reviewer");
   assert.equal(result.recommendedActions[0]?.kind, "wait_human");
+});
+
+test("auto iterator does not route stale submit revision work around the mandatory human gate", async (t) => {
+  const projectRoot = await makeTempProject();
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await seedProjectReadyForSubmit(projectRoot);
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.revision_control_state = {
+    status: "active",
+    current_owner: "academic_writer",
+    pending_reason: "stale review hook requested a bounded manuscript revision",
+    sources: [
+      {
+        source_id: "stale-submit-review-source",
+        status: "active",
+        severity: "medium",
+      },
+    ],
+  };
+  await writeJson(manifestPath, manifest);
+  const staleHandoff = await createStageOwnerHandoffIntent({
+    projectRoot,
+    projectId: "demo-project",
+    workflowLine: "experiment",
+    stageBefore: "submit",
+    stageAfter: "write",
+    ownerBefore: "reviewer",
+    ownerAfter: "academic_writer",
+    executionId: "stale-submit-exec",
+    nextAction: "Stale submit revision handoff.",
+  });
+  await syncPreparedWorkflowHandoffToManifest({
+    projectRoot,
+    intent: staleHandoff.intent,
+  });
+
+  const result = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+  });
+  assert.equal(result.stageBefore, "submit");
+  assert.equal(result.stageAfter, "submit");
+  assert.equal(result.gateBlocking, true);
+  assert.equal(result.ownerAfter, "reviewer");
+
+  const savedManifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  assert.equal(savedManifest.current_stage, "submit");
+  assert.equal(savedManifest.owner_agent, "reviewer");
+  assert.equal(savedManifest.orchestration_state.pending_handoff_id, null);
+
+  const handoffs = await readWorkflowHandoffIntentStore(projectRoot);
+  assert.equal(handoffs.intents.length, 1);
+  assert.equal(handoffs.intents[0].status, "superseded");
 });
 
 test("auto iterator advances submit to done once GATE-5 is explicitly approved", async (t) => {
@@ -5362,7 +5436,6 @@ test("auto iterator advances submit to done once GATE-5 is explicitly approved",
     mode: "test",
     queueMailbox: false,
   });
-
   assert.equal(result.stageBefore, "submit");
   assert.equal(result.stageAfter, "done");
   assert.equal(result.gateBlocking, false);
@@ -5743,7 +5816,8 @@ test("auto iterator keeps submit blocked when external Stanford review has not r
   assert.ok(
     result.missingStageSignals.some((signal) =>
       signal.includes("external_review_state")
-    )
+    ),
+    JSON.stringify(result.missingStageSignals)
   );
 });
 
@@ -6279,6 +6353,49 @@ test("auto iterator accepts structured coder experiment bundles with index file"
   assert.equal(result.stageAfter, "experiment");
 });
 
+test("auto iterator materializes a local coder experiment bundle when code stage has no Discord handoff output", async (t) => {
+  const projectRoot = await makeTempProject();
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  const { trackId } = await seedProjectReadyForCode(projectRoot);
+
+  const result = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+  });
+
+  const bundleDir = path.join(
+    projectRoot,
+    "coder",
+    "experiments",
+    trackId,
+    "exp-1__local_consistency_debiasing_probe"
+  );
+  const manifest = JSON.parse(
+    await fs.readFile(path.join(bundleDir, "EXPERIMENT_MANIFEST.json"), "utf8")
+  );
+
+  assert.equal(result.stageBefore, "code");
+  assert.equal(result.stageAfter, "experiment");
+  assert.equal(manifest.track_id, trackId);
+  assert.equal(manifest.hypothesis, "Graph grounding improves support precision.");
+  assert.equal(
+    manifest.novelty_basis,
+    "It couples frontier packets with section drafting."
+  );
+  assert.ok(
+    result.materializedArtifacts.some(
+      (artifact) => artifact.contract === "code_experiment_bundle"
+    )
+  );
+  await fs.access(path.join(projectRoot, "coder", "EXPERIMENT_INDEX.md"));
+  await fs.access(path.join(bundleDir, "train.py"));
+  await fs.access(path.join(bundleDir, "README.md"));
+});
+
 test("auto iterator keeps code stage blocked when experiment bundle is not aligned to the active innovation track", async (t) => {
   const projectRoot = await makeTempProject();
   t.after(async () => {
@@ -6520,6 +6637,77 @@ test("auto iterator keeps code blocked in aggressive mode while code innovation 
   assert.equal(result.stageAfter, "code");
   assert.equal(result.gateBlocking, true);
   assert.match(result.gateReason ?? "", /code innovation review is pending/i);
+});
+
+test("auto iterator uses local static code review fallback when configured for no-runtime E2E", async (t) => {
+  const projectRoot = await makeTempProject();
+  const previousFallback = process.env.OPENCLAW_CODE_REVIEW_LOCAL_FALLBACK_AFTER_MS;
+  process.env.OPENCLAW_CODE_REVIEW_LOCAL_FALLBACK_AFTER_MS = "0";
+  t.after(async () => {
+    if (previousFallback == null) {
+      delete process.env.OPENCLAW_CODE_REVIEW_LOCAL_FALLBACK_AFTER_MS;
+    } else {
+      process.env.OPENCLAW_CODE_REVIEW_LOCAL_FALLBACK_AFTER_MS = previousFallback;
+    }
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  const { trackId } = await seedProjectReadyForCode(projectRoot);
+  await writeText(path.join(projectRoot, "coder", "EXPERIMENT_INDEX.md"));
+  await writeText(
+    path.join(
+      projectRoot,
+      "coder",
+      "experiments",
+      trackId,
+      "exp-1__baseline",
+      "train.py"
+    ),
+    "print('ok')\n"
+  );
+  await writeText(
+    path.join(
+      projectRoot,
+      "coder",
+      "experiments",
+      trackId,
+      "exp-1__baseline",
+      "README.md"
+    )
+  );
+  await writeJson(
+    path.join(
+      projectRoot,
+      "coder",
+      "experiments",
+      trackId,
+      "exp-1__baseline",
+      "EXPERIMENT_MANIFEST.json"
+    ),
+    buildAlignedExperimentManifest(trackId)
+  );
+
+  const autoGate = {
+    ...defaultAutoGateConfig(),
+    enabled: true,
+  };
+  const result = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+    policy: {
+      autoMode: "aggressive",
+      autoGate,
+    },
+  });
+
+  assert.equal(result.stageBefore, "code");
+  assert.equal(result.stageAfter, "experiment");
+  assert.equal(result.gateBlocking, false);
+  const store = await readCodeReviewStore(projectRoot);
+  assert.equal(store.currentRound?.status, "approved");
+  assert.equal(store.currentRound?.aggregate?.approved, true);
+  assert.equal(store.currentRound?.aggregate?.reviewCount, 3);
 });
 
 test("auto iterator advances code to experiment when aggressive code innovation review is approved", async (t) => {

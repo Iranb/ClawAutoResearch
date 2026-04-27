@@ -75,6 +75,7 @@ import {
   isWorkflowRuntimeTrackingMissError,
   reconcileBackgroundRunTerminalState,
 } from "./workflow-background-run-reconcile.js";
+import { isProviderCapacityFailure } from "./provider-capacity.js";
 import { writePapernexusProgressFromManifest } from "./papernexus-progress";
 import {
   readJsonIfExists,
@@ -407,6 +408,7 @@ const MAX_RESEARCHER_BACKGROUND_SUBAGENTS_PER_PROJECT_SCOPE = 2;
 const BACKGROUND_RUN_STALE_MS = 60 * 60 * 1000;
 const BACKGROUND_QUEUE_STALE_MS = 24 * 60 * 60 * 1000;
 const BACKGROUND_QUEUE_RETRY_BACKOFF_MS = 15 * 1000;
+const BACKGROUND_QUEUE_ORPHAN_GRACE_MS = 15 * 1000;
 
 type BackgroundRuntimeScope = {
   projectId?: string | null;
@@ -598,6 +600,37 @@ function isBackgroundQueueEntryPending(entry: BackgroundWorkflowQueueEntry): boo
 
 function isReusableBackgroundQueueEntry(entry: BackgroundWorkflowQueueEntry): boolean {
   return ["queued", "launching", "running", "degraded", "needs_repair"].includes(entry.status);
+}
+
+function isRunningBackgroundQueueEntry(entry: BackgroundWorkflowQueueEntry): boolean {
+  return entry.status === "running" || entry.status === "launching";
+}
+
+function isBackgroundQueueOrphanCheckDue(
+  entry: BackgroundWorkflowQueueEntry,
+  nowMs: number
+): boolean {
+  const referenceMs = Date.parse(entry.lastAttemptedAt ?? entry.queuedAt);
+  return (
+    Number.isFinite(referenceMs) &&
+    nowMs - referenceMs >= BACKGROUND_QUEUE_ORPHAN_GRACE_MS
+  );
+}
+
+function hasActiveRegistryEntryForQueueEntry(params: {
+  queueEntry: BackgroundWorkflowQueueEntry;
+  activeEntries: BackgroundRunRegistryEntry[];
+}): boolean {
+  return params.activeEntries.some(
+    (entry) =>
+      entry.status === "active" &&
+      entry.queueKey === params.queueEntry.queueKey &&
+      backgroundRunRegistryEntryMatchesProject(
+        entry,
+        params.queueEntry.projectId,
+        params.queueEntry.projectRoot
+      )
+  );
 }
 
 function getBackgroundRunRegistryPath(): string {
@@ -1413,11 +1446,113 @@ async function touchBackgroundWorkflowQueueEntry(params: {
   });
 }
 
+async function writeBackgroundWorkflowQueueForResolvedScope(params: {
+  entries: BackgroundWorkflowQueueEntry[];
+  scope?: BackgroundRuntimeScope;
+}): Promise<void> {
+  if (shouldUseProjectRuntimeState(params.scope)) {
+    const projectRoots = new Set<string>(
+      (await listProjectScopedRuntimeProjectRoots(params.scope)).map((entry) =>
+        path.normalize(entry)
+      )
+    );
+    for (const entry of params.entries) {
+      const projectRoot = readString(entry.projectRoot);
+      if (projectRoot) {
+        projectRoots.add(path.normalize(projectRoot));
+      }
+    }
+    for (const projectRoot of projectRoots) {
+      const projectEntries = params.entries.filter(
+        (entry) =>
+          readString(entry.projectRoot) &&
+          path.normalize(String(entry.projectRoot)) === projectRoot
+      );
+      await writeBackgroundWorkflowQueue(projectEntries, {
+        ...params.scope,
+        projectRoot,
+        projectId:
+          projectEntries.find((entry) => readString(entry.projectId))?.projectId ??
+          resolveBackgroundRuntimeScope(params.scope).projectId ??
+          null,
+      });
+    }
+    return;
+  }
+  await writeBackgroundWorkflowQueue(params.entries, params.scope);
+}
+
+async function reconcileBackgroundWorkflowQueueWithRegistry(params: {
+  projectId?: string | null;
+  projectRoot?: string | null;
+  projectsRoot?: string | null;
+  workflowRuntime?: WorkflowRuntimeMonitorApi;
+}): Promise<BackgroundWorkflowQueueEntry[]> {
+  const scope = {
+    projectId: params.projectId,
+    projectRoot: params.projectRoot,
+    projectsRoot: params.projectsRoot,
+  };
+  const queueEntries = await pruneBackgroundWorkflowQueue(scope);
+  if (!params.workflowRuntime) {
+    return queueEntries;
+  }
+  const activeEntries = await pruneBackgroundRunRegistry({
+    projectId: params.projectId,
+    projectRoot: params.projectRoot,
+    projectsRoot: params.projectsRoot,
+    workflowRuntime: params.workflowRuntime,
+  });
+  const nowMs = Date.now();
+  const repairedEntries: BackgroundWorkflowQueueEntry[] = [];
+  let changed = false;
+  for (const entry of queueEntries) {
+    if (
+      isRunningBackgroundQueueEntry(entry) &&
+      isBackgroundQueueOrphanCheckDue(entry, nowMs) &&
+      !hasActiveRegistryEntryForQueueEntry({ queueEntry: entry, activeEntries })
+    ) {
+      changed = true;
+      const repaired = {
+        ...entry,
+        status: "needs_repair" as const,
+        lastError:
+          entry.lastError ??
+          "Background workflow queue entry was marked running but has no active runtime session; it was returned to the replay queue.",
+      };
+      repairedEntries.push(repaired);
+      await appendBackgroundWorkflowRuntimeEvent({
+        projectRoot: repaired.projectRoot,
+        projectId: repaired.projectId,
+        kind: "background_queue_needs_repair",
+        summary:
+          "Background workflow queue entry was marked running but has no active runtime session; it was returned to the replay queue.",
+        details: {
+          queueKey: repaired.queueKey,
+          ownerAgent: repaired.ownerAgent,
+          family: repaired.family,
+          kind: repaired.kind,
+        },
+      });
+      continue;
+    }
+    repairedEntries.push(entry);
+  }
+  if (changed) {
+    await writeBackgroundWorkflowQueueForResolvedScope({
+      entries: repairedEntries,
+      scope,
+    });
+  }
+  return repairedEntries;
+}
+
 export async function hasPendingBackgroundWorkflowQueueKey(params: {
   queueKey?: string | null;
   projectId?: string | null;
   projectRoot?: string | null;
   projectsRoot?: string | null;
+  workflowRuntime?: WorkflowRuntimeMonitorApi;
 }): Promise<{
   queued: boolean;
   active: boolean;
@@ -1426,10 +1561,11 @@ export async function hasPendingBackgroundWorkflowQueueKey(params: {
   if (!queueKey) {
     return { queued: false, active: false };
   }
-  const queueEntries = await pruneBackgroundWorkflowQueue({
+  const queueEntries = await reconcileBackgroundWorkflowQueueWithRegistry({
     projectId: params.projectId,
     projectRoot: params.projectRoot,
     projectsRoot: params.projectsRoot,
+    workflowRuntime: params.workflowRuntime,
   });
   const queued = queueEntries.some(
     (entry) =>
@@ -1460,6 +1596,7 @@ export async function hasPendingBackgroundWorkflowQueueKey(params: {
     projectId: params.projectId,
     projectRoot: params.projectRoot,
     projectsRoot: params.projectsRoot,
+    workflowRuntime: params.workflowRuntime,
   });
   const active = activeEntries.some(
     (entry) =>
@@ -1534,15 +1671,21 @@ async function pruneBackgroundRunRegistry(params: {
           continue;
         }
         if (waited.status === "ok" || waited.status === "error") {
+          const terminalStatus =
+            waited.status === "ok"
+              ? "completed"
+              : isProviderCapacityFailure(waited.error)
+                ? "needs_repair"
+                : "failed";
           await reconcileBackgroundRunTerminalState({
             entry,
-            terminalStatus: waited.status === "ok" ? "completed" : "failed",
+            terminalStatus,
             finishedAt: checkedAt,
             error: waited.status === "error" ? waited.error ?? "Background workflow run failed." : null,
           });
           nextEntry = {
             ...nextEntry,
-            status: "idle",
+            status: terminalStatus === "needs_repair" ? "needs_repair" : "idle",
             lastFinishedAt: checkedAt,
           };
         }
@@ -1890,11 +2033,12 @@ export async function drainQueuedBackgroundWorkflowRuns(params: {
     };
   }
 
-  const queue = await pruneBackgroundWorkflowQueue({
+  const queue = await reconcileBackgroundWorkflowQueueWithRegistry({
     projectsRoot:
       readString(params.projectsRoot) ??
       readString(params.workflowPolicy?.projectsRoot) ??
       null,
+    workflowRuntime,
   });
   const started: BackgroundRunStartResult[] = [];
   const processedEntries: BackgroundWorkflowQueueEntry[] = [];
@@ -3234,7 +3378,7 @@ export async function maybeTriggerQueuedPaperIngestionRequest(params: {
     report: validationReport,
     nowIso: now,
   });
-  if (validatedRequest.status === "needs_repair") {
+  if (validationReport.status === "invalid") {
     const blockedRequest = markQueuedPaperIngestionLaunchFailure({
       request: validatedRequest,
       nowIso: now,
@@ -3714,6 +3858,7 @@ export async function startBackgroundWorkflowRun(params: {
     projectId: resolvedProjectId,
     projectRoot: resolvedProjectRoot,
     projectsRoot: params.workflowPolicy.projectsRoot,
+    workflowRuntime: params.workflowRuntime,
   });
   if (pendingQueueState.active) {
     return {

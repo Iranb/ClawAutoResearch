@@ -734,6 +734,7 @@ async function probeActiveRuntimeRun(params: {
     await inspectRecentSessionProviderCapacity({
       workflowRuntime: params.workflowRuntime,
       sessionKey: params.session.sessionKey,
+      limit: 120,
     });
   if (transcriptCapacityFailure) {
     return {
@@ -825,6 +826,26 @@ async function repairInvalidActiveRuntimeSessions(params: {
     };
   };
 
+  const buildRepairWithTranscriptEvidence = async (input: {
+    sessionKey: string;
+    reason: string;
+    evidence?: unknown;
+  }): Promise<InvalidRuntimeSessionRepair> => {
+    const transcriptCapacityFailure =
+      await inspectRecentSessionProviderCapacity({
+        workflowRuntime: params.workflowRuntime,
+        sessionKey: input.sessionKey,
+        limit: 120,
+      });
+    if (!transcriptCapacityFailure) {
+      return buildRepair(input.reason, input.evidence ?? input.reason);
+    }
+    return buildRepair(
+      `${input.reason} Recent transcript provider capacity failure: ${transcriptCapacityFailure}`,
+      transcriptCapacityFailure
+    );
+  };
+
   for (const session of sessionsStore.entries) {
     if (session.status !== "active") {
       continue;
@@ -851,6 +872,7 @@ async function repairInvalidActiveRuntimeSessions(params: {
           await inspectRecentSessionProviderCapacity({
             workflowRuntime: params.workflowRuntime,
             sessionKey: session.sessionKey,
+            limit: 120,
           });
         if (transcriptCapacityFailure) {
           invalidBySessionKey.set(
@@ -871,7 +893,11 @@ async function repairInvalidActiveRuntimeSessions(params: {
       if (reason) {
         invalidBySessionKey.set(
           session.sessionKey,
-          buildRepair(reason, inspection.lastError ?? reason)
+          await buildRepairWithTranscriptEvidence({
+            sessionKey: session.sessionKey,
+            reason,
+            evidence: inspection.lastError ?? reason,
+          })
         );
         continue;
       }

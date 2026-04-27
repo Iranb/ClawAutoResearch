@@ -438,7 +438,9 @@ PaperNexus 相关检查点：
 - topic-only 启动时，`graph/GRAPH_BUILD_SOURCE_CATCHUP.json.bootstrap_source_index_entry_count` 大于 0 说明 source index 是由 no-Discord bootstrap 自动补齐的。
 - `submit` 完成后请求不应直接变成 `completed`；如果远端任务还没完成，应看到下一轮 `wait --timeout 60 --interval 5`。
 - `PAPERNEXUS_PROGRESS.json`、`active_batches`、`batch_items` 和 `completed_papers` 应该随着每次 wait/status 更新。
-- `graph_build -> frontier_mapping` 的最终依据是 `graph_presence_status=ready`，不是 batch wrapper 进程退出。
+- `graph_build -> frontier_mapping` 的优先依据是 `graph_presence_status=ready`，不是 batch wrapper 进程退出。
+- 如果 `graph_presence_status=missing_papers`，检查是否存在终止失败/修复证据以及图覆盖率；满足降级门槛时 workflow 可以继续推进，未入图论文会留作后续修复债务。
+- 普通 `not-submitted` 不是终止失败；它应该回到 submit 路径，而不是让 graph build 冷却或停滞。
 
 如果要直接调用底层脚本，也可以运行：
 

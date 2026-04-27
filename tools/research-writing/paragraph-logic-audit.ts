@@ -131,6 +131,14 @@ const TRANSITION_OPENING_RE =
 const TRANSITION_CLOSING_RE =
   /\b(this motivates|this leads to|this sets up|this raises|this suggests|this frames|the next section|in the next paragraph|to compare these|to understand why|to see whether|to examine this)\b/i;
 
+function normalizeSectionId(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "") || "section";
+}
+
 function stripLatexComments(rawText: string): string {
   return rawText
     .split(/\r?\n/)
@@ -171,6 +179,30 @@ function extractSentences(text: string): string[] {
   return parts.length > 0 ? parts : [normalized];
 }
 
+function extractMainTexSections(rawText: string): Map<string, string> {
+  const sections = new Map<string, string>();
+  const source = stripLatexComments(rawText);
+  const abstractMatch = source.match(/\\begin\{abstract\}([\s\S]*?)\\end\{abstract\}/i);
+  if (abstractMatch?.[1]?.trim()) {
+    sections.set("abstract", abstractMatch[1].trim());
+  }
+  const matches = [...source.matchAll(/\\section\*?\{([^}]+)\}/g)];
+  for (let index = 0; index < matches.length; index += 1) {
+    const match = matches[index];
+    const title = match[1]?.trim();
+    if (!title) {
+      continue;
+    }
+    const start = (match.index ?? 0) + match[0].length;
+    const end = matches[index + 1]?.index ?? source.length;
+    const body = source.slice(start, end).trim();
+    if (body) {
+      sections.set(normalizeSectionId(title), body);
+    }
+  }
+  return sections;
+}
+
 function extractAnchorTokens(text: string): string[] {
   const normalized = latexToPlainText(text)
     .toLowerCase()
@@ -186,6 +218,13 @@ function extractAnchorTokens(text: string): string[] {
     .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
     .slice(0, 8)
     .map(([token]) => token);
+}
+
+function stripNonParagraphLatexEnvironments(rawText: string): string {
+  return rawText.replace(
+    /\\begin\{(table\*?|figure\*?|tabular\*?|tabularx|longtable)\}[\s\S]*?\\end\{\1\}/gi,
+    "\n\n"
+  );
 }
 
 function guessParagraphRole(params: {
@@ -234,7 +273,7 @@ function guessParagraphRole(params: {
 }
 
 function extractParagraphs(rawText: string): string[] {
-  const stripped = stripLatexComments(rawText);
+  const stripped = stripNonParagraphLatexEnvironments(stripLatexComments(rawText));
   return stripped
     .split(/\n\s*\n/)
     .map((chunk) =>
@@ -284,11 +323,25 @@ async function collectSectionAudits(params: {
   const sections: SectionAudit[] = [];
   const blockingIssues: PairIssue[] = [];
   const advisoryIssues: PairIssue[] = [];
+  const mainTexSections = extractMainTexSections(
+    (await readTextIfExists(
+      resolveProjectArtifactPath(params.projectRoot, "academic_writer/paper/main.tex")
+    )) ?? ""
+  );
 
   for (const sectionId of params.sectionOrder) {
     const relativePath = `academic_writer/paper/sections/${sectionId}.tex`;
     const resolved = resolveProjectArtifactPath(params.projectRoot, relativePath);
-    const sectionText = await readTextIfExists(resolved);
+    let sectionText = await readTextIfExists(resolved);
+    let sourceRelativePath = relativePath;
+    const mainTexSection = mainTexSections.get(normalizeSectionId(sectionId));
+    if (
+      mainTexSection &&
+      (!sectionText || latexToPlainText(sectionText).length < latexToPlainText(mainTexSection).length)
+    ) {
+      sectionText = mainTexSection;
+      sourceRelativePath = "academic_writer/paper/main.tex";
+    }
     if (!sectionText) {
       continue;
     }
@@ -344,7 +397,7 @@ async function collectSectionAudits(params: {
 
     sections.push({
       sectionId,
-      relativePath,
+      relativePath: sourceRelativePath,
       paragraphCount: auditedParagraphs.length,
       openingSentence: auditedParagraphs[0]?.openingSentence ?? null,
       blockingIssueCount: sectionBlockingIssues.length,

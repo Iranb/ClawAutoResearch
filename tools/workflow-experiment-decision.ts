@@ -68,6 +68,16 @@ function readString(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
+function countSpecificTextTokens(values: string[]): number {
+  return values
+    .join(" ")
+    .toLowerCase()
+    .split(/[^a-z0-9]+/g)
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length >= 4)
+    .length;
+}
+
 function normalizeStageLike(value: unknown): string {
   return readString(value)?.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_") ?? "unknown";
 }
@@ -306,11 +316,14 @@ export function evaluateExperimentSearchDecision(params: {
         : null
     )
     .filter((entry): entry is Record<string, unknown> => Boolean(entry));
-  const candidateTexts = ledgerExperiments
+  const ledgerCandidateTexts = ledgerExperiments
     .filter((entry) => {
       const experimentId =
         readString(entry.experiment_id) ?? readString(entry.experimentId);
-      return preferredExperimentIds.length === 0 || (experimentId != null && preferredExperimentIds.includes(experimentId));
+      return (
+        preferredExperimentIds.length === 0 ||
+        (experimentId != null && preferredExperimentIds.includes(experimentId))
+      );
     })
     .flatMap((entry) => [
       readString(entry.name),
@@ -319,6 +332,12 @@ export function evaluateExperimentSearchDecision(params: {
       ...(Array.isArray(entry.notes) ? entry.notes.map((value) => String(value)) : []),
     ])
     .filter((entry): entry is string => Boolean(entry));
+  const candidateTexts = [
+    ...(countSpecificTextTokens(ledgerCandidateTexts) < 6
+      ? [search.oneChangeSignature]
+      : []),
+    ...ledgerCandidateTexts,
+  ].filter((entry): entry is string => Boolean(entry));
   const innovationDeviation = deriveInnovationDeviation({
     anchorPoints: innovationAnchorPoints,
     candidateTexts,

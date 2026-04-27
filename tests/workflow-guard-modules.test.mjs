@@ -7,6 +7,18 @@ import { materializeReviewPressurePacketImpl } from "../tools/workflow-guard-mat
 import { buildDynamicTasksImpl } from "../tools/workflow-guard-guidance/dynamic-tasks.ts";
 import { buildPapernexusGuidance } from "../tools/workflow-guard-guidance/papernexus-guidance.ts";
 import { buildWritingGuidance } from "../tools/workflow-guard-guidance/writing-guidance.ts";
+import { collectGraphBuildStageMissingSignals } from "../tools/workflow-guard-stages/foundation-stage-signals.ts";
+import {
+  derivePaperIngestionWorkflowDecision,
+  hasActiveWorkflowOwnedPaperUpload,
+  normalizePaperIngestionState,
+} from "../tools/workflow-guard-state/paper-ingestion.ts";
+import {
+  asRecord,
+  normalizeGraphPresenceStatus,
+  normalizeStage,
+  pickString,
+} from "../tools/workflow-guard-core/coercion.ts";
 import {
   getExperimentMemorySummaryImpl,
   recordCitationVerificationImpl,
@@ -29,6 +41,233 @@ test("workflow guard materializer and guidance modules expose dedicated entrypoi
   assert.equal(typeof getExperimentMemorySummaryImpl, "function");
   assert.equal(typeof upsertExperimentLedgerEntryImpl, "function");
   assert.equal(typeof runWorkflowAutoIteratorImpl, "function");
+});
+
+test("graph_build stage accepts partial graph coverage when missing papers are repair-only", async () => {
+  const manifest = {
+    project_id: "partial-graph-demo",
+    current_stage: "graph_build",
+    paper_ingestion: {
+      runtime_status: "blocked",
+      graph_presence_checked_at: "2026-04-26T00:00:00.000Z",
+      graph_presence_status: "missing_papers",
+      graph_presence_expected_papers: 2,
+      graph_presence_present_papers: 1,
+      graph_presence_missing_papers: [
+        { canonical_id: "arxiv:1803.02999", title: "On First-Order Meta-Learning Algorithms" },
+      ],
+      queued_requests: [
+        {
+          request_id: "req-partial",
+          status: "needs_repair",
+          wrapper: "pn_batch_import.py",
+          manifest_path: "researcher/paper-staging/queued-imports/req-partial/batch-import.json",
+          last_error: "backend rejected one source",
+        },
+      ],
+      batch_items: [
+        {
+          canonical_id: "arxiv:2410.11206",
+          status: "completed",
+          synced: true,
+          import_task_id: "task-fixmatch",
+        },
+        {
+          canonical_id: "arxiv:1803.02999",
+          status: "submit_failed",
+          error: "backend rejected one source",
+        },
+      ],
+    },
+  };
+
+  const missing = await collectGraphBuildStageMissingSignals(
+    {
+      projectRoot: "/tmp/partial-graph-demo",
+      manifest,
+      trackRegistry: null,
+      experimentLedger: null,
+    },
+    {
+      pathExists: async () => true,
+      isNonEmptyDirectory: async () => true,
+      fileHasMeaningfulJsonContent: async () => true,
+      manifestFieldExists: (source, pathSpec) => {
+        let cursor = source;
+        for (const segment of pathSpec) {
+          cursor = cursor && typeof cursor === "object" ? cursor[segment] : undefined;
+        }
+        return cursor !== undefined && cursor !== null;
+      },
+      getExperimentLedgerPath: () => "/tmp/partial-graph-demo/researcher/EXPERIMENT_LEDGER.json",
+      pickString,
+      normalizeResearchProgramState: () => ({}),
+      getResearchProgramOnboardingGaps: () => [],
+      asRecord,
+      normalizeGraphPresenceStatus,
+      normalizePaperIngestionState,
+      hasActiveWorkflowOwnedPaperUpload,
+      derivePaperIngestionWorkflowDecision,
+      summarizeGraphPresenceMissing: () => "arxiv:1803.02999",
+      getBrainstormCycleMissingSignals: async () => [],
+      normalizeStage,
+    }
+  );
+
+  assert.deepEqual(missing, []);
+});
+
+test("graph_build stage accepts local source fallback after terminal PaperNexus failure", async () => {
+  const manifest = {
+    project_id: "local-source-graph-fallback-demo",
+    current_stage: "graph_build",
+    paper_ingestion: {
+      runtime_status: "waiting_import",
+      graph_presence_checked_at: "2026-04-26T00:00:00.000Z",
+      graph_presence_status: "missing_papers",
+      graph_presence_expected_papers: 1,
+      graph_presence_present_papers: 0,
+      graph_presence_missing_papers: [
+        {
+          canonical_id: "arxiv:2410.11206",
+          title: "Towards Understanding Why FixMatch Generalizes Better Than Supervised Learning",
+          source_kind: "markdown",
+          source_provider: "arxiv2md-api",
+        },
+      ],
+      queued_requests: [
+        {
+          request_id: "req-dead-letter",
+          request_kind: "upload_manifest",
+          status: "queued",
+          wrapper: "pn_batch_import.py",
+          manifest_path: "researcher/paper-staging/queued-imports/req-dead-letter/batch-import.json",
+          last_error: "HTTP 502 for MCP tools/call:",
+          finished_at: "2026-04-26T00:01:00.000Z",
+          attempt_count: 3,
+          max_attempts: 3,
+          dead_letter_at: "2026-04-26T00:01:00.000Z",
+          dead_letter_reason: "HTTP 502 for MCP tools/call:",
+        },
+      ],
+      active_batches: [
+        {
+          manifest_path: "researcher/paper-staging/queued-imports/req-dead-letter/batch-import.json",
+          status: "running",
+          total: 1,
+          detail: "HTTP 502 for MCP tools/call:",
+        },
+      ],
+      batch_items: [],
+    },
+  };
+
+  const missing = await collectGraphBuildStageMissingSignals(
+    {
+      projectRoot: "/tmp/local-source-graph-fallback-demo",
+      manifest,
+      trackRegistry: null,
+      experimentLedger: null,
+    },
+    {
+      pathExists: async () => true,
+      isNonEmptyDirectory: async () => true,
+      fileHasMeaningfulJsonContent: async () => true,
+      manifestFieldExists: (source, pathSpec) => {
+        let cursor = source;
+        for (const segment of pathSpec) {
+          cursor = cursor && typeof cursor === "object" ? cursor[segment] : undefined;
+        }
+        return cursor !== undefined && cursor !== null;
+      },
+      getExperimentLedgerPath: () => "/tmp/local-source-graph-fallback-demo/researcher/EXPERIMENT_LEDGER.json",
+      pickString,
+      normalizeResearchProgramState: () => ({}),
+      getResearchProgramOnboardingGaps: () => [],
+      asRecord,
+      normalizeGraphPresenceStatus,
+      normalizePaperIngestionState,
+      hasActiveWorkflowOwnedPaperUpload,
+      derivePaperIngestionWorkflowDecision,
+      summarizeGraphPresenceMissing: () => "arxiv:2410.11206",
+      getBrainstormCycleMissingSignals: async () => [],
+      normalizeStage,
+    }
+  );
+
+  assert.deepEqual(missing, []);
+});
+
+test("graph_build prerequisite stays satisfied downstream after local source fallback", async () => {
+  const manifest = {
+    project_id: "downstream-local-source-fallback-demo",
+    current_stage: "frontier_mapping",
+    paper_ingestion: {
+      runtime_status: "waiting_graph",
+      repair_required: true,
+      graph_presence_checked_at: "2026-04-26T00:00:00.000Z",
+      graph_presence_status: "missing_corpus",
+      graph_presence_expected_papers: 1,
+      graph_presence_present_papers: 0,
+      graph_presence_missing_papers: [
+        {
+          canonical_id: "arxiv:2410.11206",
+          title: "Towards Understanding Why FixMatch Generalizes Better Than Supervised Learning",
+          source_kind: "markdown",
+          source_provider: "arxiv2md-api",
+        },
+      ],
+      queued_requests: [
+        {
+          request_id: "req-dormant",
+          request_kind: "upload_manifest",
+          status: "failed",
+          wrapper: "pn_batch_import.py",
+          manifest_path: "researcher/paper-staging/queued-imports/req-dormant/batch-import.json",
+          attempt_count: 3,
+          max_attempts: 3,
+          dead_letter_at: "2026-04-26T00:05:00.000Z",
+        },
+      ],
+      active_batches: [],
+      batch_items: [],
+    },
+  };
+
+  const missing = await collectGraphBuildStageMissingSignals(
+    {
+      projectRoot: "/tmp/downstream-local-source-fallback-demo",
+      manifest,
+      trackRegistry: null,
+      experimentLedger: null,
+    },
+    {
+      pathExists: async () => true,
+      isNonEmptyDirectory: async () => true,
+      fileHasMeaningfulJsonContent: async () => true,
+      manifestFieldExists: (source, pathSpec) => {
+        let cursor = source;
+        for (const segment of pathSpec) {
+          cursor = cursor && typeof cursor === "object" ? cursor[segment] : undefined;
+        }
+        return cursor !== undefined && cursor !== null;
+      },
+      getExperimentLedgerPath: () => "/tmp/downstream-local-source-fallback-demo/researcher/EXPERIMENT_LEDGER.json",
+      pickString,
+      normalizeResearchProgramState: () => ({}),
+      getResearchProgramOnboardingGaps: () => [],
+      asRecord,
+      normalizeGraphPresenceStatus,
+      normalizePaperIngestionState,
+      hasActiveWorkflowOwnedPaperUpload,
+      derivePaperIngestionWorkflowDecision,
+      summarizeGraphPresenceMissing: () => "arxiv:2410.11206",
+      getBrainstormCycleMissingSignals: async () => [],
+      normalizeStage,
+    }
+  );
+
+  assert.deepEqual(missing, []);
 });
 
 test("buildWritingGuidance surfaces story-first and adversarial review reminders for writer/reviewer roles", () => {

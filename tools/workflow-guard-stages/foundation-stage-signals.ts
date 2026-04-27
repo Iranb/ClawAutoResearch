@@ -2,6 +2,7 @@ import * as path from "node:path";
 import type { ManifestLike, StageSignalsContext } from "./types";
 import { readTextIfExists } from "../workflow-guard-core/fs";
 import { auditFrontierReportText } from "../workflow-intermediate-artifact-audit";
+import { deriveGraphBuildPartialReadiness } from "../workflow-guard-state/paper-ingestion";
 
 export interface FoundationStageDeps {
   pathExists: (targetPath: string) => Promise<boolean>;
@@ -102,8 +103,14 @@ export async function collectGraphBuildStageMissingSignals(
     state: paperIngestionState,
     graphPresenceStatus,
   });
+  const partialGraphReadiness = deriveGraphBuildPartialReadiness({
+    paperIngestion,
+    state: paperIngestionState,
+    graphPresenceStatus,
+  });
+  const allowPartialGraphReadiness = partialGraphReadiness.ready;
   if (
-    ingestionDecision?.blocking ||
+    (ingestionDecision?.blocking && !allowPartialGraphReadiness) ||
     (!ingestionDecision && deps.hasActiveWorkflowOwnedPaperUpload(paperIngestionState))
   ) {
     missing.push(
@@ -111,7 +118,7 @@ export async function collectGraphBuildStageMissingSignals(
         "workflow-owned PaperNexus ingestion is still active; wait for upload / graph sync completion before frontier mapping"
     );
   }
-  if (graphPresenceStatus !== "ready") {
+  if (graphPresenceStatus !== "ready" && !allowPartialGraphReadiness) {
     missing.push(
       `PROJECT_MANIFEST.json.paper_ingestion.graph_presence_status = ready (current: ${graphPresenceStatus ?? "unset"})`
     );

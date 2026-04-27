@@ -387,6 +387,106 @@ function normalizePaperTitleForMatch(value: string | null | undefined): string |
   return normalized || null;
 }
 
+function normalizeComparableProjectRoot(value: string | null | undefined): string | null {
+  const normalized = readString(value);
+  return normalized ? path.resolve(normalized) : null;
+}
+
+function projectRootsMatch(
+  left: string | null | undefined,
+  right: string | null | undefined
+): boolean {
+  const normalizedLeft = normalizeComparableProjectRoot(left);
+  const normalizedRight = normalizeComparableProjectRoot(right);
+  return Boolean(normalizedLeft && normalizedRight && normalizedLeft === normalizedRight);
+}
+
+function projectIdsCompatible(
+  left: string | null | undefined,
+  right: string | null | undefined
+): boolean {
+  const normalizedLeft = readString(left);
+  const normalizedRight = readString(right);
+  return !normalizedLeft || !normalizedRight || normalizedLeft === normalizedRight;
+}
+
+function isLocalWorkflowTransport(
+  messageChannel: string | null | undefined,
+  channelKey: string | null | undefined
+): boolean {
+  const normalizedChannel = readString(messageChannel)?.toLowerCase() ?? null;
+  const normalizedKey = readString(channelKey)?.toLowerCase() ?? null;
+  return (
+    normalizedChannel === "local" ||
+    normalizedKey?.startsWith("local:") === true ||
+    normalizedKey?.startsWith("binding:local:") === true
+  );
+}
+
+function maybeResolveLocalWorkflowProjectContext(params: {
+  workflowPolicy: ReturnType<PluginRegistrationContext["getWorkflowPolicy"]>;
+  ctx: ToolContext;
+  channelBinding: Record<string, unknown> | null;
+  snapshot: WorkflowSnapshot;
+  requestedProjectRoot: string | null;
+  requestedProjectId: string | null;
+}) {
+  const channelKey =
+    readString(params.channelBinding?.channelKey) ?? readString(params.ctx.channelKey);
+  if (!isLocalWorkflowTransport(params.ctx.messageChannel, channelKey)) {
+    return null;
+  }
+
+  const existing = getChannelProjectBindingForWorkflow({
+    policy: params.workflowPolicy,
+    workspaceDir: params.ctx.workspaceDir,
+    sessionKey: params.ctx.sessionKey,
+    sessionId: params.ctx.sessionId,
+    messageChannel: params.ctx.messageChannel,
+    channelKey,
+  });
+  const requestedProjectRoot =
+    params.requestedProjectRoot ??
+    params.snapshot.projectRoot ??
+    existing.binding?.projectRoot ??
+    null;
+  const requestedProjectId =
+    params.requestedProjectId ??
+    params.snapshot.projectId ??
+    existing.binding?.projectId ??
+    null;
+  const existingMatches =
+    existing.binding &&
+    projectRootsMatch(existing.binding.projectRoot, requestedProjectRoot) &&
+    projectIdsCompatible(existing.binding.projectId, requestedProjectId);
+  const snapshotMatches =
+    params.snapshot.projectRoot &&
+    projectRootsMatch(params.snapshot.projectRoot, requestedProjectRoot) &&
+    projectIdsCompatible(params.snapshot.projectId, requestedProjectId);
+  if (!requestedProjectRoot || (!existingMatches && !snapshotMatches)) {
+    return null;
+  }
+
+  return {
+    ...existing,
+    resolvedOnly: true,
+    reason: existingMatches
+      ? "existing_local_workflow_context"
+      : "snapshot_local_workflow_context",
+    projectRoot: path.resolve(requestedProjectRoot),
+    projectId: readString(requestedProjectId) ?? path.basename(requestedProjectRoot),
+    binding:
+      existing.binding ??
+      {
+        channelKey: existing.channelKey,
+        projectRoot: path.resolve(requestedProjectRoot),
+        projectId: readString(requestedProjectId) ?? path.basename(requestedProjectRoot),
+        messageChannel: readString(params.ctx.messageChannel),
+        workflowRole: readString(params.ctx.agentId),
+      },
+  };
+}
+
 function inferTypedPaperIngestionSourceKind(
   sourcePath: string | null,
   explicit: string | null | undefined
@@ -3618,9 +3718,29 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               return textResponse(JSON.stringify(bindings, null, 2));
             }
             case "bind_channel_project": {
+              const requestedProjectRoot =
+                readString(channelBinding?.projectRoot) ??
+                readString(channelBinding?.project_path) ??
+                process.env.OPENCLAW_PROJECT ??
+                snapshot.projectRoot;
+              const requestedProjectId =
+                readString(channelBinding?.projectId) ??
+                readString(channelBinding?.project_id) ??
+                snapshot.projectId;
               if (bindingRole && bindingRole !== "researcher") {
+                const localContext = maybeResolveLocalWorkflowProjectContext({
+                  workflowPolicy,
+                  ctx,
+                  channelBinding,
+                  snapshot,
+                  requestedProjectRoot,
+                  requestedProjectId,
+                });
+                if (localContext) {
+                  return textResponse(JSON.stringify(localContext, null, 2));
+                }
                 throw new Error(
-                  "Only Researcher may bind a Discord/channel session to a project in this workflow."
+                  "Only Researcher may create or rebind a Discord/channel session project binding in this workflow. Non-Researcher local workflow sessions may only resolve an existing matching project context."
                 );
               }
               const bound = await bindChannelProjectForWorkflow({
@@ -3632,15 +3752,8 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                 channelKey:
                   readString(channelBinding?.channelKey) ??
                   readString(ctx.channelKey),
-                projectRoot:
-                  readString(channelBinding?.projectRoot) ??
-                  readString(channelBinding?.project_path) ??
-                  process.env.OPENCLAW_PROJECT ??
-                  snapshot.projectRoot,
-                projectId:
-                  readString(channelBinding?.projectId) ??
-                  readString(channelBinding?.project_id) ??
-                  snapshot.projectId,
+                projectRoot: requestedProjectRoot,
+                projectId: requestedProjectId,
                 title:
                   readString(channelBinding?.title) ??
                   readString(channelBinding?.topic),

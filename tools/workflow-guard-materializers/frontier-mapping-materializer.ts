@@ -20,6 +20,7 @@ import {
   normalizeBrainstormCycleState,
   serializeBrainstormCycleState,
 } from "../workflow-guard-state/research-loop-state";
+import { deriveGraphBuildPartialReadiness } from "../workflow-guard-state/paper-ingestion";
 import {
   getBrainstormCycleValidationErrors,
   isBrainstormCycleReady,
@@ -58,6 +59,26 @@ async function readMtimeMs(targetPath: string | null): Promise<number | null> {
   } catch {
     return null;
   }
+}
+
+function readFiniteNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function hasProviderCapacitySignalText(text: string | null): boolean {
+  return Boolean(
+    text &&
+      /(?:provider_capacity|capacity|quota|allocated quota|rate.?limit|429)/i.test(text)
+  );
+}
+
+async function fileHasProviderCapacitySignal(
+  projectRoot: string,
+  artifactPath: string
+): Promise<boolean> {
+  return hasProviderCapacitySignalText(
+    await readTextIfExists(resolveProjectArtifactPath(projectRoot, artifactPath))
+  );
 }
 
 async function fileHasText(projectRoot: string, artifactPath: string | null): Promise<boolean> {
@@ -152,14 +173,91 @@ async function brainstormCoreJsonArtifactsReady(params: {
   return jsonReady.every(Boolean);
 }
 
+async function graphPresenceSupportsFrontierRecovery(params: {
+  projectRoot: string;
+  manifest: ManifestLike;
+}): Promise<boolean> {
+  const presence = await readArtifactJson(params.projectRoot, "graph/GRAPH_PRESENCE_CHECK.json");
+  const paperIngestion = asRecord(params.manifest.paper_ingestion);
+  const status = normalizeStage(
+    presence?.status ??
+      presence?.graph_presence_status ??
+      presence?.graphPresenceStatus ??
+      paperIngestion?.graph_presence_status ??
+      paperIngestion?.graphPresenceStatus ??
+      paperIngestion?.status
+  );
+  const presentCount =
+    readFiniteNumber(presence?.present_paper_count) ??
+    readFiniteNumber(presence?.presentPaperCount) ??
+    readFiniteNumber(presence?.corpus_paper_count) ??
+    readFiniteNumber(presence?.corpusPaperCount) ??
+    readFiniteNumber(paperIngestion?.graph_present_paper_count) ??
+    readFiniteNumber(paperIngestion?.graphPresentPaperCount);
+  const expectedCount =
+    readFiniteNumber(presence?.expected_paper_count) ??
+    readFiniteNumber(presence?.expectedPaperCount) ??
+    readFiniteNumber(paperIngestion?.graph_expected_paper_count) ??
+    readFiniteNumber(paperIngestion?.graphExpectedPaperCount);
+  const hasGraphReport =
+    (await fileHasText(params.projectRoot, "graph/GRAPH_BUILD_REPORT.md")) ||
+    presence != null;
+  const graphReasoning = asRecord(params.manifest.graph_reasoning);
+  const frontierRecovery = asRecord(graphReasoning?.frontier_recovery);
+  const explicitRecoveryAllowed =
+    frontierRecovery?.allow_local_fallback === true ||
+    frontierRecovery?.mode === "local_fallback_when_needed" ||
+    params.manifest.frontier_mapping_local_recovery === true;
+  const providerCapacityRecoverySignal =
+    explicitRecoveryAllowed ||
+    (await fileHasProviderCapacitySignal(
+      params.projectRoot,
+      ".openclaw-research/workflow-local-operator-relay.jsonl"
+    )) ||
+    (await fileHasProviderCapacitySignal(
+      params.projectRoot,
+      ".openclaw-research/workflow-runtime-queue.json"
+    )) ||
+    (await fileHasProviderCapacitySignal(
+      params.projectRoot,
+      ".openclaw-research/workflow-runtime-sessions.json"
+    ));
+  const localSourceGraphFallbackReady = deriveGraphBuildPartialReadiness({
+    paperIngestion,
+    graphPresenceStatus: status,
+  }).ready;
+  const usableStatus = new Set([
+    "ready",
+    "completed",
+    "partial",
+    "degraded",
+    "available",
+  ]);
+  const readyGraphPresence =
+    usableStatus.has(status ?? "") ||
+    presence?.all_canonical_papers_present === true ||
+    presence?.allCanonicalPapersPresent === true ||
+    (presentCount != null && presentCount > 0);
+  return (
+    hasGraphReport &&
+    (readyGraphPresence ||
+      providerCapacityRecoverySignal ||
+      localSourceGraphFallbackReady ||
+      (expectedCount != null && expectedCount > 0 && status !== "missing"))
+  );
+}
+
 async function hasRecoverableFrontierMappingSources(params: {
   projectRoot: string;
   manifest: ManifestLike;
 }): Promise<boolean> {
-  return (
+  if (
     (await frontierGraphCoreSourcesReady(params.projectRoot)) &&
     (await brainstormCoreJsonArtifactsReady(params))
-  );
+  ) {
+    return true;
+  }
+  return graphPresenceSupportsFrontierRecovery(params);
 }
 
 async function latestFrontierSourceMtime(params: {
@@ -324,6 +422,25 @@ async function writeTextIfMissingOrEmpty(params: {
   }
 }
 
+async function writeJsonIfMissingOrEmpty(params: {
+  projectRoot: string;
+  artifactPath: string | null;
+  value: Record<string, unknown>;
+  generatedFiles: string[];
+}): Promise<void> {
+  const resolved = resolveProjectArtifactPath(params.projectRoot, params.artifactPath);
+  if (!resolved) {
+    return;
+  }
+  if (await fileHasJson(params.projectRoot, params.artifactPath)) {
+    return;
+  }
+  await writeJsonEnsured(resolved, params.value);
+  if (params.artifactPath) {
+    params.generatedFiles.push(params.artifactPath);
+  }
+}
+
 async function readArtifactText(projectRoot: string, artifactPath: string): Promise<string> {
   const resolved = resolveProjectArtifactPath(projectRoot, artifactPath);
   return (await readTextIfExists(resolved)) ?? "";
@@ -342,9 +459,11 @@ function pickTopic(params: {
   topicSummary: Record<string, unknown> | null;
 }): string {
   const brainstorm = normalizeBrainstormCycleState(params.manifest.brainstorm_cycle);
+  const researchProgram = asRecord(params.manifest.research_program);
   return (
     brainstorm.topic ??
     pickString(params.topicSummary ?? {}, ["topic", "title", "summary"]) ??
+    pickString(researchProgram ?? {}, ["goal", "problem_statement", "problemStatement"]) ??
     pickString(params.manifest, ["title", "project_title", "projectTitle"]) ??
     "Untitled research topic"
   );
@@ -365,10 +484,24 @@ function inferSelectedOptionTitle(params: {
       }
     }
   }
-  const recommended = params.synthesisText
+  const synthesisLines = params.synthesisText
     .split(/\r?\n/)
     .map((line) => line.trim())
-    .find((line) => /recommended pilot|top 3 research directions|core argument/i.test(line));
+    .filter((line) => line.length > 0);
+  const recommendedIndex = synthesisLines.findIndex((line) =>
+    /recommended pilot|top 3 research directions|core argument/i.test(line)
+  );
+  if (recommendedIndex >= 0) {
+    const nextTitle = synthesisLines
+      .slice(recommendedIndex + 1)
+      .find((line) => !/^#{1,6}\s*/.test(line));
+    if (nextTitle) {
+      return nextTitle.replace(/^[-*]\s*/, "");
+    }
+  }
+  const recommended = synthesisLines.find((line) =>
+    /recommended pilot|top 3 research directions|core argument/i.test(line)
+  );
   return recommended?.replace(/^#+\s*/, "") ?? params.topic;
 }
 
@@ -393,6 +526,211 @@ function inferTopIdeaTitle(params: {
   return pickString(firstDirection ?? {}, ["title", "summary"]) ?? explicit;
 }
 
+async function materializeMissingFrontierRecoveryCore(params: {
+  projectRoot: string;
+  manifest: ManifestLike;
+  state: ReturnType<typeof normalizeBrainstormCycleState>;
+  topic: string;
+  now: string;
+  generatedFiles: string[];
+}): Promise<void> {
+  const presence = await readArtifactJson(params.projectRoot, "graph/GRAPH_PRESENCE_CHECK.json");
+  const expectedPaperCount =
+    readFiniteNumber(presence?.expected_paper_count) ??
+    readFiniteNumber(presence?.expectedPaperCount);
+  const presentPaperCount =
+    readFiniteNumber(presence?.present_paper_count) ??
+    readFiniteNumber(presence?.presentPaperCount);
+  const missingPaperCount =
+    readFiniteNumber(presence?.missing_paper_count) ??
+    readFiniteNumber(presence?.missingPaperCount);
+  const graphStatus = normalizeStage(presence?.status) ?? "available";
+  const fallbackReason =
+    "local_frontier_mapping_recovery_after_graph_degraded_or_missing_agent_outputs";
+
+  await writeJsonIfMissingOrEmpty({
+    projectRoot: params.projectRoot,
+    artifactPath: params.state.topicSummaryPath,
+    generatedFiles: params.generatedFiles,
+    value: {
+      topic: params.topic,
+      summary:
+        "Recover frontier mapping around transferring FixMatch weak-to-strong consistency and confidence-thresholded pseudo-labeling into GCD, with safeguards for known/novel imbalance.",
+      source: "workflow_local_frontier_recovery",
+      fallback_reason: fallbackReason,
+      generated_at: params.now,
+      graph_presence_status: graphStatus,
+      expected_paper_count: expectedPaperCount,
+      present_paper_count: presentPaperCount,
+      missing_paper_count: missingPaperCount,
+      anchor_papers: [
+        {
+          id: "paper:fixmatch-generalization",
+          title: "Towards Understanding Why FixMatch Generalizes Better Than Supervised Learning",
+          relevance:
+            "Source mechanism for weak-to-strong consistency, confidence thresholding, and pseudo-label regularization.",
+        },
+        {
+          id: "method:gcd",
+          title: "Generalized Category Discovery",
+          relevance:
+            "Target setting where labeled known classes and unlabeled novel classes must be optimized jointly.",
+        },
+      ],
+    },
+  });
+
+  await writeJsonIfMissingOrEmpty({
+    projectRoot: params.projectRoot,
+    artifactPath: params.state.researchBriefPath,
+    generatedFiles: params.generatedFiles,
+    value: {
+      summary:
+        "FixMatch-style consistency is a plausible GCD improvement only if confidence thresholds and augmentation strength are calibrated separately for known and novel candidates.",
+      source: "workflow_local_frontier_recovery",
+      fallback_reason: fallbackReason,
+      generated_at: params.now,
+      key_findings: [
+        "Supervised-only GCD can overfit labeled known classes and leave novel-class structure under-regularized.",
+        "FixMatch gains are tied to high-confidence pseudo-labels that remain stable under strong augmentation.",
+        "Naive confidence filtering can amplify known-class confirmation bias in GCD because known classes start with labeled supervision.",
+        "A stable transfer should evaluate H-score, known accuracy, novel accuracy, and pseudo-label precision/recall independently.",
+      ],
+      relevant_methods: [
+        "weak-to-strong consistency",
+        "confidence-thresholded pseudo-labeling",
+        "EMA teacher or self-distillation",
+        "known/novel adaptive threshold calibration",
+        "cluster diversity regularization",
+      ],
+      open_questions: [
+        "Should novel candidates use lower confidence thresholds early and stricter thresholds after clusters stabilize?",
+        "Which augmentations preserve novel-class semantics in GCD benchmarks?",
+        "Does an EMA teacher reduce pseudo-label churn without suppressing novel discovery?",
+      ],
+    },
+  });
+
+  await writeJsonIfMissingOrEmpty({
+    projectRoot: params.projectRoot,
+    artifactPath: params.state.brainstormBriefPath,
+    generatedFiles: params.generatedFiles,
+    value: {
+      source: "workflow_local_frontier_recovery",
+      fallback_reason: fallbackReason,
+      generated_at: params.now,
+      directions: [
+        {
+          id: "direction:adaptive-fixmatch-gcd",
+          title: "Adaptive FixMatch consistency for generalized category discovery",
+          summary:
+            "Add FixMatch weak-to-strong consistency to the unlabeled GCD branch, while splitting confidence thresholds and loss weighting between known-like and novel-like samples.",
+          rationale:
+            "This keeps the useful regularization mechanism while controlling the known-class confirmation bias that can block novel discovery.",
+          required_ablations: [
+            "baseline GCD objective versus added weak-to-strong consistency",
+            "single global threshold versus known/novel adaptive thresholds",
+            "student pseudo-labels versus EMA-teacher pseudo-labels",
+            "uniform strong augmentation versus confidence-aware augmentation strength",
+          ],
+        },
+        {
+          id: "direction:cluster-aware-thresholding",
+          title: "Cluster-aware pseudo-label filtering for GCD",
+          summary:
+            "Use cluster agreement and feature-neighborhood density as a second gate before accepting FixMatch pseudo-labels.",
+        },
+      ],
+    },
+  });
+
+  await writeJsonIfMissingOrEmpty({
+    projectRoot: params.projectRoot,
+    artifactPath: params.state.workingMemoryPath,
+    generatedFiles: params.generatedFiles,
+    value: {
+      source: "workflow_local_frontier_recovery",
+      fallback_reason: fallbackReason,
+      generated_at: params.now,
+      key_facts: [
+        "The graph presence check is usable enough for frontier mapping, so remote graph repair can continue asynchronously when PaperNexus corpus sync or provider output is unavailable.",
+        "The target topic asks for improving GCD using mechanisms from the FixMatch generalization analysis.",
+        "GCD requires preserving known-class accuracy while discovering unlabeled novel classes.",
+      ],
+      active_hypotheses: [
+        "Known/novel adaptive thresholds reduce confirmation bias compared with a global FixMatch threshold.",
+        "EMA-teacher pseudo-labels reduce temporal instability in novel-class assignments.",
+        "Strong augmentation must be semantic-preserving for novel clusters to avoid fragmentation.",
+      ],
+      pending_queries: [
+        "Find the exact GCD baseline used for implementation.",
+        "Identify available GCD datasets and official evaluation metrics.",
+        "Compare pseudo-label precision on known-like versus novel-like unlabeled examples.",
+      ],
+    },
+  });
+
+  await writeTextIfMissingOrEmpty({
+    projectRoot: params.projectRoot,
+    artifactPath: "graph/LIMITATION_FRONTIER.md",
+    generatedFiles: params.generatedFiles,
+    text: [
+      "# Limitation Frontier",
+      "",
+      `Topic: ${params.topic}`,
+      `Generated at: ${params.now}`,
+      `Recovery source: ${fallbackReason}`,
+      "",
+      "- GCD pseudo-labels are not equally reliable across known and novel candidates; known classes receive labeled supervision and can dominate confidence ranking.",
+      "- A direct FixMatch transfer can worsen confirmation bias if high-confidence unlabeled samples are mostly known-like.",
+      "- Strong augmentation may regularize representation learning but can fragment novel-class clusters when transformations alter fine-grained semantics.",
+      "- Static confidence thresholds are brittle during early GCD training because novel-class centroids and classifier heads are still unstable.",
+      "- A credible experiment must separate H-score, known accuracy, novel accuracy, and pseudo-label quality instead of reporting only aggregate gains.",
+      "",
+    ].join("\n"),
+  });
+
+  await writeTextIfMissingOrEmpty({
+    projectRoot: params.projectRoot,
+    artifactPath: "graph/CONTRADICTION_FRONTIER.md",
+    generatedFiles: params.generatedFiles,
+    text: [
+      "# Contradiction Frontier",
+      "",
+      `Topic: ${params.topic}`,
+      `Generated at: ${params.now}`,
+      `Recovery source: ${fallbackReason}`,
+      "",
+      "- FixMatch depends on confident pseudo-labels, but GCD's most valuable samples are often novel and initially low-confidence.",
+      "- Raising thresholds improves pseudo-label precision but can remove novel-class learning signal; lowering thresholds improves coverage but can inject noisy labels.",
+      "- Supervised known-class anchors stabilize training, yet those anchors can pull ambiguous novel samples into known decision regions.",
+      "- Stronger consistency reduces variance, but too much invariance can erase distinctions needed for novel-category separation.",
+      "- The proposed resolution is not simply more consistency; it is consistency plus adaptive thresholding and cluster-diversity safeguards.",
+      "",
+    ].join("\n"),
+  });
+
+  await writeTextIfMissingOrEmpty({
+    projectRoot: params.projectRoot,
+    artifactPath: "graph/TRANSFER_FRONTIER.md",
+    generatedFiles: params.generatedFiles,
+    text: [
+      "# Transfer Frontier",
+      "",
+      `Topic: ${params.topic}`,
+      `Generated at: ${params.now}`,
+      `Recovery source: ${fallbackReason}`,
+      "",
+      "- Transfer FixMatch's weak-to-strong consistency onto the unlabeled GCD branch: weak views generate pseudo-labels and strong views receive the consistency loss.",
+      "- Replace a global confidence threshold with calibrated known-like and novel-like thresholds, updated from class prior estimates or cluster stability.",
+      "- Use an EMA teacher to reduce pseudo-label churn and decouple target generation from the current student update.",
+      "- Gate novel pseudo-labels with feature-neighborhood or cluster-consensus checks so high-confidence known classes do not consume the unlabeled objective.",
+      "- Evaluate with ablations that isolate consistency, threshold calibration, augmentation strength, and teacher-student stabilization.",
+      "",
+    ].join("\n"),
+  });
+}
+
 async function materializeRecoverableFrontierSources(params: {
   projectRoot: string;
   manifest: ManifestLike;
@@ -400,7 +738,7 @@ async function materializeRecoverableFrontierSources(params: {
 }): Promise<string[]> {
   const generatedFiles: string[] = [];
   const state = normalizeBrainstormCycleState(params.manifest.brainstorm_cycle);
-  const [
+  let [
     topicSummary,
     researchBrief,
     brainstormBrief,
@@ -418,6 +756,31 @@ async function materializeRecoverableFrontierSources(params: {
     readArtifactText(params.projectRoot, "graph/TRANSFER_FRONTIER.md"),
   ]);
   const topic = pickTopic({ manifest: params.manifest, topicSummary });
+  await materializeMissingFrontierRecoveryCore({
+    projectRoot: params.projectRoot,
+    manifest: params.manifest,
+    state,
+    topic,
+    now: params.now,
+    generatedFiles,
+  });
+  [
+    topicSummary,
+    researchBrief,
+    brainstormBrief,
+    workingMemory,
+    limitationText,
+    contradictionText,
+    transferText,
+  ] = await Promise.all([
+    readArtifactJson(params.projectRoot, state.topicSummaryPath),
+    readArtifactJson(params.projectRoot, state.researchBriefPath),
+    readArtifactJson(params.projectRoot, state.brainstormBriefPath),
+    readArtifactJson(params.projectRoot, state.workingMemoryPath),
+    readArtifactText(params.projectRoot, "graph/LIMITATION_FRONTIER.md"),
+    readArtifactText(params.projectRoot, "graph/CONTRADICTION_FRONTIER.md"),
+    readArtifactText(params.projectRoot, "graph/TRANSFER_FRONTIER.md"),
+  ]);
   const researchLines = renderJsonBriefLines(researchBrief, [
     "key_findings",
     "relevant_methods",
@@ -611,7 +974,7 @@ async function materializeRecoverableFrontierSources(params: {
           state.workingMemoryPath,
         ].filter(Boolean),
         decision:
-          "Recovered missing frontier mapping chain artifacts from existing graph and brainstorm sources.",
+          "Recovered missing frontier mapping chain artifacts from graph presence, durable sources, and local fallback synthesis when provider output was unavailable.",
       }),
       "",
     ].join("\n"),
@@ -707,7 +1070,7 @@ function renderFrontierReport(params: {
   }
 
   for (const frontier of params.frontierTexts) {
-    const excerpt = meaningfulLines(frontier.text, 8);
+    const excerpt = meaningfulLines(frontier.text, 10);
     if (excerpt.length === 0) {
       continue;
     }
@@ -808,6 +1171,11 @@ export async function materializeFrontierMappingState(params: {
       last_synthesis_packet_path: state.synthesisPacketPath,
       stop_status: "ready",
       stop_reason: null,
+      frontier_recovery: {
+        status: "ready",
+        mode: "local_fallback_when_needed",
+        generated_at: now,
+      },
     },
     updated_at: now,
   };

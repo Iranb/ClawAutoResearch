@@ -271,6 +271,66 @@ function addReason(reasons: string[], message: string) {
   }
 }
 
+function normalizeRiskFingerprintSignal(signal: string, stage: string | null): string | null {
+  const normalized = signal.trim();
+  if (
+    /graph_presence_status|GRAPH_PRESENCE|missing canonical papers|graph_source_dir|paper_source_dir|PaperNexus corpus still misses canonical papers/i.test(
+      normalized
+    )
+  ) {
+    return "graph_presence_missing";
+  }
+  if (/workflow-owned PaperNexus ingestion|paper_ingestion reports status/i.test(normalized)) {
+    return "paper_ingestion_incomplete";
+  }
+  if (/citation_integrity|verification_status|hallucination|CITATION_VERIFICATION/i.test(normalized)) {
+    return "citation_integrity_incomplete";
+  }
+  if (/writing_contract\.template_path|appendix_theory|KG_STORYLINE|PAPER_PLAN\.md/i.test(normalized)) {
+    return "writing_control_artifacts_incomplete";
+  }
+  if (
+    /brainstorm_cycle\.|researcher\/brainstorm-cycle\/|TOPIC_SUMMARY|RESEARCH_BRIEF|BRAINSTORM_BRIEF|WORKING_MEMORY|LOGIC_CHAIN|EVIDENCE_CHAIN|REASONING_TRACE|QUESTION_PACKET|SYNTHESIS_PACKET/i.test(
+      normalized
+    )
+  ) {
+    return "brainstorm_cycle_outputs_incomplete";
+  }
+  if (
+    stage === "idea" &&
+    /IDEA_REPORT|IDEA_AUDIT|ideation_contract\.|researcher\/ideation\/|researcher\/idea-catalyst\/|TRACK_REGISTRY/i.test(
+      normalized
+    )
+  ) {
+    return "ideation_stage_outputs_incomplete";
+  }
+  return null;
+}
+
+function normalizeRiskFingerprintReason(reason: string): string | null {
+  const normalized = reason.trim();
+  if (/^Workflow regressed to an earlier stage\.$/i.test(normalized)) {
+    return null;
+  }
+  if (
+    /Graph presence is|Paper ingestion indicates the graph needs refresh|Graph-related stage signals are missing/i.test(
+      normalized
+    )
+  ) {
+    return "graph_presence_missing";
+  }
+  if (/Citation integrity|Citation verification/i.test(normalized)) {
+    return "citation_integrity_incomplete";
+  }
+  if (/Innovation reflection/i.test(normalized)) {
+    return "innovation_reflection_incomplete";
+  }
+  if (/Writing-stage control artifacts/i.test(normalized)) {
+    return "writing_control_artifacts_incomplete";
+  }
+  return normalized;
+}
+
 export function buildWorkflowAutoModeRiskFingerprint(params: {
   stage?: string | null;
   riskLevel: WorkflowAutoModeRiskLevel;
@@ -280,13 +340,26 @@ export function buildWorkflowAutoModeRiskFingerprint(params: {
   if (params.riskLevel === "stable" && params.reasons.length === 0) {
     return null;
   }
+  const stage = readString(params.stage)?.toLowerCase() ?? null;
   return createHash("sha1")
     .update(
       JSON.stringify({
-        stage: readString(params.stage)?.toLowerCase() ?? null,
+        stage,
         riskLevel: params.riskLevel,
-        reasons: [...params.reasons].sort(),
-        missingStageSignals: [...(params.missingStageSignals ?? [])].sort(),
+        reasons: [
+          ...new Set(
+            params.reasons
+              .map(normalizeRiskFingerprintReason)
+              .filter((entry): entry is string => Boolean(entry))
+          ),
+        ].sort(),
+        missingStageSignals: [
+          ...new Set(
+            (params.missingStageSignals ?? [])
+              .map((signal) => normalizeRiskFingerprintSignal(signal, stage))
+              .filter((entry): entry is string => Boolean(entry))
+          ),
+        ].sort(),
       })
     )
     .digest("hex");

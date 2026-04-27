@@ -243,6 +243,12 @@ export function buildGatewayRuntimeMessage(runParams = {}) {
   const requesterSessionKey = readString(runParams.requesterSessionKey);
   const messageChannel = readString(runParams.messageChannel);
   const extraSystemPrompt = readString(runParams.extraSystemPrompt);
+  const normalizedOwnerAgent = ownerAgent?.toLowerCase() ?? null;
+  const projectContextInstruction = projectRoot
+    ? normalizedOwnerAgent && normalizedOwnerAgent !== "researcher"
+      ? "For non-Researcher workflow agents, treat Project root and Project ID above as resolved context. Inspect research_workflow.get_channel_project_binding if needed; do not create or rebind a channel/project binding."
+      : `If a generic session context must be resolved, call research_workflow.bind_channel_project with projectRoot="${projectRoot}"${projectId ? ` and projectId="${projectId}"` : ""}; this is project context resolution, not a transport binding.`
+    : null;
   const contextLines = [
     "Workflow runtime context (authoritative; resolve this before workflow tool calls):",
     projectRoot ? `Project root: ${projectRoot}` : null,
@@ -254,9 +260,7 @@ export function buildGatewayRuntimeMessage(runParams = {}) {
     projectRoot
       ? "Before calling project-bound workflow tools, bind or resolve this exact project if the workflow state is unbound."
       : null,
-    projectRoot
-      ? `If a generic session context must be resolved, call research_workflow.bind_channel_project with projectRoot="${projectRoot}"${projectId ? ` and projectId="${projectId}"` : ""}; this is project context resolution, not a transport binding.`
-      : null,
+    projectContextInstruction,
     projectRoot
       ? "Do not create or use a sibling/default project directory; all durable artifacts for this run belong under the Project root above."
       : null,

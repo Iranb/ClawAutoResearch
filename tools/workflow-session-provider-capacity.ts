@@ -10,7 +10,7 @@ type WorkflowRuntimeSessionMessageReader = {
   }) => Promise<{ messages: unknown[] }>;
 };
 
-const DEFAULT_PROVIDER_CAPACITY_MESSAGE_LIMIT = 12;
+const DEFAULT_PROVIDER_CAPACITY_MESSAGE_LIMIT = 80;
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)

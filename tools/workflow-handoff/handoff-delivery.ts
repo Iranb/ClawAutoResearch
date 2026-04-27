@@ -193,7 +193,17 @@ export async function deliverWorkflowHandoffIntent(params: {
     allowSessionProjectFallback: !intent.fromSessionKey && Boolean(intent.toSessionKey),
     allowSessionFallbackOnBindingMismatch: false,
   });
-  if (!deliveryGate.allowed) {
+  const hasExplicitTransportContext = Boolean(
+    intent.fromSessionKey ||
+      intent.toSessionKey ||
+      intent.sessionBindingKey ||
+      (intent.preferredSessionKeys ?? []).length > 0
+  );
+  const allowProjectLocalDeliveryWithoutBinding =
+    !hasExplicitTransportContext &&
+    (deliveryGate.reason === "binding_missing" ||
+      deliveryGate.reason === "session_project_missing");
+  if (!deliveryGate.allowed && !allowProjectLocalDeliveryWithoutBinding) {
     const superseded =
       (await transitionWorkflowHandoffIntent({
         projectRoot: intent.projectRoot,
@@ -223,6 +233,18 @@ export async function deliverWorkflowHandoffIntent(params: {
       terminal: true,
       reason: "binding_mismatch",
     };
+  }
+  if (!deliveryGate.allowed && allowProjectLocalDeliveryWithoutBinding) {
+    await emitDiagnostic({
+      action: "binding_gate_project_local_fallback",
+      status: "degraded",
+      summary:
+        "Allowed project-local handoff delivery without a Discord/channel binding.",
+      details: {
+        bindingReason: deliveryGate.reason,
+        channelKey: deliveryGate.channelKey,
+      },
+    });
   }
 
   const dispatching =

@@ -13,6 +13,7 @@ process.env.OPENCLAW_RESEARCH_BACKGROUND_RUN_REGISTRY_PATH = path.join(
 import { createPluginRegistrationContext } from "../tools/plugin-registration-shared.ts";
 import {
   bindChannelProjectForWorkflow,
+  getChannelProjectBindingForWorkflow,
 } from "../tools/workflow-guard.ts";
 import { createStageOwnerHandoffIntent } from "../tools/workflow-handoff/handoff-router.ts";
 import { syncPreparedWorkflowHandoffToManifest } from "../tools/workflow-handoff/handoff-activation.ts";
@@ -27,6 +28,8 @@ import {
   readWorkflowRuntimeEvents,
   getWorkflowRuntimeSessionsPath,
   writeWorkflowRuntimeQueueStore,
+  writeWorkflowRuntimeSessionsStore,
+  appendWorkflowRuntimeEvent,
 } from "../tools/workflow-runtime-state.ts";
 import { getWorkflowTraceLogPath } from "../tools/workflow-trace.ts";
 import { materializeWorkflowTaskGraph, readWorkflowTaskGraphStore } from "../tools/workflow-team/task-graph.ts";
@@ -216,6 +219,120 @@ async function writeExecutable(targetPath, value) {
   await fs.writeFile(targetPath, value, "utf8");
   await fs.chmod(targetPath, 0o755);
 }
+
+test("runtime stores use manifest project_id as the authoritative project identity", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await writeWorkflowRuntimeQueueStore({
+    projectRoot,
+    projectId: "stale-project",
+    entries: [
+      {
+        transitionId: "queue-1",
+        queueId: "queue-1",
+        queueKey: "queue:1",
+        source: "workflow_auto_stage",
+        entryType: "dispatch_task",
+        ownerAgent: "researcher",
+        channelKey: "local:test",
+        requesterSessionKey: "agent:researcher:local:test",
+        messageChannel: "local",
+        preferredSessionKey: "agent:researcher:local:test",
+        family: "research",
+        kind: "workflow_stage_dispatch",
+        projectId: "stale-project",
+        projectRoot,
+        queuedAt: "2026-04-27T00:00:00.000Z",
+        lastAttemptedAt: null,
+        lastCheckedAt: null,
+        attemptCount: 0,
+        summary: "queued",
+        status: "queued",
+        fallbackMode: null,
+        lastError: null,
+        parentSessionKey: null,
+        threadBindingKey: null,
+        depth: 0,
+        runPayload: null,
+        dispatchPayload: {
+          requesterChannel: "local",
+          requesterAccountId: "default",
+          preferredSessionKeys: [],
+          fromRole: "researcher",
+          toRole: "researcher",
+          projectRoot,
+          projectId: "stale-project",
+          stage: "setup",
+          summary: "queued",
+          command: null,
+          mailboxMessageId: null,
+          requireMailboxAcknowledgement: false,
+          extraBody: null,
+          waitTimeoutMs: null,
+          retryOnTimeout: false,
+          enableSpawnFallback: true,
+          useWorkflowHandoff: false,
+          autoModeActive: true,
+        },
+      },
+    ],
+  });
+  await writeWorkflowRuntimeSessionsStore({
+    projectRoot,
+    projectId: "stale-project",
+    entries: [
+      {
+        sessionKey: "agent:researcher:local:test",
+        sessionId: null,
+        runtime: "subagent",
+        role: "researcher",
+        agentId: "researcher",
+        ownerAgent: "researcher",
+        family: "research",
+        kind: "workflow_stage_dispatch",
+        channelKey: "local:test",
+        requesterSessionKey: "agent:researcher:local:test",
+        projectId: "stale-project",
+        projectRoot,
+        parentSessionKey: null,
+        threadBindingKey: null,
+        depth: 0,
+        status: "active",
+        runId: "run-1",
+        queueKey: "queue:1",
+        startedAt: "2026-04-27T00:00:00.000Z",
+        lastHeartbeatAt: null,
+        lastAnnounceAt: null,
+        lastCheckedAt: null,
+        lastFinishedAt: null,
+        lastError: null,
+      },
+    ],
+  });
+  const event = await appendWorkflowRuntimeEvent({
+    projectRoot,
+    projectId: "stale-project",
+    kind: "identity_check",
+    summary: "check",
+  });
+
+  const rawQueue = JSON.parse(
+    await fs.readFile(getWorkflowRuntimeQueuePath(projectRoot), "utf8")
+  );
+  const rawSessions = JSON.parse(
+    await fs.readFile(getWorkflowRuntimeSessionsPath(projectRoot), "utf8")
+  );
+
+  assert.equal(rawQueue.projectId, "demo-project");
+  assert.equal(rawQueue.entries[0].projectId, "demo-project");
+  assert.equal(rawQueue.entries[0].dispatchPayload.projectId, "demo-project");
+  assert.equal(rawSessions.projectId, "demo-project");
+  assert.equal(rawSessions.entries[0].projectId, "demo-project");
+  assert.equal(event.projectId, "demo-project");
+});
 
 test("research_workflow plan-mutating actions auto-activate the pending owner handoff before writing state", async (t) => {
   const scenarios = [
@@ -4054,6 +4171,19 @@ test("research_workflow materialize_ideation_contract scaffolds graph-first idea
   assert.match(proposal, /route claims to supporting packets/i);
   assert.match(proposal, /Expected Results/i);
 
+  const ideaReport = await fs.readFile(
+    path.join(projectRoot, "researcher", "IDEA_REPORT.md"),
+    "utf8"
+  );
+  assert.match(ideaReport, /Selected Direction/i);
+  assert.match(ideaReport, /Graph-grounded support router/i);
+
+  const ideaAudit = await fs.readFile(
+    path.join(projectRoot, "researcher", "IDEA_AUDIT.md"),
+    "utf8"
+  );
+  assert.match(ideaAudit, /ready_for_plan/i);
+
   const ideaTree = await fs.readFile(
     path.join(projectRoot, "researcher", "ideation", "IDEA_TREE.md"),
     "utf8"
@@ -4113,6 +4243,143 @@ test("research_workflow materialize_ideation_contract scaffolds graph-first idea
     await fs.readFile(path.join(projectRoot, "TRACK_REGISTRY.json"), "utf8")
   );
   assert.equal(updatedTrackRegistry.tracks[0].research_proposal_path, "researcher/ideation/RESEARCH_PROPOSAL.md");
+});
+
+test("research_workflow materialize_ideation_contract seeds an active track from brainstorm output when TRACK_REGISTRY is empty", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  const previousProjectRoot = process.env.OPENCLAW_PROJECT;
+
+  t.after(async () => {
+    if (previousProjectRoot === undefined) {
+      delete process.env.OPENCLAW_PROJECT;
+    } else {
+      process.env.OPENCLAW_PROJECT = previousProjectRoot;
+    }
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  process.env.OPENCLAW_PROJECT = projectRoot;
+  const tool = createResearchWorkflowTool({ workspaceDir: projectRoot });
+
+  await fs.mkdir(path.join(projectRoot, "graph"), { recursive: true });
+  await fs.mkdir(path.join(projectRoot, "researcher", "brainstorm-cycle"), {
+    recursive: true,
+  });
+  await fs.writeFile(
+    path.join(projectRoot, "graph", "ANCHOR_INDEX.md"),
+    "# Anchor Index\n- anchor: fixmatch-consistency\n",
+    "utf8"
+  );
+  await fs.writeFile(
+    path.join(projectRoot, "graph", "LIMITATION_FRONTIER.md"),
+    "# Limitation Frontier\n- supervised baselines overfit known-class confidence\n",
+    "utf8"
+  );
+  await fs.writeFile(
+    path.join(projectRoot, "graph", "TRANSFER_FRONTIER.md"),
+    "# Transfer Frontier\n- transfer FixMatch consistency calibration into GCD pseudo-label filtering\n",
+    "utf8"
+  );
+  await fs.writeFile(
+    path.join(projectRoot, "researcher", "FRONTIER_REPORT.md"),
+    "# Frontier Report\n\n## Challenge clusters\n- known-class confidence can suppress novel clusters\n\n## Insight clusters\n- adaptive consistency can preserve unlabeled structure\n",
+    "utf8"
+  );
+
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.current_stage = "idea";
+  manifest.owner_agent = "researcher";
+  manifest.research_program = {
+    status: "approved",
+    goal: "Improve generalized category discovery using the FixMatch generalization mechanism.",
+    problem_statement:
+      "GCD needs semi-supervised consistency without collapsing novel-class structure.",
+    baseline_reference: "supervised GCD baseline",
+    primary_metric: "novel-class clustering accuracy",
+    datasets: ["CIFAR-100", "ImageNet-100"],
+    success_criteria: ["improve novel-class clustering accuracy over the supervised baseline"],
+    zotero_project_path: "bot/demo-project",
+    tracks: [],
+  };
+  await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+
+  await executeWorkflowTool(tool, {
+    action: "run_brainstorm_cycle",
+    brainstormCycle: {
+      topic: "FixMatch-inspired GCD",
+      basis_stage: "frontier_mapping",
+      provider: "workflow_core_brainstorm",
+      provider_mode: "core",
+      contract_version: 1,
+      rounds: [
+        {
+          round_id: "round-1",
+          label: "select",
+          status: "completed",
+          options: [
+            {
+              option_id: "dir-adaptive-fixmatch-gcd",
+              title: "Adaptive FixMatch consistency for generalized category discovery",
+              score: 0.89,
+              summary:
+                "Use FixMatch-style consistency only when pseudo-label confidence is compatible with preserving novel-cluster structure.",
+              logic_chain:
+                "# Logic Chain\nChallenge: novel clusters collapse under overconfident pseudo-labels.\nInsight: adaptive consistency can gate weak-to-strong augmentation pressure.\n",
+              evidence_chain:
+                "# Evidence Chain\n- frontier packets connect FixMatch consistency to GCD pseudo-label calibration\n",
+              reasoning_trace: [
+                {
+                  step: "map-fixmatch-to-gcd",
+                  conclusion: "consistency should be adaptive rather than uniform",
+                },
+              ],
+              question_packet: "# Questions\n- when should consistency pressure be disabled for likely novel samples?\n",
+              working_memory: {
+                surviving_direction: "adaptive FixMatch consistency for GCD",
+              },
+              synthesis_packet:
+                "# Synthesis\nAdaptive consistency is the smallest testable method delta for GCD.\n",
+            },
+          ],
+        },
+      ],
+    },
+  });
+
+  const result = await executeWorkflowTool(tool, {
+    action: "materialize_ideation_contract",
+    ideationMaterialization: {
+      basis_stage: "frontier_mapping",
+    },
+  });
+
+  assert.equal(result.state.status, "ready");
+  assert.match(result.state.selectedTrackId, /^track-adaptive-fixmatch-consistency/);
+  assert.equal(result.state.selectedDirectionId, "dir-adaptive-fixmatch-gcd");
+  assert.equal(result.state.graphIdeationIndices.status, "ready");
+  assert.ok(result.generatedFiles.includes("researcher/IDEA_REPORT.md"));
+  assert.ok(result.generatedFiles.includes("researcher/IDEA_AUDIT.md"));
+
+  const trackRegistry = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "TRACK_REGISTRY.json"), "utf8")
+  );
+  assert.equal(trackRegistry.active_tracks, 1);
+  assert.equal(trackRegistry.tracks[0].status, "active");
+  assert.equal(trackRegistry.tracks[0].track_id, result.state.selectedTrackId);
+  assert.match(trackRegistry.tracks[0].hypothesis, /FixMatch-style consistency/i);
+  assert.ok(
+    trackRegistry.tracks[0].evidence_pointers.some((entry) =>
+      /FRONTIER_REPORT\.md|ANCHOR_INDEX\.md/.test(entry)
+    )
+  );
+
+  const ideaReport = await fs.readFile(
+    path.join(projectRoot, "researcher", "IDEA_REPORT.md"),
+    "utf8"
+  );
+  assert.match(ideaReport, /Adaptive FixMatch consistency/i);
+  assert.match(ideaReport, /Testable Plan/i);
 });
 
 test("research_workflow materialize_ideation_contract imports per-track GRAPH_EVIDENCE.json into canonical track evidence fields", async (t) => {
@@ -4619,6 +4886,134 @@ test("research_workflow auto_iterator_tick follows the bound channel project eve
   assert.equal(result.stageBefore, "idea");
   assert.notEqual(result.projectRoot, workspaceProjectRoot);
   assert.notEqual(result.stageBefore, "graph_build");
+});
+
+test("research_workflow bind_channel_project resolves local non-Researcher context without rebinding", async (t) => {
+  const workspaceRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "openclaw-research-local-context-bind-")
+  );
+  const projectsRoot = path.join(workspaceRoot, "projects");
+  const projectRoot = path.join(projectsRoot, "gcd-local-context");
+  const previousProjectRoot = process.env.OPENCLAW_PROJECT;
+  const channelKey = "local:conversation:e2e-local-context";
+  const researcherSessionKey = "agent:researcher:local:conversation:e2e-local-context";
+  const orchestratorSessionKey =
+    "agent:orchestrator:local:conversation:e2e-local-context";
+
+  t.after(async () => {
+    if (previousProjectRoot === undefined) {
+      delete process.env.OPENCLAW_PROJECT;
+    } else {
+      process.env.OPENCLAW_PROJECT = previousProjectRoot;
+    }
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  });
+
+  delete process.env.OPENCLAW_PROJECT;
+  await seedMinimalProject(projectRoot, {
+    project_id: "gcd-local-context",
+    current_stage: "plan",
+    owner_agent: "orchestrator",
+  });
+
+  await bindChannelProjectForWorkflow({
+    policy: {
+      enableChannelProjectBindings: true,
+      projectsRoot,
+    },
+    workspaceDir: workspaceRoot,
+    sessionKey: researcherSessionKey,
+    messageChannel: "local",
+    channelKey,
+    projectRoot,
+    projectId: "gcd-local-context",
+    boundByAgent: "researcher",
+  });
+
+  const tool = createResearchWorkflowTool({
+    workspaceDir: projectRoot,
+    agentId: "orchestrator",
+    sessionKey: orchestratorSessionKey,
+    messageChannel: "local",
+    channelKey,
+    pluginConfig: {
+      enableChannelProjectBindings: true,
+      projectsRoot,
+    },
+  });
+
+  const result = await executeWorkflowTool(tool, {
+    action: "bind_channel_project",
+    projectRoot,
+    projectId: "gcd-local-context",
+  });
+
+  assert.equal(result.resolvedOnly, true);
+  assert.equal(result.reason, "existing_local_workflow_context");
+  assert.equal(result.projectRoot, projectRoot);
+  assert.equal(result.binding.workflowRole, "researcher");
+  assert.equal(result.binding.workflowSessionKey, researcherSessionKey);
+
+  const lookup = getChannelProjectBindingForWorkflow({
+    policy: {
+      enableChannelProjectBindings: true,
+      projectsRoot,
+    },
+    workspaceDir: workspaceRoot,
+    sessionKey: orchestratorSessionKey,
+    messageChannel: "local",
+    channelKey,
+  });
+  assert.equal(lookup.binding?.workflowRole, "researcher");
+  assert.equal(lookup.binding?.workflowSessionKey, researcherSessionKey);
+  assert.equal(lookup.binding?.sessionKeySample, researcherSessionKey);
+});
+
+test("research_workflow bind_channel_project rejects non-Researcher Discord rebinding", async (t) => {
+  const workspaceRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "openclaw-research-discord-bind-guard-")
+  );
+  const projectsRoot = path.join(workspaceRoot, "projects");
+  const projectRoot = path.join(projectsRoot, "gcd-discord-bind-guard");
+  const previousProjectRoot = process.env.OPENCLAW_PROJECT;
+
+  t.after(async () => {
+    if (previousProjectRoot === undefined) {
+      delete process.env.OPENCLAW_PROJECT;
+    } else {
+      process.env.OPENCLAW_PROJECT = previousProjectRoot;
+    }
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  });
+
+  delete process.env.OPENCLAW_PROJECT;
+  await seedMinimalProject(projectRoot, {
+    project_id: "gcd-discord-bind-guard",
+    current_stage: "plan",
+    owner_agent: "orchestrator",
+  });
+
+  const tool = createResearchWorkflowTool({
+    workspaceDir: projectRoot,
+    agentId: "orchestrator",
+    sessionKey: "agent:orchestrator:discord:group:paper-lab",
+    messageChannel: "discord",
+    channelKey: "discord:group:paper-lab",
+    pluginConfig: {
+      enableChannelProjectBindings: true,
+      projectsRoot,
+    },
+  });
+
+  await assert.rejects(
+    () =>
+      executeWorkflowTool(tool, {
+        action: "bind_channel_project",
+        projectRoot,
+        projectId: "gcd-discord-bind-guard",
+      }),
+    /Only Researcher may create or rebind/
+  );
 });
 
 test("research_workflow auto_iterator_tick follows an explicit dashboard channel binding even when the session key is generic", async (t) => {

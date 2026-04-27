@@ -18,7 +18,9 @@ import {
   verifyAgentRuntimeModelConfig,
 } from "../scripts/run_auto_workflow_e2e_test.mjs";
 import {
+  buildLiveHandoffWorkflowTaskParams,
   buildLiveAutoIteratorParams,
+  deriveStageCommand,
   readLiveWorkflowActivation,
 } from "../scripts/auto_command_live_orchestrator.mjs";
 
@@ -380,6 +382,97 @@ test("live no-Discord orchestrator injects workflow policy into auto iterator", 
       policy: workflowPolicy,
     }
   );
+});
+
+test("live no-Discord orchestrator derives handoff commands from the target stage", () => {
+  assert.equal(
+    deriveStageCommand({
+      lane: "experiment",
+      topic: "Generalized Category Discovery",
+      manifest: {
+        current_stage: "idea",
+        next_action: "/idea-phase",
+        resume_action: "/idea-phase",
+      },
+      iterator: {
+        stageAfter: "plan",
+        nextAction:
+          "Run /plan-research using IDEA_REPORT.md and TRACK_REGISTRY.json.",
+      },
+    }),
+    "/plan-research"
+  );
+
+  assert.equal(
+    deriveStageCommand({
+      lane: "experiment",
+      topic: "Generalized Category Discovery",
+      manifest: {
+        current_stage: "plan",
+        next_action:
+          "Implement the approved experiments as structured bundles.",
+        resume_action: "/plan-research",
+      },
+      iterator: {
+        stageAfter: "code",
+        nextAction:
+          "Implement the approved experiments as structured bundles.",
+      },
+    }),
+    "/implement-experiment"
+  );
+
+  assert.equal(
+    deriveStageCommand({
+      lane: "experiment",
+      topic: "Generalized Category Discovery",
+      manifest: {
+        current_stage: "experiment",
+        next_action: "/monitor-experiment",
+      },
+      iterator: {
+        stageAfter: "experiment",
+        recommendedActions: [
+          {
+            kind: "drive_stage",
+            stage: "experiment",
+            command: "/monitor-experiment",
+          },
+        ],
+      },
+    }),
+    "/monitor-experiment"
+  );
+});
+
+test("live no-Discord orchestrator passes the gateway runtime into owner handoffs", () => {
+  const runtimeSubagent = {
+    async run() {
+      return { runId: "run-1" };
+    },
+  };
+  const params = buildLiveHandoffWorkflowTaskParams({
+    runtimeSubagent,
+    projectRoot: "/tmp/openclaw-live-project",
+    projectId: "openclaw-live-project",
+    lane: "experiment",
+    stage: "plan",
+    topic: "Generalized Category Discovery",
+    command: "/plan-research",
+    fromRole: "researcher",
+    owner: "orchestrator",
+    fromSessionKey: "agent:researcher:local:e2e",
+    transportContext: {
+      requesterChannel: "local",
+    },
+    agentWaitTimeoutMs: 45_000,
+  });
+
+  assert.equal(params.workflowRuntime, runtimeSubagent);
+  assert.equal(params.toRole, "orchestrator");
+  assert.equal(params.requesterSessionKey, "agent:researcher:local:e2e");
+  assert.equal(params.waitTimeoutMs, 45_000);
+  assert.match(params.extraBody, /Produce a real research plan/);
 });
 
 test("auto workflow E2E runner creates a durable local summary for /autoresearch", async (t) => {

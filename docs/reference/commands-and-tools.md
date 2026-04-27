@@ -171,6 +171,8 @@ npm run test:autoresearch:real -- \
 
 `queue_paper_ingestion` 是兼容别名；新代码里推荐把语义理解为 `schedule_papernexus_import`。Discord 不参与项目绑定或上传执行。对于多论文导入，workflow 会使用 `skills/researcher/papernexus/scripts/pn_batch_import.py`，并把 `submit` 和远端 `wait/status` 分开处理：wrapper 进程退出不等于 graph ready，后续状态必须来自 PaperNexus `import_workflow` 返回的 batch/items 进度以及 `check_graph_presence`。
 
+`graph_build` 的通过条件分两档：完整路径要求 `check_graph_presence` 为 ready；降级路径允许 `missing_papers` 在已有终止失败/修复证据时继续推进，前提是图中至少有可用论文且覆盖率达到配置门槛。普通 `not-submitted` 不算终止失败，会继续走 submit；只有 submit/import 明确失败才会成为降级证据。
+
 ### Contracts 与 materializers
 
 - `materialize_ideation_contract`

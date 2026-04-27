@@ -294,6 +294,31 @@ test("selectDispatchableAutoStageAction withholds drive_stage when stage signals
   assert.equal(action, null);
 });
 
+test("selectDispatchableAutoStageAction allows explicitly self-driven stage output repair", () => {
+  const action = selectDispatchableAutoStageAction({
+    autoIteratorResult: {
+      gateBlocking: false,
+      missingStageSignals: ["{PROJ}/researcher/FRONTIER_REPORT.md"],
+      recommendedActions: [
+        {
+          kind: "drive_stage",
+          stage: "frontier_mapping",
+          owner: "researcher",
+          summary: "Package graph-grounded frontiers for ideation.",
+          command: "/frontier-mapping",
+          mailboxQueued: false,
+          mailboxMessageId: null,
+          cooldownRemainingSeconds: null,
+          blocking: false,
+          dispatchDespiteMissingSignals: true,
+        },
+      ],
+    },
+  });
+
+  assert.equal(action?.stage, "frontier_mapping");
+});
+
 test("maybeAdvanceWorkflowHookPointForProject skips before-handoff audits while stage signals are missing", async (t) => {
   const projectsRoot = await makeProjectsRoot();
   const projectRoot = path.join(projectsRoot, "alpha");
@@ -1321,6 +1346,60 @@ test("maybeLaunchAutoStageForProject dispatches a prepared owner handoff even wh
   assert.match(runs[0].message, /Immediate command: \/paper-phase/);
 });
 
+test("maybeLaunchAutoStageForProject launches self-driven frontier mapping despite missing stage outputs", async (t) => {
+  const projectsRoot = await makeProjectsRoot();
+  const projectRoot = path.join(projectsRoot, "alpha");
+  const runs = [];
+  t.after(async () => {
+    await fs.rm(projectsRoot, { recursive: true, force: true });
+  });
+  await fs.mkdir(projectRoot, { recursive: true });
+
+  const launch = await maybeLaunchAutoStageForProject({
+    workflowRuntime: {
+      async run(params) {
+        runs.push(params);
+        return { runId: `frontier-run-${runs.length}` };
+      },
+    },
+    workflowPolicy: {
+      autoMode: "aggressive",
+      autoGate: defaultAutoGateConfig(),
+      enableChannelProjectBindings: false,
+      projectsRoot,
+      heartbeatBackgroundChecks: true,
+      agentContactCooldownSeconds: 300,
+      enableWorkflowMailbox: true,
+    },
+    projectRoot,
+    projectId: "alpha",
+    autoIteratorResult: {
+      gateBlocking: false,
+      stageAfter: "frontier_mapping",
+      missingStageSignals: ["{PROJ}/researcher/FRONTIER_REPORT.md"],
+      recommendedActions: [
+        {
+          kind: "drive_stage",
+          owner: "researcher",
+          stage: "frontier_mapping",
+          summary: "Package graph-grounded frontiers for ideation.",
+          command: "/frontier-mapping",
+          mailboxMessageId: null,
+          cooldownRemainingSeconds: 0,
+          blocking: false,
+          dispatchDespiteMissingSignals: true,
+        },
+      ],
+    },
+    launchedStageKeys: new Map(),
+  });
+
+  assert.equal(launch.launched, true);
+  assert.equal(launch.reason, "started");
+  assert.equal(runs.length, 1);
+  assert.match(runs[0].message, /\/frontier-mapping/);
+});
+
 test("maybeLaunchAutoStageForProject runs researcher-owned work on a dedicated subagent session", async (t) => {
   const projectsRoot = await makeProjectsRoot();
   const projectRoot = path.join(projectsRoot, "alpha");
@@ -2060,7 +2139,7 @@ test("aggressive auto-stage handoffs no longer queue purely because another proj
       agentContactCooldownSeconds: 300,
       enableWorkflowMailbox: true,
       lobsterHandoff: {
-        enabled: true,
+        enabled: false,
         autoModeOnly: true,
         gatewayUrl: "http://127.0.0.1:18789",
         pipelinePath: "",
@@ -2472,6 +2551,196 @@ test("maybeAdvanceAutoModeDiscussionForProject prefers announce payloads over tr
   assert.equal(resolvedStore.currentRound?.aggregate?.reviewCount, 3);
 });
 
+test("maybeAdvanceAutoModeDiscussionForProject resolves caution risk locally when no runtime is available", async (t) => {
+  const projectRoot = await makeProject(await makeProjectsRoot(), "alpha", "code");
+
+  t.after(async () => {
+    await fs.rm(path.dirname(projectRoot), { recursive: true, force: true });
+  });
+
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "alpha",
+    current_stage: "code",
+    citation_integrity: {
+      verification_status: "ready",
+    },
+    writing_contract: {
+      template_status: "ready",
+    },
+    innovation_reflection: {
+      status: "fresh",
+    },
+  });
+
+  const result = await maybeAdvanceAutoModeDiscussionForProject({
+    workflowPolicy: {
+      autoMode: "aggressive",
+      autoGate: {
+        ...defaultAutoGateConfig(),
+        enabled: true,
+      },
+      enableChannelProjectBindings: true,
+      projectsRoot: path.dirname(projectRoot),
+      heartbeatBackgroundChecks: true,
+      agentContactCooldownSeconds: 300,
+      enableWorkflowMailbox: true,
+    },
+    projectRoot,
+    projectId: "alpha",
+    autoIteratorResult: {
+      configuredAutoMode: "aggressive",
+      autoModeRiskLevel: "caution",
+      autoModeRiskFingerprint: "risk-fingerprint-local",
+      autoModeReasons: ["Provider capacity prevented a live auto-mode panel."],
+      stageAfter: "code",
+      ownerAfter: "coder",
+      nextAction: "/implement-experiment",
+      blockingReason: null,
+      missingStageSignals: [],
+    },
+    deps: {
+      listChannelProjectBindingsForWorkflow() {
+        return {
+          enabled: true,
+          storePath: path.dirname(projectRoot),
+          bindings: [],
+        };
+      },
+    },
+  });
+
+  assert.equal(result.launched, false);
+  assert.equal(result.reason, "local_static_discussion_no_runtime");
+  assert.equal(result.resolved, true);
+  assert.equal(result.status, "resolved");
+
+  const store = await readAutoModeDiscussionStore(projectRoot);
+  assert.equal(store.currentRound?.status, "resolved");
+  assert.equal(store.currentRound?.aggregate?.reviewCount, 3);
+  assert.equal(
+    store.currentRound?.attempts.every((attempt) =>
+      attempt.runId?.startsWith("local-auto-discussion:")
+    ),
+    true
+  );
+  const hookStore = await readWorkflowHooksStateStore(projectRoot);
+  assert.equal(
+    hookStore.hooks["builtin.auto-mode-risk:code"]?.status,
+    "passed"
+  );
+});
+
+test("maybeAdvanceAutoModeDiscussionForProject replaces stale runtime discussion with local fallback", async (t) => {
+  const previousFallbackAfter =
+    process.env.OPENCLAW_AUTO_MODE_DISCUSSION_LOCAL_FALLBACK_AFTER_MS;
+  process.env.OPENCLAW_AUTO_MODE_DISCUSSION_LOCAL_FALLBACK_AFTER_MS = "0";
+  t.after(() => {
+    if (previousFallbackAfter == null) {
+      delete process.env.OPENCLAW_AUTO_MODE_DISCUSSION_LOCAL_FALLBACK_AFTER_MS;
+    } else {
+      process.env.OPENCLAW_AUTO_MODE_DISCUSSION_LOCAL_FALLBACK_AFTER_MS =
+        previousFallbackAfter;
+    }
+  });
+
+  const projectRoot = await makeProject(await makeProjectsRoot(), "alpha", "code");
+  const runtimeCalls = [];
+
+  t.after(async () => {
+    await fs.rm(path.dirname(projectRoot), { recursive: true, force: true });
+  });
+
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "alpha",
+    current_stage: "code",
+    citation_integrity: {
+      verification_status: "ready",
+    },
+    writing_contract: {
+      template_status: "ready",
+    },
+    innovation_reflection: {
+      status: "fresh",
+    },
+  });
+
+  const policy = {
+    autoMode: "aggressive",
+    autoGate: {
+      ...defaultAutoGateConfig(),
+      enabled: true,
+    },
+    enableChannelProjectBindings: true,
+    projectsRoot: path.dirname(projectRoot),
+    heartbeatBackgroundChecks: true,
+    agentContactCooldownSeconds: 300,
+    enableWorkflowMailbox: true,
+  };
+  const deps = {
+    listChannelProjectBindingsForWorkflow() {
+      return {
+        enabled: true,
+        storePath: path.dirname(projectRoot),
+        bindings: [],
+      };
+    },
+  };
+  const autoIteratorResult = {
+    configuredAutoMode: "aggressive",
+    autoModeRiskLevel: "caution",
+    autoModeRiskFingerprint: "risk-fingerprint-stale",
+    autoModeReasons: ["Auto-mode risk discussion was rate limited."],
+    stageAfter: "code",
+    ownerAfter: "coder",
+    nextAction: "/implement-experiment",
+    blockingReason: null,
+    missingStageSignals: [],
+  };
+
+  const started = await maybeAdvanceAutoModeDiscussionForProject({
+    workflowRuntime: {
+      async run(params) {
+        runtimeCalls.push(params);
+        return { runId: `discussion-run-${runtimeCalls.length}` };
+      },
+    },
+    workflowPolicy: policy,
+    projectRoot,
+    projectId: "alpha",
+    autoIteratorResult,
+    deps,
+  });
+
+  assert.equal(started.launched, true);
+  assert.equal(runtimeCalls.length, 3);
+
+  const fallback = await maybeAdvanceAutoModeDiscussionForProject({
+    workflowRuntime: {
+      async run() {
+        throw new Error("should not relaunch a new discussion round");
+      },
+      async waitForRun() {
+        return { status: "timeout" };
+      },
+      async getSessionMessages() {
+        return { messages: [] };
+      },
+    },
+    workflowPolicy: policy,
+    projectRoot,
+    projectId: "alpha",
+    autoIteratorResult,
+    deps,
+  });
+
+  assert.equal(fallback.reason, "local_static_discussion_runtime_stale");
+  assert.equal(fallback.resolved, true);
+  const store = await readAutoModeDiscussionStore(projectRoot);
+  assert.equal(store.currentRound?.status, "resolved");
+  assert.equal(store.currentRound?.aggregate?.reviewCount, 3);
+  assert.equal(store.roundsStartedByFingerprint[store.currentRound?.packetFingerprint], 1);
+});
+
 test("maybeAdvanceAutoModeDiscussionForProject retires superseded runtime state when risk fingerprint changes", async (t) => {
   const projectRoot = await makeProject(await makeProjectsRoot(), "alpha", "idea");
   const runtimeCalls = [];
@@ -2605,6 +2874,129 @@ test("maybeAdvanceAutoModeDiscussionForProject retires superseded runtime state 
   assert.equal(firstSessions.length, 3);
   assert.equal(firstSessions.every((entry) => entry.status !== "active"), true);
   assert.equal(activeDiscussionSessions.length, 3);
+});
+
+test("maybeAdvanceAutoModeDiscussionForProject retires stale runtime state when risk becomes stable", async (t) => {
+  const projectRoot = await makeProject(await makeProjectsRoot(), "alpha", "experiment");
+  const runtimeCalls = [];
+
+  t.after(async () => {
+    await fs.rm(path.dirname(projectRoot), { recursive: true, force: true });
+  });
+
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "alpha",
+    current_stage: "experiment",
+    citation_integrity: {
+      verification_status: "ready",
+    },
+    writing_contract: {
+      template_status: "ready",
+    },
+  });
+
+  const policy = {
+    autoMode: "aggressive",
+    autoGate: {
+      ...defaultAutoGateConfig(),
+      enabled: true,
+    },
+    enableChannelProjectBindings: true,
+    projectsRoot: path.dirname(projectRoot),
+    heartbeatBackgroundChecks: true,
+    agentContactCooldownSeconds: 300,
+    enableWorkflowMailbox: true,
+  };
+  const deps = {
+    listChannelProjectBindingsForWorkflow() {
+      return {
+        enabled: true,
+        storePath: path.dirname(projectRoot),
+        bindings: [],
+      };
+    },
+  };
+
+  const start = await maybeAdvanceAutoModeDiscussionForProject({
+    workflowRuntime: {
+      async run(params) {
+        runtimeCalls.push(params);
+        return { runId: `discussion-run-${runtimeCalls.length}` };
+      },
+    },
+    workflowPolicy: policy,
+    projectRoot,
+    projectId: "alpha",
+    autoIteratorResult: {
+      configuredAutoMode: "aggressive",
+      autoModeRiskLevel: "caution",
+      autoModeRiskFingerprint: "risk-clears-after-local-materialization",
+      autoModeReasons: ["Experiment stage was missing local reconciled artifacts."],
+      stageAfter: "experiment",
+      ownerAfter: "researcher",
+      nextAction: "/experiment-phase",
+      blockingReason: "missing experiment artifacts",
+      missingStageSignals: ["researcher/EXPERIMENT_LEDGER.json"],
+    },
+    deps,
+  });
+
+  assert.equal(start.launched, true);
+  const startedStore = await readAutoModeDiscussionStore(projectRoot);
+  const queueKeys = new Set(
+    startedStore.currentRound?.attempts
+      .map((attempt) => attempt.queueKey)
+      .filter(Boolean) ?? []
+  );
+  const sessionKeys = new Set(
+    startedStore.currentRound?.attempts
+      .map((attempt) => attempt.sessionKey)
+      .filter(Boolean) ?? []
+  );
+  assert.equal(queueKeys.size, 3);
+
+  const stable = await maybeAdvanceAutoModeDiscussionForProject({
+    workflowRuntime: {
+      async run() {
+        throw new Error("stable risk should not launch another discussion");
+      },
+    },
+    workflowPolicy: policy,
+    projectRoot,
+    projectId: "alpha",
+    autoIteratorResult: {
+      configuredAutoMode: "aggressive",
+      autoModeRiskLevel: "stable",
+      autoModeRiskFingerprint: null,
+      autoModeReasons: [],
+      stageAfter: "analyze",
+      ownerAfter: "analyzer",
+      nextAction: "/analyze",
+      blockingReason: null,
+      missingStageSignals: [],
+    },
+    deps,
+  });
+
+  assert.equal(stable.reason, "stable");
+  const clearedStore = await readAutoModeDiscussionStore(projectRoot);
+  assert.equal(clearedStore.currentRound, null);
+  const queueStore = await readWorkflowRuntimeQueueStore(projectRoot);
+  assert.deepEqual(
+    queueStore.entries
+      .filter((entry) => queueKeys.has(entry.queueKey))
+      .map((entry) => entry.status)
+      .sort(),
+    ["completed", "completed", "completed"]
+  );
+  const sessionsStore = await readWorkflowRuntimeSessionsStore(projectRoot);
+  assert.deepEqual(
+    sessionsStore.entries
+      .filter((entry) => sessionKeys.has(entry.sessionKey))
+      .map((entry) => entry.status)
+      .sort(),
+    ["completed", "completed", "completed"]
+  );
 });
 
 test("maybeAdvanceAutoModeDiscussionForProject can still launch the researcher reviewer for another project on the same channel", async (t) => {
@@ -4716,6 +5108,17 @@ test("maybeAdvanceAutoCodeReviewForProject creates and advances a code innovatio
   );
 
   const startedStore = await readCodeReviewStore(projectRoot);
+  const startedCodeReviewQueueKeys = new Set(
+    startedStore.currentRound?.attempts
+      .map((attempt) => attempt.queueKey)
+      .filter(Boolean) ?? []
+  );
+  const startedCodeReviewSessionKeys = new Set(
+    startedStore.currentRound?.attempts
+      .map((attempt) => attempt.sessionKey)
+      .filter(Boolean) ?? []
+  );
+  assert.equal(startedCodeReviewQueueKeys.size, 3);
   const codeReviewPacket = JSON.parse(
     await fs.readFile(
       path.join(projectRoot, "reviewer", "code-review", "CODE_REVIEW_PACKET.json"),
@@ -4806,5 +5209,157 @@ test("maybeAdvanceAutoCodeReviewForProject creates and advances a code innovatio
   assert.equal(
     hookStore.hookPoints.before_stage_handoff?.code?.aggregateVerdict,
     "pass"
+  );
+  const runtimeQueueStore = await readWorkflowRuntimeQueueStore(projectRoot);
+  const retiredQueueEntries = runtimeQueueStore.entries.filter((entry) =>
+    startedCodeReviewQueueKeys.has(entry.queueKey)
+  );
+  assert.equal(retiredQueueEntries.length, 3);
+  assert.deepEqual(
+    retiredQueueEntries.map((entry) => entry.status).sort(),
+    ["completed", "completed", "completed"]
+  );
+  const runtimeSessionsStore = await readWorkflowRuntimeSessionsStore(projectRoot);
+  const retiredSessions = runtimeSessionsStore.entries.filter((entry) =>
+    startedCodeReviewSessionKeys.has(entry.sessionKey)
+  );
+  assert.equal(retiredSessions.length, 3);
+  assert.deepEqual(
+    retiredSessions.map((entry) => entry.status).sort(),
+    ["completed", "completed", "completed"]
+  );
+});
+
+test("maybeAdvanceAutoCodeReviewForProject completes local static review when runtime is unavailable", async (t) => {
+  const projectRoot = await makeProject(await makeProjectsRoot(), "alpha", "code");
+
+  t.after(async () => {
+    await fs.rm(path.dirname(projectRoot), { recursive: true, force: true });
+  });
+
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "alpha",
+    current_stage: "code",
+    research_program: {
+      tracks: [
+        {
+          track_id: "track-1",
+          status: "active",
+          hypothesis: "Consistency debiasing improves GCD calibration.",
+          novelty_basis: "It adapts FixMatch consistency to unknown-class discovery.",
+        },
+      ],
+    },
+  });
+  await writeJson(path.join(projectRoot, "TRACK_REGISTRY.json"), {
+    tracks: [{ track_id: "track-1", status: "active" }],
+  });
+  await fs.mkdir(path.join(projectRoot, "orchestrator"), { recursive: true });
+  await fs.writeFile(path.join(projectRoot, "orchestrator", "PLAN.md"), "# plan\n", "utf8");
+  await fs.writeFile(path.join(projectRoot, "orchestrator", "TODOS.md"), "# todos\n", "utf8");
+  await fs.writeFile(
+    path.join(projectRoot, "orchestrator", "PLAN_AUDIT.md"),
+    "# audit\n",
+    "utf8"
+  );
+  const bundleDir = path.join(
+    projectRoot,
+    "coder",
+    "experiments",
+    "track-1",
+    "exp-1__fixmatch_gcd"
+  );
+  await fs.mkdir(bundleDir, { recursive: true });
+  await fs.writeFile(path.join(projectRoot, "coder", "EXPERIMENT_INDEX.md"), "# index\n", "utf8");
+  await fs.writeFile(path.join(bundleDir, "train.py"), "print('ok')\n", "utf8");
+  await fs.writeFile(path.join(bundleDir, "README.md"), "# experiment\n", "utf8");
+  await writeJson(path.join(bundleDir, "EXPERIMENT_MANIFEST.json"), {
+    experiment_id: "exp-1",
+    project_id: "alpha",
+    track_id: "track-1",
+    question: "Does FixMatch consistency debias GCD pseudo-labels?",
+    hypothesis: "Consistency debiasing improves GCD calibration.",
+    novelty_basis: "It adapts FixMatch consistency to unknown-class discovery.",
+    baseline_reference: "Supervised GCD baseline",
+    primary_baseline_metric: "novel_class_accuracy",
+    target_improvement: "Improve novel_class_accuracy by >= 2 points.",
+    baseline_training_protocol: "Reuse the supervised GCD training schedule.",
+    baseline_eval_protocol: "Reuse the GCD novel/known split evaluation.",
+    innovation_points: ["Consistency debiasing for pseudo-label confidence"],
+    validation_steps: [
+      {
+        step_id: "step-1",
+        objective: "Enable consistency debiasing only.",
+        covers: ["Consistency debiasing for pseudo-label confidence"],
+      },
+    ],
+    ablation_plan: [
+      {
+        ablation_id: "minus-consistency",
+        objective: "Disable consistency debiasing.",
+        covers: ["Consistency debiasing for pseudo-label confidence"],
+      },
+    ],
+    implementation_proof: {
+      changed_files: ["train.py"],
+      integration_points: [
+        {
+          point_id: "loss-hook",
+          path: "train.py",
+          symbol: "consistency_debiasing_loss",
+          covers: ["Consistency debiasing for pseudo-label confidence"],
+        },
+      ],
+      activation_signals: [
+        {
+          point_id: "metrics-log",
+          summary: "Logs report consistency debiasing enabled.",
+          covers: ["Consistency debiasing for pseudo-label confidence"],
+        },
+      ],
+      execution_command: "python train.py",
+    },
+  });
+
+  const result = await maybeAdvanceAutoCodeReviewForProject({
+    workflowPolicy: {
+      autoMode: "aggressive",
+      autoGate: {
+        ...defaultAutoGateConfig(),
+        enabled: true,
+      },
+      enableChannelProjectBindings: true,
+      projectsRoot: path.dirname(projectRoot),
+      heartbeatBackgroundChecks: true,
+      agentContactCooldownSeconds: 300,
+      enableWorkflowMailbox: true,
+    },
+    projectRoot,
+    projectId: "alpha",
+    autoIteratorResult: {
+      gateBlocking: true,
+      gateReason:
+        "CODE innovation review is pending; wait for the reviewer panel to validate baseline alignment, execution viability, and innovation-step coverage.",
+      stageAfter: "code",
+      missingStageSignals: [],
+      recommendedActions: [],
+    },
+  });
+
+  assert.equal(result.reason, "local_static_review_no_runtime");
+  assert.equal(result.approved, true);
+  assert.equal(result.reviewCount, 3);
+  const store = await readCodeReviewStore(projectRoot);
+  assert.equal(store.currentRound?.status, "approved");
+  assert.equal(
+    store.currentRound?.attempts.every((attempt) =>
+      attempt.runId?.startsWith("local-code-review:")
+    ),
+    true
+  );
+  const hookStore = await readWorkflowHooksStateStore(projectRoot);
+  assert.equal(
+    hookStore.hooks["builtin.code-innovation-review:code"]?.status,
+    "passed"
   );
 });
