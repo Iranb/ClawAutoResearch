@@ -66,6 +66,100 @@ async function readManifest(projectRoot) {
   );
 }
 
+function issueOpenCount(reviewIssues) {
+  const counts = reviewIssues?.open_counts;
+  if (counts && typeof counts === "object") {
+    return Object.values(counts).reduce((total, value) => {
+      const numeric = Number(value);
+      return total + (Number.isFinite(numeric) && numeric > 0 ? numeric : 0);
+    }, 0);
+  }
+  if (Array.isArray(reviewIssues?.issues)) {
+    return reviewIssues.issues.filter((issue) => {
+      const status = readString(issue?.status) ?? "open";
+      return !["closed", "resolved", "done"].includes(status);
+    }).length;
+  }
+  return reviewIssues?.status === "open" ? 1 : 0;
+}
+
+export async function detectLiveSubstantiveRevisionTerminal(params) {
+  const manifest = params.manifest ?? {};
+  const stage = readString(manifest.current_stage) ?? "";
+  const owner = readString(manifest.owner_agent) ?? "";
+  if (stage !== "write" || owner !== "academic_writer") {
+    return { terminal: false, reason: null, details: {} };
+  }
+
+  const paperPdfPath = path.join(params.projectRoot, "academic_writer", "paper", "main.pdf");
+  const reviewPacketPath = path.join(params.projectRoot, "reviewer", "REVIEW_PACKET.json");
+  const reviewIssuesPath = path.join(params.projectRoot, "reviewer", "REVIEW_ISSUES.json");
+  const revisionPacketJsonPath = path.join(
+    params.projectRoot,
+    "reviewer",
+    "REVISION_CONTROL_PACKET.json"
+  );
+  const revisionPacketMarkdownPath = path.join(
+    params.projectRoot,
+    "reviewer",
+    "REVISION_CONTROL_PACKET.md"
+  );
+  const revisionStatePath = path.join(
+    params.projectRoot,
+    "academic_writer",
+    "PAPER_REVISION_STATE.json"
+  );
+
+  const [
+    pdfExists,
+    reviewPacket,
+    reviewIssues,
+    revisionPacketExists,
+    revisionPacketMarkdownExists,
+    revisionState,
+  ] = await Promise.all([
+    pathExists(paperPdfPath),
+    readJsonIfExists(reviewPacketPath),
+    readJsonIfExists(reviewIssuesPath),
+    pathExists(revisionPacketJsonPath),
+    pathExists(revisionPacketMarkdownPath),
+    readJsonIfExists(revisionStatePath),
+  ]);
+  const actionItemCount = Array.isArray(reviewPacket?.action_items)
+    ? reviewPacket.action_items.length
+    : 0;
+  const openIssueCount = issueOpenCount(reviewIssues);
+  const synthesisStatus =
+    readString(manifest.innovation_synthesis_state?.status) ??
+    readString(manifest.innovationSynthesisState?.status);
+  const revisionStatus = readString(revisionState?.status);
+  const terminal =
+    pdfExists &&
+    (
+      synthesisStatus === "needs_revision" ||
+      openIssueCount > 0 ||
+      actionItemCount > 0 ||
+      revisionPacketExists ||
+      revisionPacketMarkdownExists ||
+      ["ready", "active", "needs_revision"].includes(revisionStatus ?? "")
+    );
+
+  return {
+    terminal,
+    reason: terminal ? "live_reviewer_revision_requested" : null,
+    details: {
+      stage,
+      owner,
+      pdfExists,
+      synthesisStatus: synthesisStatus ?? null,
+      reviewIssueCount: openIssueCount,
+      actionItemCount,
+      revisionPacketExists: revisionPacketExists || revisionPacketMarkdownExists,
+      revisionStatus: revisionStatus ?? null,
+    },
+  };
+}
+
 function readString(value) {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
@@ -1126,6 +1220,25 @@ export async function runAutoCommandEndToEndLive(params) {
       );
       if (pdfExists && ["submit", "done"].includes(String(manifest.current_stage ?? ""))) {
         break;
+      }
+      const revisionTerminal = await detectLiveSubstantiveRevisionTerminal({
+        projectRoot,
+        manifest,
+        lane,
+      });
+      if (revisionTerminal.terminal) {
+        const harness = await runHarnessOrFailure(projectRoot, lane, { strictContent: true });
+        return {
+          transport: bootstrapTransport,
+          conversationId,
+          bootstrap,
+          projectId: actualProjectId,
+          projectRoot,
+          turns,
+          harness,
+          failureReason: revisionTerminal.reason,
+          terminal: revisionTerminal,
+        };
       }
       const iterator = await runWorkflowAutoIterator(buildLiveAutoIteratorParams({
         projectRoot,

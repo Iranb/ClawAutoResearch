@@ -23,6 +23,7 @@ import {
   buildLiveHandoffWorkflowTaskParams,
   buildLiveAutoIteratorParams,
   deriveStageCommand,
+  detectLiveSubstantiveRevisionTerminal,
   readLiveWorkflowActivation,
 } from "../scripts/auto_command_live_orchestrator.mjs";
 
@@ -392,6 +393,41 @@ test("live E2E harness detects local workflow activation without Discord acknowl
       reason: "agent_session_active",
     }
   );
+});
+
+test("live E2E harness treats durable reviewer revision as a terminal real-run outcome", async (t) => {
+  const projectRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "openclaw-research-live-revision-terminal-")
+  );
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+  await fs.mkdir(path.join(projectRoot, "academic_writer", "paper"), { recursive: true });
+  await fs.mkdir(path.join(projectRoot, "reviewer"), { recursive: true });
+  await fs.writeFile(path.join(projectRoot, "academic_writer", "paper", "main.pdf"), "pdf");
+  await fs.writeFile(
+    path.join(projectRoot, "reviewer", "REVIEW_PACKET.json"),
+    `${JSON.stringify({ action_items: ["P1: add stronger baseline"] })}\n`
+  );
+  await fs.writeFile(
+    path.join(projectRoot, "reviewer", "REVIEW_ISSUES.json"),
+    `${JSON.stringify({ status: "open", open_counts: { high: 1 } })}\n`
+  );
+
+  const terminal = await detectLiveSubstantiveRevisionTerminal({
+    projectRoot,
+    manifest: {
+      current_stage: "write",
+      owner_agent: "academic_writer",
+      innovation_synthesis_state: { status: "needs_revision" },
+    },
+    lane: "experiment",
+  });
+
+  assert.equal(terminal.terminal, true);
+  assert.equal(terminal.reason, "live_reviewer_revision_requested");
+  assert.equal(terminal.details.reviewIssueCount, 1);
+  assert.equal(terminal.details.actionItemCount, 1);
 });
 
 test("auto workflow E2E runner merges default model fallbacks into agent-specific model config", () => {
