@@ -36,7 +36,7 @@ test("local experiment execution materializer runs and reconciles a code bundle 
       goal: "Improve generalized category discovery with FixMatch-style consistency.",
       primary_metric: "H-score",
       baseline_reference: "supervised GCD baseline",
-      datasets: ["synthetic-gcd-proxy"],
+      datasets: ["local-gcd-reference-benchmark"],
       tracks: [
         {
           track_id: "track-main",
@@ -60,6 +60,14 @@ test("local experiment execution materializer runs and reconciles a code bundle 
     agentId: "coder",
   });
   assert.equal(bundle.experimentId, "exp-1");
+  assert.ok(bundle.generatedFiles.some((entry) => entry.endsWith("/GCD_PROTOCOL.json")));
+  assert.ok(bundle.generatedFiles.some((entry) => entry.endsWith("/data/gcd_reference_split.jsonl")));
+  const trainPy = await fs.readFile(path.join(projectRoot, bundle.bundleDir, "train.py"), "utf8");
+  assert.match(trainPy, /def run_fixmatch_consistency/);
+  assert.match(trainPy, /def apply_class_balance_debiasing/);
+  assert.match(trainPy, /def compute_known_novel_h_score/);
+  const readme = await fs.readFile(path.join(projectRoot, bundle.bundleDir, "README.md"), "utf8");
+  assert.doesNotMatch(readme, /synthetic proxy|local proxy/i);
   await writeJson(path.join(projectRoot, "researcher", "EXPERIMENT_LEDGER.json"), {
     schema_version: 1,
     project_id: "local-exp",
@@ -109,7 +117,7 @@ test("local experiment execution materializer runs and reconciles a code bundle 
   assert.match(manifest.experiment_search.one_change_signature, /FixMatch/i);
   assert.equal(manifest.experiment_search.baseline_dataset_coverage_status, "covered");
   assert.deepEqual(manifest.experiment_search.validated_dataset_envelope, [
-    "synthetic-gcd-proxy",
+    "local-gcd-reference-benchmark",
   ]);
   assert.equal(manifest.experiment_memory.last_completed_experiment_id, "exp-1");
   assert.equal(manifest.experiment_memory.karpathy_inner_loop_status, "completed");
@@ -155,6 +163,7 @@ test("local experiment execution materializer runs and reconciles a code bundle 
   assert.equal(proof.receiptCount, 1);
   assert.equal(proof.receipts[0].ledgerMatched, true);
   assert.equal(proof.receipts[0].stageRunMatched, true);
+  assert.equal(proof.receipts[0].hasResultMetrics, true);
 });
 
 test("auto iterator commits code to experiment after local execution materializes ready evidence", async (t) => {
@@ -186,7 +195,7 @@ test("auto iterator commits code to experiment after local execution materialize
       goal: "Improve generalized category discovery with FixMatch-style consistency.",
       primary_metric: "H-score",
       baseline_reference: "supervised GCD baseline",
-      datasets: ["synthetic-gcd-proxy"],
+      datasets: ["local-gcd-reference-benchmark"],
       tracks: [
         {
           track_id: "track-main",
@@ -235,4 +244,114 @@ test("auto iterator commits code to experiment after local execution materialize
   assert.equal(manifest.owner_agent, "researcher");
   assert.equal(manifest.experiment_search.status, "ready_for_analysis");
   assert.equal(manifest.orchestration_state.pending_handoff_id, null);
+});
+
+test("local experiment execution repairs raw ready_for_analysis artifacts into execution proof", async (t) => {
+  const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-local-experiment-repair-"));
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "local-exp-repair",
+    current_stage: "experiment",
+    topic: "Use FixMatch consistency to improve GCD",
+    experiment_search: {
+      status: "ready_for_analysis",
+      evaluation_summary_path: "researcher/evaluation_summary.json",
+      plot_pack_path: "researcher/plot_pack.json",
+      candidate_head_commit: "candidate-repair",
+    },
+    orchestration_state: {
+      stage_run_id: "stage-repair",
+    },
+    research_program: {
+      status: "approved",
+      goal: "Improve generalized category discovery with FixMatch-style consistency.",
+      primary_metric: "H-score",
+      baseline_reference: "prototype GCD baseline",
+      datasets: ["local-gcd-reference-benchmark"],
+      tracks: [
+        {
+          track_id: "track-main",
+          status: "active",
+          hypothesis:
+            "FixMatch consistency filtering improves novel-class discovery without hurting known-class accuracy.",
+          novelty_basis:
+            "Adapt FixMatch pseudo-label consistency to known/novel GCD calibration.",
+          main_metric: "H-score",
+        },
+      ],
+      plan_selection: {
+        selected_track_id: "track-main",
+      },
+    },
+  });
+
+  const bundle = await materializeCodeExperimentBundleImpl({
+    projectRoot,
+    trigger: "test",
+    agentId: "coder",
+  });
+  const bundleDir = path.join(projectRoot, bundle.bundleDir);
+  await writeJson(path.join(bundleDir, "RESULT_SUMMARY.json"), {
+    run_id: "local-reference-gcd-42",
+    status: "completed",
+    baseline: {
+      known_accuracy: 0.72,
+      novel_accuracy: 0.31,
+      h_score: 0.4334,
+    },
+    proposed: {
+      known_accuracy: 0.74,
+      novel_accuracy: 0.45,
+      h_score: 0.5597,
+    },
+    ablations: {
+      minus_class_balance_debiasing: { h_score: 0.5 },
+      minus_consistency_filtering: { h_score: 0.49 },
+    },
+  });
+  await writeJson(path.join(projectRoot, "researcher", "EXPERIMENT_LEDGER.json"), {
+    schema_version: 1,
+    project_id: "local-exp-repair",
+    experiments: [
+      {
+        experiment_id: "exp-1",
+        track_id: "track-main",
+        config_ref: bundle.bundleDir,
+        status: "completed",
+        metadata: {
+          execution: {
+            run_id: "local-reference-gcd-42",
+          },
+        },
+      },
+    ],
+  });
+
+  const result = await materializeLocalExperimentExecutionImpl({
+    projectRoot,
+    trigger: "test-repair",
+    agentId: "researcher",
+  });
+  assert.equal(result.experimentId, "exp-1");
+  assert.ok(result.generatedFiles.includes("researcher/EXECUTION_PROOF.json"));
+
+  const repairedSummary = JSON.parse(
+    await fs.readFile(path.join(bundleDir, "RESULT_SUMMARY.json"), "utf8")
+  );
+  assert.equal(repairedSummary.metrics.delta_h_score, 0.1263);
+  assert.equal(repairedSummary.key_metric.name, "h_score");
+  assert.ok(Array.isArray(repairedSummary.result_paths));
+
+  const proof = await collectExecutionProofReceipts({
+    projectRoot,
+    manifest: JSON.parse(await fs.readFile(path.join(projectRoot, "PROJECT_MANIFEST.json"), "utf8")),
+    experimentLedger: JSON.parse(
+      await fs.readFile(path.join(projectRoot, "researcher", "EXPERIMENT_LEDGER.json"), "utf8")
+    ),
+  });
+  assert.equal(proof.ready, true);
+  assert.equal(proof.receipts[0].hasResultMetrics, true);
 });

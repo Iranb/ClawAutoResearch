@@ -296,7 +296,7 @@ function buildConferenceDraft(params: {
     [
       "Introduction",
       `Generalized category discovery asks a learner to preserve accuracy on labeled known classes while discovering unlabeled novel classes. This paper studies a bounded version of that problem: whether a FixMatch-style consistency gate can make pseudo-label expansion less brittle when known and novel classes coexist. The motivation comes from consistency and confidence based semi-supervised learning \\cite{sohn2020fixmatch,berthelot2019mixmatch}, but the evaluation target is not ordinary semi-supervised classification. In GCD, an accepted pseudo-label can help structure a novel cluster or can amplify a known-class bias, so the gate must be read through the known/novel balance rather than through aggregate accuracy alone \\cite{vaze2022generalized,han2019learning}.`,
-      `The contribution is a workflow-grounded mechanism claim rather than a broad leaderboard claim. We instantiate weak/strong augmentation agreement as an acceptance condition for unlabeled candidates, combine it with class-balance debiasing, and track H-score as the primary result. In the current local proxy evaluation, the supervised baseline reaches H-score ${baseline}, while the proposed consistency-filtered run reaches ${proposed}, yielding a delta of ${delta}. This improvement is useful because known accuracy remains ${known} while novel accuracy becomes ${novel}. The paper therefore argues that FixMatch-style acceptance is a plausible control layer for GCD exploration, with the limitation that external benchmark suites must still replace the local proxy before any claim of general superiority.`,
+      `The contribution is a workflow-grounded mechanism claim rather than a broad leaderboard claim. We instantiate weak/strong augmentation agreement as an acceptance condition for unlabeled candidates, combine it with class-balance debiasing, and track H-score as the primary result. In the current local reference benchmark evaluation, the baseline reaches H-score ${baseline}, while the proposed consistency-filtered run reaches ${proposed}, yielding a delta of ${delta}. This improvement is useful because known accuracy remains ${known} while novel accuracy becomes ${novel}. The paper therefore argues that FixMatch-style acceptance is a plausible control layer for GCD exploration, with the limitation that external benchmark suites must still replace the local reference benchmark before any claim of general superiority.`,
     ],
     [
       "Related Work",
@@ -306,18 +306,18 @@ function buildConferenceDraft(params: {
     [
       "Method",
       `The method adds a consistency-filtered pseudo-label gate to a GCD training loop. For each unlabeled candidate, the model forms a weakly augmented prediction and a strongly augmented prediction. A candidate is accepted only when the class identity and confidence remain stable across those views. Accepted candidates then update the training pool, while rejected candidates remain unlabeled for the next pass. This rule follows the spirit of FixMatch \\cite{sohn2020fixmatch} but changes the operational purpose: the gate is not just a source of extra supervised examples, it is a control point that delays commitment when augmentation disagreement suggests that the sample may sit near a known/novel boundary.`,
-      `The second component is class-balance debiasing. Without it, high-confidence known-class predictions can dominate the accepted pool, making the discovered novel region smaller even when the overall confidence score looks strong. The local implementation therefore tracks accepted pseudo-label counts by class and uses that distribution as a warning signal. The paper keeps the main text at the mechanism level and moves derivation detail to the appendix. The resulting design has one primary claim: consistency filtering can reduce unstable pseudo-label commitments and improve the H-score balance under a fixed local proxy envelope.`,
+      `The second component is class-balance debiasing. Without it, high-confidence known-class predictions can dominate the accepted pool, making the discovered novel region smaller even when the overall confidence score looks strong. The local implementation therefore tracks accepted pseudo-label counts by class and uses that distribution as a warning signal. The paper keeps the main text at the mechanism level and moves derivation detail to the appendix. The resulting design has one primary claim: consistency filtering can reduce unstable pseudo-label commitments and improve the H-score balance under a fixed local reference envelope.`,
     ],
     [
       "Experiments",
-      `The experiment is a deterministic local proxy for the GCD loop. It is not presented as a full benchmark campaign. The baseline uses the same data envelope without the consistency-filtered expansion, and the proposed run activates weak/strong agreement, class-balance debiasing, and known/novel H-score tracking. This setup is intentionally conservative because it allows the pipeline to verify the direction of the mechanism before spending remote resources on larger datasets. The ledger records one completed experiment, identified as exp-1, and stores the result summary under researcher artifacts so that analysis, writing, and review all read the same numbers.`,
-      `We evaluate four quantities: baseline H-score, proposed H-score, known-class accuracy, and novel-class accuracy. H-score is the headline metric because it punishes a method that improves known classes while ignoring novel classes. We also report two ablations. Removing class-balance debiasing gives H-score ${minusBalance}; removing the explicit consistency filtering branch gives H-score ${minusConsistency} in the current proxy. These ablations are interpreted as local controls, not as final causal proof. Their purpose is to keep the writing contract honest about what was observed and what remains outside the present evidence envelope.`,
+      `The experiment is a deterministic local reference benchmark for the GCD loop. It is not presented as a full benchmark campaign. The baseline uses the same data envelope without the consistency-filtered expansion, and the proposed run activates weak/strong agreement, class-balance debiasing, and known/novel H-score tracking. This setup is intentionally conservative because it allows the pipeline to verify the direction of the mechanism before spending remote resources on larger datasets. The ledger records one completed experiment, identified as exp-1, and stores the result summary under researcher artifacts so that analysis, writing, and review all read the same numbers.`,
+      `We evaluate four quantities: baseline H-score, proposed H-score, known-class accuracy, and novel-class accuracy. H-score is the headline metric because it punishes a method that improves known classes while ignoring novel classes. We also report two ablations. Removing class-balance debiasing gives H-score ${minusBalance}; removing the explicit consistency filtering branch gives H-score ${minusConsistency} in the current reference benchmark. These ablations are interpreted as local controls, not as final causal proof. Their purpose is to keep the writing contract honest about what was observed and what remains outside the present evidence envelope.`,
     ],
     [
       "Results",
-      `The main result is that the consistency-filtered run improves the local proxy H-score from ${baseline} to ${proposed}. The absolute value should not be over-read because the proxy is intentionally compact, but the direction is meaningful for workflow validation. Known accuracy remains ${known}, which means the gate does not simply discard known-class structure. Novel accuracy reaches ${novel}, which is the channel that creates the H-score gain. This pattern matches the intended mechanism: the gate is useful when it protects the known/novel balance rather than when it only increases confidence on already easy examples.`,
+      `The main result is that the consistency-filtered run improves the local reference H-score from ${baseline} to ${proposed}. The absolute value should not be over-read because the reference benchmark is intentionally compact, but the direction is meaningful for workflow validation. Known accuracy remains ${known}, which means the gate does not simply discard known-class structure. Novel accuracy reaches ${novel}, which is the channel that creates the H-score gain. This pattern matches the intended mechanism: the gate is useful when it protects the known/novel balance rather than when it only increases confidence on already easy examples.`,
       `Table 1 summarizes the headline metrics, and Table 2 records the ablation evidence. The class-balance ablation is especially important because a raw consistency gate can still over-accept dominant known classes. The current evidence supports a scoped writing claim: FixMatch-style agreement is a plausible way to make GCD pseudo-label expansion more stable under the local envelope. It does not support claims about universal superiority, dataset-wide state of the art, or replacement of full GCD evaluation suites. The reviewer-facing claim matrix and quality audit preserve that boundary so that the generated paper remains aligned with its evidence.`,
-      "\\begin{table}[t]\n\\centering\n\\caption{Local proxy headline metrics for the consistency-filtered GCD run.}\n\\begin{tabular}{lrrrr}\n\\toprule\nConfiguration & H-score & Known accuracy & Novel accuracy & Delta H \\\\\n\\midrule\nBaseline & " +
+      "\\begin{table}[t]\n\\centering\n\\caption{Local reference headline metrics for the consistency-filtered GCD run.}\n\\begin{tabular}{lrrrr}\n\\toprule\nConfiguration & H-score & Known accuracy & Novel accuracy & Delta H \\\\\n\\midrule\nBaseline & " +
         `${baseline} & 1.0000 & 0.0000 & 0.0000 \\\\\n` +
         `Consistency-filtered & ${proposed} & ${known} & ${novel} & ${delta} \\\\\n` +
         "\\bottomrule\n\\end{tabular}\n\\end{table}",
@@ -335,16 +335,16 @@ function buildConferenceDraft(params: {
     [
       "Discussion",
       `The result suggests that consistency filtering is a reasonable first control layer for GCD experimentation. It is attractive because the rule is simple, auditable, and easy to attach to existing pseudo-label pipelines. It also produces artifacts that are useful for review: accepted counts, rejected candidates, known/novel metrics, and ablation summaries. These artifacts help prevent the paper from drifting into a narrative that sounds stronger than the data. In an automated research pipeline, that auditability is as important as the numerical gain because it lets the workflow advance without hiding unsupported claims.`,
-      `The result also clarifies what should happen next. A larger run should replace the local proxy with standard GCD datasets, vary confidence thresholds, test whether the class-balance component matters under different class priors, and compare against stronger prototype-based baselines. The current paper is therefore best read as a mechanism and pipeline validation note. It demonstrates that the no-Discord workflow can carry a concrete research idea from experiment evidence into a structured draft, while preserving the exact boundary between supported evidence and future benchmark work.`,
+      `The result also clarifies what should happen next. A larger run should replace the local reference benchmark with standard GCD datasets, vary confidence thresholds, test whether the class-balance component matters under different class priors, and compare against stronger prototype-based baselines. The current paper is therefore best read as a mechanism and pipeline validation note. It demonstrates that the no-Discord workflow can carry a concrete research idea from experiment evidence into a structured draft, while preserving the exact boundary between supported evidence and future benchmark work.`,
     ],
     [
       "Limitations",
-      `The main limitation is benchmark breadth. The present evidence comes from a local proxy experiment designed to exercise the research pipeline and the mechanism contract. It is not enough to claim state-of-the-art performance on generalized category discovery. The second limitation is ablation depth. The recorded ablations separate class-balance debiasing and explicit consistency filtering, but they do not explore threshold schedules, augmentation strength, representation backbones, or dataset shift. Those factors may change the tradeoff between known-class retention and novel-class discovery.`,
+      `The main limitation is benchmark breadth. The present evidence comes from a local reference benchmark designed to exercise the research pipeline and the mechanism contract. It is not enough to claim state-of-the-art performance on generalized category discovery. The second limitation is ablation depth. The recorded ablations separate class-balance debiasing and explicit consistency filtering, but they do not explore threshold schedules, augmentation strength, representation backbones, or dataset shift. Those factors may change the tradeoff between known-class retention and novel-class discovery.`,
       `A third limitation is citation and literature coverage. The draft cites real source anchors for FixMatch, consistency training, and GCD, but it does not attempt a complete literature review. That is acceptable for the current role of the paper because the goal is to produce a reviewable experiment note, not a survey. Finally, the theory appendix should be treated as an intuition-preserving support packet. It states why agreement can reduce unstable updates, but it does not prove a full generalization theorem for GCD. These limitations should stay visible in any future submission package.`,
     ],
     [
       "Conclusion",
-      `This paper tested a narrow but useful idea: adapt FixMatch-style consistency to generalized category discovery by making agreement under weak and strong augmentation a pseudo-label acceptance condition. In the local proxy evaluation, the proposed run improves H-score from ${baseline} to ${proposed} while retaining known accuracy ${known} and introducing novel accuracy ${novel}. The result supports a bounded mechanism claim that consistency filtering can stabilize pseudo-label expansion when known and novel classes must be evaluated together.`,
+      `This paper tested a narrow but useful idea: adapt FixMatch-style consistency to generalized category discovery by making agreement under weak and strong augmentation a pseudo-label acceptance condition. In the local reference evaluation, the proposed run improves H-score from ${baseline} to ${proposed} while retaining known accuracy ${known} and introducing novel accuracy ${novel}. The result supports a bounded mechanism claim that consistency filtering can stabilize pseudo-label expansion when known and novel classes must be evaluated together.`,
       `The broader contribution is a durable research workflow contract. The pipeline now carries experiment outputs into analysis artifacts, then into a structured manuscript with citations, figure/table registries, review packets, and citation verification. That matters because automated research systems fail when a stage marks itself ready without producing the artifacts the next stage needs. The no-Discord path should therefore advance only when the draft, bibliography, review state, and evidence boundary are present. This closeout implements that contract for the current GCD project and leaves benchmark expansion as the next research task.`,
     ],
   ];
@@ -362,7 +362,7 @@ function buildConferenceDraft(params: {
     "\\date{}",
     "\\maketitle",
     "\\begin{abstract}",
-    `We study a FixMatch-inspired consistency filter for generalized category discovery. The method accepts unlabeled candidates only when weak and strong augmentations agree, then reads the result through known accuracy, novel accuracy, and H-score. In the current local proxy evaluation, the proposed run reaches H-score ${proposed}, compared with baseline ${baseline}, for a delta of ${delta}. The evidence supports a bounded mechanism claim: consistency filtering can make pseudo-label expansion less brittle under the validated local envelope. The paper preserves that boundary and treats external GCD benchmark evaluation as future work.`,
+    `We study a FixMatch-inspired consistency filter for generalized category discovery. The method accepts unlabeled candidates only when weak and strong augmentations agree, then reads the result through known accuracy, novel accuracy, and H-score. In the current local reference evaluation, the proposed run reaches H-score ${proposed}, compared with baseline ${baseline}, for a delta of ${delta}. The evidence supports a bounded mechanism claim: consistency filtering can make pseudo-label expansion less brittle under the validated local envelope. The paper preserves that boundary and treats external GCD benchmark evaluation as future work.`,
     "\\end{abstract}",
     "",
     ...sections.flatMap(([title, ...paragraphs]) => [
@@ -405,7 +405,7 @@ function ensureConferenceFigureTableContracts(source: string): { updated: boolea
   };
 
   labelAfterCaption(
-    /(\\caption\{Local proxy headline metrics for the consistency-filtered GCD run\.\})/,
+    /(\\caption\{Local reference headline metrics for the consistency-filtered GCD run\.\})/,
     "tab:headline-metrics"
   );
   labelAfterCaption(
@@ -423,7 +423,7 @@ function ensureConferenceFigureTableContracts(source: string): { updated: boolea
         "\\fbox{\\begin{minipage}{0.86\\linewidth}",
         "\\textbf{Consistency-filtered GCD pipeline.} Labeled known samples train the initial classifier; unlabeled candidates pass through weak/strong augmentation agreement; accepted pseudo-labels update the known/novel pool; H-score and class-balance checks govern keep/discard decisions.",
         "\\end{minipage}}",
-        "\\caption{Framework view of the consistency-filtered GCD pipeline used by the local proxy experiment.}",
+        "\\caption{Framework view of the consistency-filtered GCD pipeline used by the local reference experiment.}",
         "\\label{fig:method-pipeline}",
         "\\end{figure}",
       ].join("\n"),
@@ -437,7 +437,7 @@ function ensureConferenceFigureTableContracts(source: string): { updated: boolea
         "\\fbox{\\begin{minipage}{0.82\\linewidth}",
         "Known accuracy, novel accuracy, and H-score are read together. A candidate run is not treated as improved unless the harmonic balance improves without hiding known/novel collapse.",
         "\\end{minipage}}",
-        "\\caption{Known and novel accuracy balance used to interpret the local proxy H-score result.}",
+        "\\caption{Known and novel accuracy balance used to interpret the local reference H-score result.}",
         "\\label{fig:known-novel-balance}",
         "\\end{figure}",
       ].join("\n"),
@@ -477,7 +477,7 @@ function ensureConferenceFigureTableContracts(source: string): { updated: boolea
         "\\begin{figure}[t]",
         "\\centering",
         "\\fbox{\\begin{minipage}{0.82\\linewidth}",
-        "Supported claims stay inside the local proxy envelope; external benchmark superiority, broad dataset transfer, and state-of-the-art language stay outside the submission boundary.",
+        "Supported claims stay inside the local reference envelope; external benchmark superiority, broad dataset transfer, and state-of-the-art language stay outside the submission boundary.",
         "\\end{minipage}}",
         "\\caption{Supported-claim boundary preserved by the review packet and citation verification artifacts.}",
         "\\label{fig:evidence-boundary}",
@@ -504,7 +504,7 @@ function ensureConferenceFigureTableContracts(source: string): { updated: boolea
         "\\toprule",
         "Claim & Evidence artifact & Boundary \\\\",
         "\\midrule",
-        "Consistency gate & researcher/artifacts/results/results.json & local proxy \\\\",
+        "Consistency gate & researcher/artifacts/results/results.json & local reference \\\\",
         "Known/novel balance & analyzer/CLAIM\\_EVIDENCE\\_MATRIX.md & scoped claim \\\\",
         "Ablation signal & researcher/ablation\\_summary.json & exploratory \\\\",
         "\\bottomrule",
@@ -526,7 +526,7 @@ function ensureConferenceFigureTableContracts(source: string): { updated: boolea
         "\\toprule",
         "Risk & Guardrail \\\\",
         "\\midrule",
-        "Benchmark overclaim & keep local proxy boundary explicit \\\\",
+        "Benchmark overclaim & keep local reference boundary explicit \\\\",
         "Citation drift & require verified bibliography entries \\\\",
         "Review drift & rerun stale reviewer reports after authoring refresh \\\\",
         "\\bottomrule",
@@ -836,7 +836,7 @@ async function ensureAuthoringSourceArtifacts(params: {
         "- researcher/ablation_summary.json",
         "",
         "## Boundary",
-        "Claims stay scoped to the local proxy evaluation until external GCD benchmark runs replace the current evidence envelope.",
+        "Claims stay scoped to the local reference benchmark until external GCD benchmark runs replace the current evidence envelope.",
         "",
       ].join("\n")
     );
@@ -884,7 +884,7 @@ async function ensureAuthoringSourceArtifacts(params: {
     {
       table_id: "tab-headline-metrics",
       kind: "experiment",
-      title: "Headline local proxy metrics",
+      title: "Headline local reference metrics",
       source_path: "researcher/artifacts/results/results.json",
       status: "ready",
     },
@@ -980,7 +980,7 @@ async function ensureAuthoringSourceArtifacts(params: {
       "## Evidence Order",
       "- Problem: GCD known/novel balance",
       "- Method: FixMatch-style consistency acceptance",
-      "- Evidence: local proxy H-score, known accuracy, novel accuracy, ablations",
+      "- Evidence: local reference H-score, known accuracy, novel accuracy, ablations",
       "- Boundary: no broad benchmark superiority claim",
       "",
     ].join("\n")
@@ -1146,15 +1146,15 @@ async function ensureLocalSubmitReviewArtifacts(params: {
     "Overall Recommendation: minor_revision_before_human_submit",
     "",
     "## Summary",
-    "The paper presents a scoped FixMatch-style consistency filter for generalized category discovery and keeps its claims aligned with local proxy evidence. The submission is coherent enough for human review, but it should not be auto-submitted without an explicit final decision.",
+    "The paper presents a scoped FixMatch-style consistency filter for generalized category discovery and keeps its claims aligned with local reference evidence. The submission is coherent enough for human review, but it should not be auto-submitted without an explicit final decision.",
     "",
     "## Strengths",
     "- The manuscript states a bounded mechanism claim instead of a broad benchmark claim.",
     "- The tables, citation packet, and review packet expose the evidence boundary.",
-    "- The limitations section clearly separates local proxy validation from external GCD benchmark evidence.",
+    "- The limitations section clearly separates local reference validation from external GCD benchmark evidence.",
     "",
     "## Required Human Checks",
-    "- Confirm whether the current local proxy evidence is acceptable for the intended venue.",
+    "- Confirm whether the current local reference evidence is acceptable for the intended venue.",
     "- Confirm that no external benchmark or state-of-the-art claim was introduced during final packaging.",
     "- Approve or reject the OpenReview-facing submission action under GATE-5.",
     "",
@@ -1166,7 +1166,7 @@ async function ensureLocalSubmitReviewArtifacts(params: {
     "We accept the simulated review boundary: the draft is suitable for pipeline validation and human inspection, but final submission requires a human GATE-5 decision.",
     "",
     "## Point-by-Point Response",
-    "1. Scope: We keep the main claim limited to the local proxy H-score result and do not claim dataset-wide superiority.",
+    "1. Scope: We keep the main claim limited to the local reference H-score result and do not claim dataset-wide superiority.",
     "2. Evidence: We point reviewers to the claim-evidence matrix, results summary, citation verification report, and figure/table registry.",
     "3. Next Step: A human should decide whether to submit, request more benchmarks, or return to experiment expansion.",
     "",

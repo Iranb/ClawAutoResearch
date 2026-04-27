@@ -42,7 +42,7 @@ async function seedExperimentReadyProject() {
       goal: "Improve generalized category discovery with FixMatch-style consistency.",
       primary_metric: "H-score",
       baseline_reference: "supervised GCD baseline",
-      datasets: ["synthetic-gcd-proxy"],
+      datasets: ["local-gcd-reference-benchmark"],
       tracks: [
         {
           track_id: "track-main",
