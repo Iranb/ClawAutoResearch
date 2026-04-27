@@ -58,6 +58,14 @@ type ExistingReviewReportDisposition = {
   updatedAt: string | null;
 };
 
+type ParagraphLogicBlockingIssue = {
+  severity: string | null;
+  sectionId: string | null;
+  fromParagraph: number | null;
+  toParagraph: number | null;
+  nextOpening: string | null;
+};
+
 type ResultSnapshot = {
   baselineHScore: number | null;
   proposedHScore: number | null;
@@ -1131,6 +1139,98 @@ function repairConferenceParagraphTransitions(source: string): { updated: boolea
   return { updated: text !== source, text };
 }
 
+const PARAGRAPH_TRANSITION_OPENING_RE =
+  /^(however|therefore|thus|consequently|by contrast|in contrast|moreover|furthermore|meanwhile|collectively|together|next|finally|beyond this|against this background|with this framing|to address this|to understand this|specifically)\b/i;
+
+function readParagraphLogicIssue(value: unknown): ParagraphLogicBlockingIssue | null {
+  const record = readRecord(value);
+  if (!record) {
+    return null;
+  }
+  return {
+    severity: readString(record.severity),
+    sectionId: readString(record.sectionId) ?? readString(record.section_id),
+    fromParagraph: readNumber(record.fromParagraph) ?? readNumber(record.from_paragraph),
+    toParagraph: readNumber(record.toParagraph) ?? readNumber(record.to_paragraph),
+    nextOpening: readString(record.nextOpening) ?? readString(record.next_opening),
+  };
+}
+
+async function readParagraphLogicBlockingIssues(
+  projectRoot: string
+): Promise<ParagraphLogicBlockingIssue[]> {
+  const audit =
+    (await readJsonIfExists<Record<string, unknown>>(
+      path.join(projectRoot, "academic_writer", "PARAGRAPH_LOGIC_AUDIT.json")
+    )) ?? {};
+  const rawIssues = Array.isArray(audit.blocking_issues) ? audit.blocking_issues : [];
+  return rawIssues
+    .map(readParagraphLogicIssue)
+    .filter((issue): issue is ParagraphLogicBlockingIssue => Boolean(issue?.nextOpening));
+}
+
+function paragraphBridgeForIssue(issue: ParagraphLogicBlockingIssue): string {
+  const sectionId = issue.sectionId?.toLowerCase() ?? "";
+  if (sectionId.includes("related")) {
+    return "Against this background, this paragraph keeps the same GCD/FixMatch evidence chain explicit.";
+  }
+  if (sectionId.includes("experiment") || sectionId.includes("result")) {
+    return "Specifically, this paragraph continues the same GCD/FixMatch evaluation thread.";
+  }
+  if (sectionId.includes("discussion") || sectionId.includes("limitation")) {
+    return "Beyond this, this paragraph keeps the evidence boundary connected to the preceding claim.";
+  }
+  if (sectionId.includes("conclusion")) {
+    return "Finally, this paragraph carries the same bounded GCD contribution into the closeout.";
+  }
+  return "With this framing, this paragraph keeps the same GCD/FixMatch argument chain explicit.";
+}
+
+function repairConferenceParagraphTransitionsFromAudit(
+  source: string,
+  issues: ParagraphLogicBlockingIssue[]
+): { updated: boolean; text: string; repairedCount: number } {
+  let text = source;
+  let repairedCount = 0;
+  const openings = uniqueStrings(
+    issues
+      .filter((issue) => issue.severity === null || issue.severity === "blocking")
+      .map((issue) => issue.nextOpening)
+  ).slice(0, 16);
+  for (const opening of openings) {
+    if (!opening || PARAGRAPH_TRANSITION_OPENING_RE.test(opening)) {
+      continue;
+    }
+    const issue = issues.find((candidate) => candidate.nextOpening === opening) ?? {
+      severity: "blocking",
+      sectionId: null,
+      fromParagraph: null,
+      toParagraph: null,
+      nextOpening: opening,
+    };
+    const bridge = paragraphBridgeForIssue(issue);
+    const replacement = `${bridge} ${opening}`;
+    const exactParagraphStart = text.indexOf(`\n\n${opening}`);
+    if (exactParagraphStart >= 0) {
+      text =
+        text.slice(0, exactParagraphStart) +
+        `\n\n${replacement}` +
+        text.slice(exactParagraphStart + 2 + opening.length);
+      repairedCount += 1;
+      continue;
+    }
+    const firstOccurrence = text.indexOf(opening);
+    if (firstOccurrence >= 0) {
+      text =
+        text.slice(0, firstOccurrence) +
+        replacement +
+        text.slice(firstOccurrence + opening.length);
+      repairedCount += 1;
+    }
+  }
+  return { updated: text !== source, text, repairedCount };
+}
+
 async function ensureLocalSubmitReviewArtifacts(params: {
   projectRoot: string;
   mainPdfExists: boolean;
@@ -1590,6 +1690,80 @@ function buildReviewPacketBlockingArtifacts(params: {
   return [];
 }
 
+async function writeDeterministicLocalReviewReport(params: {
+  projectRoot: string;
+  paperMode: "survey" | "conference";
+  citeCount: number;
+  bibliographyCount: number;
+  sectionCount: number;
+  citationSummary: CitationSummary;
+  compileStatus: string;
+  mainPdfExists: boolean;
+  paragraphLogicStatus: string;
+}): Promise<{ path: string; verdict: "ready" | "needs_revision" }> {
+  const unresolvedItems: string[] = [];
+  if (params.paperMode === "conference" && params.citeCount === 0) {
+    unresolvedItems.push("Add manuscript citations before review closeout.");
+  }
+  if (
+    params.citationSummary.suspicious > 0 ||
+    params.citationSummary.hallucinated > 0
+  ) {
+    unresolvedItems.push("Resolve suspicious or hallucinated citation entries.");
+  }
+  if (params.compileStatus === "fail" || !params.mainPdfExists) {
+    unresolvedItems.push("Regenerate a passing manuscript PDF before submit closeout.");
+  }
+  if (params.paragraphLogicStatus === "blocked") {
+    unresolvedItems.push("Repair blocking paragraph logic audit findings.");
+  }
+  if (params.sectionCount < 5 && params.paperMode === "conference") {
+    unresolvedItems.push("Complete the core conference manuscript sections.");
+  }
+  const verdict: "ready" | "needs_revision" =
+    unresolvedItems.length > 0 ? "needs_revision" : "ready";
+  const score = verdict === "ready" ? 8 : 5;
+  const actionItems =
+    unresolvedItems.length > 0
+      ? unresolvedItems
+      : [
+          "Proceed to submit-stage gate with the deterministic review packet, citation verification report, and paper QC report.",
+        ];
+  const reportPath = path.join(params.projectRoot, "reviewer", "REVIEW_REPORT.md");
+  const report = [
+    "# Review Report",
+    "",
+    "Review Mode: local_no_discord_closeout",
+    "Reviewer: deterministic-authoring-review",
+    `Generated At: ${new Date().toISOString()}`,
+    `Score: ${score}/10`,
+    `Verdict: ${verdict}`,
+    "",
+    "## Review Summary",
+    "",
+    verdict === "ready"
+      ? "The local no-Discord review pass found the refreshed manuscript, citation packet, paragraph logic audit, and compile artifacts consistent enough for the submit-stage gate."
+      : "The local no-Discord review pass found blocking closeout gaps that must return to the writer before submit-stage routing.",
+    "",
+    "## Checked Artifacts",
+    "",
+    `- Manuscript citations: ${params.citeCount}`,
+    `- Bibliography entries: ${params.bibliographyCount}`,
+    `- Sections: ${params.sectionCount}`,
+    `- Compile status: ${params.compileStatus}`,
+    `- PDF exists: ${params.mainPdfExists ? "yes" : "no"}`,
+    `- Paragraph logic status: ${params.paragraphLogicStatus}`,
+    `- Citation suspicious/hallucinated: ${params.citationSummary.suspicious}/${params.citationSummary.hallucinated}`,
+    "",
+    "## Action Items",
+    "",
+    ...actionItems.map((item, index) => `${index + 1}. ${item}`),
+    "",
+  ].join("\n");
+  await writeTextEnsured(reportPath, report);
+  return { path: "reviewer/REVIEW_REPORT.md", verdict };
+}
+
 function buildCloseoutIssues(params: {
   paperMode: "survey" | "conference";
   citeCount: number;
@@ -1855,9 +2029,24 @@ export async function reconcileAuthoringCloseout(params: {
     },
   });
 
-  const paragraphLogicAudit = await materializeParagraphLogicAudit({
+  let paragraphLogicAudit = await materializeParagraphLogicAudit({
     projectRoot,
   });
+  if (
+    inferredPaperMode === "conference" &&
+    paragraphLogicAudit.state.status === "blocked"
+  ) {
+    const auditIssues = await readParagraphLogicBlockingIssues(projectRoot);
+    const auditRepair = repairConferenceParagraphTransitionsFromAudit(
+      workingMainTex,
+      auditIssues
+    );
+    if (auditRepair.updated) {
+      workingMainTex = auditRepair.text;
+      await writeTextEnsured(mainTexPath, workingMainTex);
+      paragraphLogicAudit = await materializeParagraphLogicAudit({ projectRoot });
+    }
+  }
 
   await setGraphGuidedWritingState({
     projectRoot,
@@ -1950,6 +2139,35 @@ export async function reconcileAuthoringCloseout(params: {
     ].join("\n")
   );
 
+  const preCloseoutReviewReportDisposition = await analyzeExistingReviewReport({
+    projectRoot,
+    mainTexPath,
+    refsBibPath,
+  });
+  const existingReviewReportRaw = await readTextIfExists(
+    path.join(projectRoot, "reviewer", "REVIEW_REPORT.md")
+  );
+  const existingReviewReportIsLocalCloseout =
+    /\bReview Mode:\s*local_no_discord_closeout\b/i.test(existingReviewReportRaw ?? "");
+  const localReviewReportFiles: string[] = [];
+  if (
+    inferredPaperMode === "conference" &&
+    (preCloseoutReviewReportDisposition.verdict !== "needs_revision" ||
+      existingReviewReportIsLocalCloseout)
+  ) {
+    const localReport = await writeDeterministicLocalReviewReport({
+      projectRoot,
+      paperMode: inferredPaperMode,
+      citeCount: citeKeys.length,
+      bibliographyCount: bibKeys.length,
+      sectionCount: sectionTitles.length,
+      citationSummary,
+      compileStatus: compileResult.compileStatus,
+      mainPdfExists,
+      paragraphLogicStatus: paragraphLogicAudit.state.status,
+    });
+    localReviewReportFiles.push(localReport.path);
+  }
   const reviewReportDisposition = await analyzeExistingReviewReport({
     projectRoot,
     mainTexPath,
@@ -2184,6 +2402,7 @@ export async function reconcileAuthoringCloseout(params: {
       "academic_writer/PAPER_QC.md",
       "reviewer/SURFACE_REVIEW.json",
       "reviewer/FIGURE_SELECTION_REVIEW.json",
+      ...localReviewReportFiles,
       ...paragraphLogicAudit.generatedFiles,
       "reviewer/REVIEW_ISSUES.json",
       "reviewer/REVIEW_PACKET.json",

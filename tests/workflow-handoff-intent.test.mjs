@@ -78,3 +78,33 @@ test("handoff status machine rejects invalid terminal transitions", async (t) =>
   assert.equal(rejected?.status, "escalated");
   assert.equal(canTransitionWorkflowHandoffStatus({ from: "escalated", to: "queued" }), false);
 });
+
+test("handoff status machine accepts fast local claim completion", async (t) => {
+  const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-handoff-"));
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  const created = await upsertWorkflowHandoffIntent({
+    projectRoot,
+    idempotencyKey: "local-claim-complete",
+    toRole: "researcher",
+    reason: "stage_owner_change",
+    stage: "review",
+  });
+  const claimed = await transitionWorkflowHandoffIntent({
+    projectRoot,
+    intentId: created.intent.intentId,
+    toStatus: "claimed",
+  });
+  assert.equal(claimed?.status, "claimed");
+  const completed = await transitionWorkflowHandoffIntent({
+    projectRoot,
+    intentId: created.intent.intentId,
+    toStatus: "completed",
+    terminalReason: "local no-discord worker finished synchronously",
+  });
+  assert.equal(completed?.status, "completed");
+  assert.equal(isWorkflowHandoffTerminalStatus(completed.status), true);
+  assert.equal(canTransitionWorkflowHandoffStatus({ from: "claimed", to: "completed" }), true);
+});

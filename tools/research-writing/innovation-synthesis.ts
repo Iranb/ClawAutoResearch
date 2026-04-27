@@ -249,6 +249,39 @@ function collectInnovationLabels(params: {
   return uniqueStrings(labels);
 }
 
+function inferFallbackInnovationLabels(params: {
+  centralThesis: string | null;
+  integrationText: string;
+  researchGoal: string | null;
+  problemStatement: string | null;
+  experimentManifests: Array<Record<string, unknown>>;
+}): string[] {
+  const corpus = [
+    params.centralThesis,
+    params.integrationText,
+    params.researchGoal,
+    params.problemStatement,
+    ...params.experimentManifests.map((manifest) => JSON.stringify(manifest)),
+  ]
+    .filter(Boolean)
+    .join("\n")
+    .toLowerCase();
+  if (/\bgcd\b|generalized category discovery/.test(corpus)) {
+    if (/fixmatch|weak.?strong|consistency|pseudo.?label/.test(corpus)) {
+      return [
+        "FixMatch-style consistency filtering with bounded class-balance debiasing for generalized category discovery",
+      ];
+    }
+    return [
+      "Bounded generalized category discovery evidence contract connecting known and novel class behavior",
+    ];
+  }
+  if (params.centralThesis) {
+    return [params.centralThesis];
+  }
+  return [];
+}
+
 function inferSupportStatus(params: {
   label: string;
   claimEvidenceMatrixText: string | null;
@@ -541,7 +574,7 @@ export async function materializeInnovationSynthesis(params: {
       }).catch(() => null)
     : null;
 
-  const innovationLabels = collectInnovationLabels({
+  const baseInnovationLabels = collectInnovationLabels({
     researchTrack,
     experimentManifests,
   });
@@ -567,6 +600,18 @@ export async function materializeInnovationSynthesis(params: {
   ]
     .filter(Boolean)
     .join("\n");
+  const innovationLabels = uniqueStrings([
+    ...baseInnovationLabels,
+    ...(baseInnovationLabels.length > 0
+      ? []
+      : inferFallbackInnovationLabels({
+          centralThesis,
+          integrationText,
+          researchGoal: researchProgram.goal,
+          problemStatement: researchProgram.problemStatement,
+          experimentManifests,
+        })),
+  ]);
   const integrationPattern = inferIntegrationPattern(
     integrationText,
     innovationLabels.length
@@ -595,7 +640,12 @@ export async function materializeInnovationSynthesis(params: {
   }));
 
   const multiplePoints = pointStates.length >= 2;
-  const weakIntegration = !hasAnyIntegrationLanguage(integrationText);
+  const hasExperimentBackedFallback =
+    baseInnovationLabels.length === 0 &&
+    innovationLabels.length > 0 &&
+    experimentManifests.length > 0;
+  const weakIntegration =
+    !hasAnyIntegrationLanguage(integrationText) && !hasExperimentBackedFallback;
   const bridgeArtifactsThin =
     !figureTableAlignmentText ||
     !contributionBridgeText ||

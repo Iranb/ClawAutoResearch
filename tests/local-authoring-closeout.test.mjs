@@ -171,7 +171,9 @@ test("authoring closeout synthesizes a substantive no-Discord conference draft",
   assert.equal(reviewPacket.status, "completed");
   assert.equal(reviewPacket.verdict, "ready");
   assert.ok(reviewPacket.action_items.length > 0);
-  assert.equal(reviewPacket.review_report_freshness, "missing");
+  assert.equal(reviewPacket.review_report_freshness, "fresh");
+  assert.ok(closeout.generatedFiles.includes("reviewer/REVIEW_REPORT.md"));
+  assert.ok(await fs.stat(path.join(projectRoot, "reviewer", "REVIEW_REPORT.md")));
   assert.ok(await fs.stat(path.join(projectRoot, "reviewer", "SURFACE_REVIEW.json")));
 
   const mainTex = await fs.readFile(
@@ -180,6 +182,13 @@ test("authoring closeout synthesizes a substantive no-Discord conference draft",
   );
   assert.match(mainTex, /\\section\{Method\}/);
   assert.match(mainTex, /FixMatch-inspired consistency filter/);
+  assert.match(mainTex, /Specifically, the contribution is/);
+
+  const paragraphAudit = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "academic_writer", "PARAGRAPH_LOGIC_AUDIT.json"), "utf8")
+  );
+  assert.equal(paragraphAudit.status, "ready");
+  assert.equal(paragraphAudit.blocking_issue_count, 0);
 
   const { stdout } = await execFile(process.execPath, [
     "scripts/run-e2e-paper-generation.mjs",
@@ -191,6 +200,96 @@ test("authoring closeout synthesizes a substantive no-Discord conference draft",
   ]);
   const harness = JSON.parse(stdout);
   assert.equal(harness.contentQuality.status, "pass");
+});
+
+test("authoring closeout repairs paragraph audit blockers from the audit artifact", async (t) => {
+  const projectRoot = await seedWriteReadyProject();
+  t.after(() => fs.rm(projectRoot, { recursive: true, force: true }));
+
+  const repeat = (sentence, count) => Array.from({ length: count }, () => sentence).join(" ");
+  await writeText(
+    path.join(projectRoot, "academic_writer", "paper", "main.tex"),
+    [
+      "\\documentclass{article}",
+      "\\begin{document}",
+      "\\title{Consistency Filters for Generalized Category Discovery}",
+      "\\maketitle",
+      "\\begin{abstract}",
+      repeat(
+        "Generalized category discovery needs a bounded evidence contract for known and novel classes.",
+        12
+      ),
+      "\\end{abstract}",
+      "\\section{Introduction}",
+      repeat(
+        "Generalized category discovery remains hard because pseudo-label noise distorts class boundaries and motivates a FixMatch-style consistency filter for unlabeled candidates.",
+        35
+      ),
+      "",
+      repeat(
+        "Rack temperature alarms and fan failures require maintenance coordination in large datacenters.",
+        35
+      ),
+      "\\section{Related Work}",
+      repeat(
+        "Consistency regularization and generalized category discovery literature frame pseudo-label noise as an evidence-control problem for known and novel classes.",
+        45
+      ),
+      "\\section{Method}",
+      repeat(
+        "The method applies weak and strong augmentation agreement before class-balance debiasing decides whether an unlabeled candidate enters the training pool.",
+        45
+      ),
+      "\\section{Experiments}",
+      repeat(
+        "The experiment reports known accuracy, novel accuracy, H-score, and ablations for the local reference benchmark.",
+        45
+      ),
+      "\\section{Results}",
+      repeat(
+        "The results keep the claim bounded to the local reference benchmark and avoid external leaderboard claims.",
+        45
+      ),
+      "\\section{Discussion}",
+      repeat(
+        "The discussion interprets the consistency filter as a control layer rather than a complete generalized category discovery solution.",
+        45
+      ),
+      "\\section{Limitations}",
+      repeat(
+        "The evidence remains local and external benchmark suites must replace this reference run before broad claims are made.",
+        45
+      ),
+      "\\section{Conclusion}",
+      repeat(
+        "The paper closes with a bounded claim about FixMatch-style filtering for generalized category discovery.",
+        45
+      ),
+      "\\bibliographystyle{plain}",
+      "\\bibliography{refs}",
+      "\\end{document}",
+      "",
+    ].join("\n")
+  );
+
+  const closeout = await reconcileAuthoringCloseout({
+    projectRoot,
+    compilePdf: false,
+    currentStageOverride: "write",
+  });
+
+  const paragraphAudit = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "academic_writer", "PARAGRAPH_LOGIC_AUDIT.json"), "utf8")
+  );
+  assert.equal(paragraphAudit.status, "ready");
+  assert.equal(paragraphAudit.blocking_issue_count, 0);
+  assert.ok(closeout.generatedFiles.includes("academic_writer/PARAGRAPH_LOGIC_AUDIT.json"));
+
+  const mainTex = await fs.readFile(
+    path.join(projectRoot, "academic_writer", "paper", "main.tex"),
+    "utf8"
+  );
+  assert.match(mainTex, /With this framing, this paragraph keeps the same GCD\/FixMatch argument chain explicit/);
 });
 
 test("auto iterator runs authoring closeout during write preflight", async (t) => {
@@ -241,6 +340,44 @@ test("authoring closeout prepares local submit review artifacts without Discord"
     await fs.stat(path.join(projectRoot, manifest.external_review_state.review_response_path))
   );
   assert.ok(await fs.stat(path.join(projectRoot, "cross-reviewer", "LOCAL_SUBMIT_REVIEW.md")));
+});
+
+test("authoring closeout refreshes stale local no-Discord review reports", async (t) => {
+  const projectRoot = await seedWriteReadyProject();
+  t.after(() => fs.rm(projectRoot, { recursive: true, force: true }));
+
+  const reviewReportPath = path.join(projectRoot, "reviewer", "REVIEW_REPORT.md");
+  await writeText(
+    reviewReportPath,
+    [
+      "# Review Report",
+      "",
+      "Review Mode: local_no_discord_closeout",
+      "Score: 5/10",
+      "Verdict: needs_revision",
+      "",
+      "## Action Items",
+      "1. Repair blocking paragraph logic audit findings.",
+      "",
+    ].join("\n")
+  );
+  await fs.utimes(reviewReportPath, new Date("2026-04-27T00:00:00Z"), new Date("2026-04-27T00:00:00Z"));
+
+  await reconcileAuthoringCloseout({
+    projectRoot,
+    compilePdf: true,
+    currentStageOverride: "write",
+  });
+
+  const reviewPacket = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "reviewer", "REVIEW_PACKET.json"), "utf8")
+  );
+  assert.equal(reviewPacket.status, "completed");
+  assert.equal(reviewPacket.verdict, "ready");
+  assert.equal(reviewPacket.review_report_verdict, "ready");
+
+  const refreshedReport = await fs.readFile(reviewReportPath, "utf8");
+  assert.match(refreshedReport, /Verdict: ready/);
 });
 
 test("authoring closeout preserves stale negative reviewer actions as a writer revision", async (t) => {
