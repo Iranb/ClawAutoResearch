@@ -42,6 +42,7 @@ import { materializeWorkflowTeamRound } from "../workflow-team/team-round";
 import { maybePrepareWorkflowStageContracts } from "./stage-preflight";
 import { createStageOwnerHandoffIntent } from "../workflow-handoff/handoff-router";
 import { transitionWorkflowHandoffIntent } from "../workflow-handoff/handoff-store";
+import { runWorkflowHandoffMaintenancePass } from "../workflow-handoff/maintenance";
 import { appendWorkflowDiagnosticEvent } from "../workflow-diagnostics.js";
 import type { GraphPresenceCheckResult } from "../graph-presence";
 import type { GraphBuildSourceCatchupResult } from "../graph-build-source-catchup";
@@ -2146,6 +2147,7 @@ export async function runWorkflowAutoIteratorImpl(
     manifest.last_handoff_at = now;
   }
   await deps.saveManifest(projectRoot, manifest);
+  await runWorkflowHandoffMaintenancePass({ projectRoot, now: new Date(now) });
 
   if (workflowPolicy.teamRuntime?.enabled !== false) {
     const evidenceCloseout = summarizeEvidenceCloseoutState(manifest);

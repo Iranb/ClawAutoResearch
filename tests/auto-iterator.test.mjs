@@ -40,7 +40,10 @@ import {
   syncPreparedWorkflowHandoffToManifest,
 } from "../tools/workflow-handoff/handoff-activation.ts";
 import { createStageOwnerHandoffIntent } from "../tools/workflow-handoff/handoff-router.ts";
-import { readWorkflowHandoffIntentStore } from "../tools/workflow-handoff/handoff-store.ts";
+import {
+  readWorkflowHandoffIntentStore,
+  transitionWorkflowHandoffIntent,
+} from "../tools/workflow-handoff/handoff-store.ts";
 
 async function makeTempProject() {
   const projectRoot = await fs.mkdtemp(
@@ -5041,6 +5044,22 @@ test("auto iterator commits ready experiment review stage without waiting for re
   await writeJson(path.join(projectRoot, "researcher", "plot_pack.json"), {
     plots: [{ figure_id: "fig-1", caption: "Main results." }],
   });
+  const staleCodeHandoff = await createStageOwnerHandoffIntent({
+    projectRoot,
+    projectId: "demo-project",
+    workflowLine: "experiment",
+    stageBefore: "plan",
+    stageAfter: "code",
+    ownerBefore: "orchestrator",
+    ownerAfter: "coder",
+    executionId: "stale-code-exec",
+    nextAction: "Historical code handoff.",
+  });
+  await transitionWorkflowHandoffIntent({
+    projectRoot,
+    intentId: staleCodeHandoff.intent.intentId,
+    toStatus: "activated",
+  });
 
   const result = await runWorkflowAutoIterator({
     projectRoot,
@@ -5058,6 +5077,10 @@ test("auto iterator commits ready experiment review stage without waiting for re
   assert.equal(savedManifest.owner_agent, "reviewer");
   assert.equal(savedManifest.orchestration_state.pending_stage_candidate, null);
   assert.equal(savedManifest.orchestration_state.handoff_phase, "idle");
+  const handoffs = await readWorkflowHandoffIntentStore(projectRoot);
+  assert.equal(handoffs.intents.length, 1);
+  assert.equal(handoffs.intents[0].status, "superseded");
+  assert.equal(handoffs.intents[0].terminalReason, "stage_lineage_drift");
 
   const diagnostics = await readWorkflowDiagnosticEvents(projectRoot);
   assert.ok(
