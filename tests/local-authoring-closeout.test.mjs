@@ -114,6 +114,9 @@ async function seedWriteReadyProject() {
       minus_class_balance_debiasing: { h_score: 0.2801 },
       minus_consistency_filtering: { h_score: 0.3404 },
     },
+    activation: {
+      accepted_pseudo_labels: { 0: 12, 1: 12, 2: 12, 3: 0, 4: 0, 5: 0 },
+    },
     metrics: {
       h_score: 0.3404,
       known_accuracy: 0.8778,
@@ -130,6 +133,22 @@ async function seedWriteReadyProject() {
       baseline_h_score: 0,
       delta_h_score: 0.3404,
     },
+  });
+  await writeJson(path.join(projectRoot, "researcher", "PAPER_SOURCE_INDEX.json"), {
+    papers: [
+      { canonical_id: "arxiv:2410.11206", title: "Towards Understanding Why FixMatch Generalizes Better Than Supervised Learning", year: 2024, best_oa_url: "https://arxiv.org/abs/2410.11206" },
+      { canonical_id: "arxiv:2001.07685", title: "FixMatch: Simplifying Semi-Supervised Learning with Consistency and Confidence", year: 2020, best_oa_url: "https://arxiv.org/abs/2001.07685" },
+      { canonical_id: "doi:10.1109/cvpr52688.2022.00734", title: "Generalized Category Discovery", year: 2022, doi: "10.1109/cvpr52688.2022.00734", venue: "CVPR" },
+      { canonical_id: "doi:10.1109/cvpr52729.2023.00732", title: "Dynamic Conceptional Contrastive Learning for Generalized Category Discovery", year: 2023, doi: "10.1109/cvpr52729.2023.00732", venue: "CVPR" },
+      { canonical_id: "doi:10.1109/iccv51070.2023.01521", title: "Parametric Classification for Generalized Category Discovery: A Baseline Study", year: 2023, doi: "10.1109/iccv51070.2023.01521", venue: "ICCV" },
+      { canonical_id: "doi:10.1109/iccv51070.2023.01753", title: "Incremental Generalized Category Discovery", year: 2023, doi: "10.1109/iccv51070.2023.01753", venue: "ICCV" },
+      { canonical_id: "doi:10.24963/ijcai.2024/587", title: "Towards Debiased Generalized Category Discovery", year: 2024, doi: "10.24963/ijcai.2024/587", venue: "IJCAI" },
+      { canonical_id: "doi:10.1016/j.neunet.2024.106908", title: "Prototypical classifier with distribution consistency regularization for generalized category discovery", year: 2024, doi: "10.1016/j.neunet.2024.106908", venue: "Neural Networks" },
+      { canonical_id: "doi:10.1016/j.inffus.2024.102547", title: "Prediction consistency regularization for generalized category discovery", year: 2024, doi: "10.1016/j.inffus.2024.102547", venue: "Information Fusion" },
+      { canonical_id: "doi:10.1007/978-981-99-8073-4_41", title: "Generalized Category Discovery with Clustering Assignment Consistency", year: 2024, doi: "10.1007/978-981-99-8073-4_41", venue: "PRCV" },
+      { canonical_id: "doi:10.1007/s11263-026-02745-y", title: "Memory Consistency Guided Divide-and-Conquer Learning for Generalized Category Discovery", year: 2026, doi: "10.1007/s11263-026-02745-y", venue: "IJCV" },
+      { canonical_id: "arxiv:2510.18740", title: "SEAL: Semantic-Aware Hierarchical Learning for Generalized Category Discovery", year: 2025, best_oa_url: "https://arxiv.org/abs/2510.18740" },
+    ],
   });
   await writeJson(path.join(projectRoot, "researcher", "ablation_summary.json"), {
     status: "ready",
@@ -182,7 +201,23 @@ test("authoring closeout synthesizes a substantive no-Discord conference draft",
   );
   assert.match(mainTex, /\\section\{Method\}/);
   assert.match(mainTex, /FixMatch-inspired consistency filter/);
-  assert.match(mainTex, /Specifically, the contribution is/);
+  assert.match(mainTex, /source index for this project covers/i);
+  assert.doesNotMatch(mainTex, /\\fbox/);
+  const citationKeys = new Set([...mainTex.matchAll(/\\cite[ptba]?\*?(?:\[[^\]]*\])?\{([^}]*)\}/g)].flatMap((match) => match[1].split(",").map((key) => key.trim()).filter(Boolean)));
+  assert.ok(citationKeys.size >= 10);
+  const refsBib = await fs.readFile(
+    path.join(projectRoot, "academic_writer", "paper", "refs.bib"),
+    "utf8"
+  );
+  assert.ok((refsBib.match(/@\w+\s*\{/g) ?? []).length >= 10);
+  const figurePack = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "academic_writer", "FIGURE_PACK.json"), "utf8")
+  );
+  const tablePack = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "academic_writer", "TABLE_PACK.json"), "utf8")
+  );
+  assert.ok(figurePack.entries.some((entry) => entry.metric_values?.accepted_pseudo_labels));
+  assert.ok(tablePack.entries.some((entry) => entry.metric_values?.proposed?.h_score === 0.3404));
 
   const paragraphAudit = JSON.parse(
     await fs.readFile(path.join(projectRoot, "academic_writer", "PARAGRAPH_LOGIC_AUDIT.json"), "utf8")
@@ -219,6 +254,9 @@ test("authoring closeout writes neutral result language when H-score delta is ze
       novel_accuracy: 0,
       baseline_h_score: 0,
       delta_h_score: 0,
+    },
+    activation: {
+      accepted_pseudo_labels: { 0: 12, 1: 12, 2: 12, 3: 0, 4: 0, 5: 0 },
     },
   };
   await writeJson(
@@ -333,7 +371,8 @@ test("authoring closeout repairs paragraph audit blockers from the audit artifac
     path.join(projectRoot, "academic_writer", "paper", "main.tex"),
     "utf8"
   );
-  assert.match(mainTex, /With this framing, this paragraph keeps the same GCD\/FixMatch argument chain explicit/);
+  assert.match(mainTex, /Against this background, the source index for this project covers/i);
+  assert.doesNotMatch(mainTex, /Rack temperature alarms/);
 });
 
 test("auto iterator runs authoring closeout during write preflight", async (t) => {

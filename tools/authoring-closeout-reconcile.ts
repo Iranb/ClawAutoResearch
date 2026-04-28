@@ -76,6 +76,31 @@ type ResultSnapshot = {
   novelAccuracy: number | null;
   minusClassBalanceHScore: number | null;
   minusConsistencyHScore: number | null;
+  acceptedPseudoLabels: Record<string, number>;
+};
+
+type SourceIndexPaper = {
+  title: string;
+  year: number | null;
+  key: string;
+  canonicalId: string | null;
+  doi: string | null;
+  url: string | null;
+  venue: string | null;
+};
+
+type BibliographyMergeResult = {
+  updated: boolean;
+  text: string;
+  sourceIndexKeys: string[];
+  sourceIndexCount: number;
+};
+
+type DraftCitationKeys = {
+  core: string[];
+  semiSupervised: string[];
+  gcd: string[];
+  sourceIndex: string[];
 };
 
 function readString(value: unknown): string | null {
@@ -135,9 +160,12 @@ function citedBibliographyLooksGrounded(mainTex: string, refsBib: string) {
       return false;
     }
     const title = bibEntryField(entry, "title");
-    const author = bibEntryField(entry, "author");
     const year = bibEntryField(entry, "year");
-    if (!title || !author || !year) {
+    const author = bibEntryField(entry, "author");
+    const doi = bibEntryField(entry, "doi");
+    const eprint = bibEntryField(entry, "eprint");
+    const url = bibEntryField(entry, "url");
+    if (!title || !year || (!author && !doi && !eprint && !url)) {
       return false;
     }
     if (/\b(unknown|placeholder|todo|tbd)\b|\?\?\?/i.test(`${title} ${author}`)) {
@@ -165,7 +193,7 @@ async function writeDeterministicCitationVerification(params: {
       "- hallucinated: 0",
       "",
       "## Scope",
-      "The local closeout verified that every cited key resolves to a BibTeX entry with title, author, and year. External citation enrichment can still improve metadata and provenance, but it is not required for this no-Discord workflow transition.",
+      "The local closeout verified that every cited key resolves to a BibTeX entry with title, year, and either author metadata or a stable DOI/arXiv/URL identifier. External citation enrichment can still improve metadata and provenance, but it is not required for this no-Discord workflow transition.",
       "",
     ].join("\n")
   );
@@ -224,6 +252,37 @@ function readNestedNumberFromSources(
     }
   }
   return null;
+}
+
+function readNestedRecordFromSources(
+  sources: Array<Record<string, unknown> | null | undefined>,
+  paths: string[][]
+): Record<string, unknown> | null {
+  for (const source of sources) {
+    for (const fields of paths) {
+      let cursor: unknown = source;
+      for (const field of fields) {
+        const record = readRecord(cursor);
+        cursor = record ? record[field] : null;
+      }
+      const record = readRecord(cursor);
+      if (record) {
+        return record;
+      }
+    }
+  }
+  return null;
+}
+
+function normalizeNumberRecord(record: Record<string, unknown> | null): Record<string, number> {
+  const normalized: Record<string, number> = {};
+  for (const [key, value] of Object.entries(record ?? {})) {
+    const numberValue = readNumber(value);
+    if (numberValue !== null) {
+      normalized[key] = numberValue;
+    }
+  }
+  return normalized;
 }
 
 function formatMetric(value: number | null, fallback = "not recorded") {
@@ -302,17 +361,175 @@ function citationBibliographyEntries() {
   ];
 }
 
-function mergeBibliographyEntries(existingRaw: string) {
+function slugifyBibKey(value: string) {
+  const slug = value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim()
+    .split(/\s+/)
+    .filter((token) => !["a", "an", "and", "for", "of", "the", "to", "with"].includes(token))
+    .slice(0, 4)
+    .join("_");
+  return slug || "source";
+}
+
+function stableSourceBibKey(paper: { title: string; year: number | null; canonicalId: string | null }) {
+  const known = [
+    { pattern: /fixmatch/i, key: "sohn2020fixmatch" },
+    { pattern: /towards understanding why fixmatch/i, key: "arxiv241011206" },
+    { pattern: /^generalized category discovery$/i, key: "vaze2022generalized" },
+  ];
+  for (const entry of known) {
+    if (entry.pattern.test(paper.title)) {
+      return entry.key;
+    }
+  }
+  const year = paper.year ?? "nd";
+  return `source_${slugifyBibKey(`${paper.title} ${year}`)}`;
+}
+
+function escapeBibtexValue(value: string) {
+  return value
+    .replace(/\\/g, "\\textbackslash{}")
+    .replace(/[{}]/g, "")
+    .replace(/&/g, "\\&")
+    .trim();
+}
+
+function uniqueBibKey(baseKey: string, existingKeys: Set<string>) {
+  let candidate = baseKey;
+  let suffix = 2;
+  while (existingKeys.has(candidate)) {
+    candidate = `${baseKey}_${suffix}`;
+    suffix += 1;
+  }
+  existingKeys.add(candidate);
+  return candidate;
+}
+
+async function readPaperSourceIndex(projectRoot: string): Promise<SourceIndexPaper[]> {
+  const raw = await readJsonIfExists<Record<string, unknown>>(
+    path.join(projectRoot, "researcher", "PAPER_SOURCE_INDEX.json")
+  );
+  const records = Array.isArray(raw?.papers)
+    ? raw.papers
+    : Array.isArray(raw?.items)
+      ? raw.items
+      : Array.isArray(raw)
+        ? raw
+        : [];
+  const seen = new Set<string>();
+  const papers: SourceIndexPaper[] = [];
+  for (const record of records) {
+    const item = readRecord(record);
+    if (!item) {
+      continue;
+    }
+    const title = readString(item.title);
+    if (!title) {
+      continue;
+    }
+    const canonicalId =
+      readString(item.canonical_id) ??
+      readString(item.canonicalId) ??
+      readString(item.id) ??
+      null;
+    const doi = readString(item.doi) ?? (canonicalId?.startsWith("doi:") ? canonicalId.slice(4) : null);
+    const year = readNumber(item.year);
+    const url =
+      readString(item.best_oa_url) ??
+      readString(item.best_pdf_url) ??
+      readString(item.pdf_url) ??
+      readString(item.url) ??
+      (canonicalId?.startsWith("arxiv:")
+        ? `https://arxiv.org/abs/${canonicalId.slice("arxiv:".length)}`
+        : null);
+    const venue = readString(item.venue);
+    const fingerprint = `${canonicalId ?? ""}|${title.toLowerCase()}`;
+    if (seen.has(fingerprint)) {
+      continue;
+    }
+    seen.add(fingerprint);
+    papers.push({
+      title,
+      year,
+      key: stableSourceBibKey({ title, year, canonicalId }),
+      canonicalId,
+      doi,
+      url,
+      venue,
+    });
+  }
+  return papers;
+}
+
+function sourceIndexBibtexEntries(papers: SourceIndexPaper[], existingKeys: Set<string>) {
+  const entries: string[] = [];
+  const keys: string[] = [];
+  const existingTitles = new Set<string>();
+  for (const entry of citationBibliographyEntries()) {
+    const title = bibEntryField(entry, "title");
+    if (title) {
+      existingTitles.add(title.toLowerCase());
+    }
+  }
+  for (const paper of papers) {
+    const titleKey = paper.title.toLowerCase();
+    const fixedKey = paper.key;
+    if (existingKeys.has(fixedKey) || existingTitles.has(titleKey)) {
+      if (paper.year !== null) {
+        keys.push(fixedKey);
+      }
+      continue;
+    }
+    const key = uniqueBibKey(fixedKey, existingKeys);
+    if (paper.year !== null) {
+      keys.push(key);
+    }
+    const fields = [
+      `  title={${escapeBibtexValue(paper.title)}}`,
+      paper.year !== null ? `  year={${paper.year}}` : null,
+      paper.doi ? `  doi={${escapeBibtexValue(paper.doi)}}` : null,
+      paper.canonicalId?.startsWith("arxiv:")
+        ? `  eprint={${escapeBibtexValue(paper.canonicalId.slice("arxiv:".length))}}`
+        : null,
+      paper.canonicalId?.startsWith("arxiv:") ? "  archivePrefix={arXiv}" : null,
+      paper.url ? `  url={${escapeBibtexValue(paper.url)}}` : null,
+      paper.venue ? `  note={Source-index metadata; venue: ${escapeBibtexValue(paper.venue)}}` : "  note={Source-index metadata}",
+    ].filter(Boolean);
+    entries.push(`@misc{${key},\n${fields.join(",\n")}\n}`);
+  }
+  return { entries, keys: uniqueStrings(keys) };
+}
+
+async function mergeBibliographyEntries(existingRaw: string, projectRoot: string): Promise<BibliographyMergeResult> {
   const existingKeys = new Set(parseBibKeys(existingRaw));
-  const additions = citationBibliographyEntries().filter((entry) => {
+  const fixedAdditions = citationBibliographyEntries().filter((entry) => {
     const [key] = parseBibKeys(entry);
-    return key && !existingKeys.has(key);
+    if (!key || existingKeys.has(key)) {
+      return false;
+    }
+    existingKeys.add(key);
+    return true;
   });
+  const sourceIndex = await readPaperSourceIndex(projectRoot);
+  const sourceAdditions = sourceIndexBibtexEntries(sourceIndex, existingKeys);
+  const additions = [...fixedAdditions, ...sourceAdditions.entries];
   if (additions.length === 0) {
-    return { updated: false, text: existingRaw };
+    return {
+      updated: false,
+      text: existingRaw,
+      sourceIndexKeys: sourceAdditions.keys,
+      sourceIndexCount: sourceIndex.length,
+    };
   }
   const text = [existingRaw.trim(), ...additions].filter(Boolean).join("\n\n") + "\n";
-  return { updated: true, text };
+  return {
+    updated: true,
+    text,
+    sourceIndexKeys: sourceAdditions.keys,
+    sourceIndexCount: sourceIndex.length,
+  };
 }
 
 function draftLooksSubstantive(source: string) {
@@ -359,9 +576,114 @@ function draftEvidenceLanguageNeedsRefresh(source: string, snapshot: ResultSnaps
   return false;
 }
 
+function selectDraftCitationKeys(refsBib: string, sourceIndexKeys: string[]): DraftCitationKeys {
+  const bibKeys = parseBibKeys(refsBib);
+  const byPattern = (pattern: RegExp) => bibKeys.find((key) => pattern.test(key));
+  const core = uniqueStrings([
+    byPattern(/arxiv241011206/i),
+    byPattern(/sohn2020fixmatch/i),
+    byPattern(/vaze2022generalized/i),
+    byPattern(/han2019learning/i),
+  ]);
+  const semiSupervised = uniqueStrings([
+    byPattern(/sohn2020fixmatch/i),
+    byPattern(/berthelot2019mixmatch/i),
+    byPattern(/xie2020uda/i),
+  ]);
+  const gcd = uniqueStrings([
+    byPattern(/vaze2022generalized/i),
+    byPattern(/han2019learning/i),
+    ...sourceIndexKeys.filter((key) => !/sohn2020fixmatch|arxiv241011206/i.test(key)),
+  ]);
+  return {
+    core,
+    semiSupervised,
+    gcd,
+    sourceIndex: uniqueStrings(sourceIndexKeys),
+  };
+}
+
+function cite(keys: string[], fallback = "sohn2020fixmatch") {
+  const cleaned = uniqueStrings(keys);
+  return `\\cite{${(cleaned.length > 0 ? cleaned : [fallback]).join(",")}}`;
+}
+
+function metricBar(value: number | null, maxWidthMm = 42) {
+  const normalized = value === null ? 0 : Math.max(0, Math.min(1, value));
+  const width = Number((normalized * maxWidthMm).toFixed(1));
+  return `\\rule{${Math.max(width, 0.2).toFixed(1)}mm}{5pt}`;
+}
+
+function acceptedPseudoLabelRows(snapshot: ResultSnapshot) {
+  const entries = Object.entries(snapshot.acceptedPseudoLabels).sort(([left], [right]) =>
+    left.localeCompare(right, undefined, { numeric: true })
+  );
+  if (entries.length === 0) {
+    return ["No accepted pseudo-label count was recorded & 0 & \\rule{0.2mm}{5pt} \\\\"];
+  }
+  const maxCount = Math.max(1, ...entries.map(([, count]) => count));
+  return entries.map(([classId, count]) => {
+    const width = Number(((count / maxCount) * 42).toFixed(1));
+    return `Class ${classId} & ${count.toFixed(0)} & \\rule{${Math.max(width, 0.2).toFixed(1)}mm}{5pt} \\\\`;
+  });
+}
+
+function buildResultFigureBlocks(snapshot: ResultSnapshot) {
+  const known = formatMetric(snapshot.knownAccuracy, "not recorded");
+  const novel = formatMetric(snapshot.novelAccuracy, "not recorded");
+  const proposed = formatMetric(snapshot.proposedHScore, "not recorded");
+  const balanceRows = [
+    `Known accuracy & ${known} & ${metricBar(snapshot.knownAccuracy)} \\\\`,
+    `Novel accuracy & ${novel} & ${metricBar(snapshot.novelAccuracy)} \\\\`,
+    `H-score & ${proposed} & ${metricBar(snapshot.proposedHScore)} \\\\`,
+  ];
+  return {
+    knownNovel: [
+      "\\begin{figure}[t]",
+      "\\centering",
+      "\\begin{tabular}{lrl}",
+      "\\toprule",
+      "Metric & Value & Artifact-derived bar \\\\",
+      "\\midrule",
+      ...balanceRows,
+      "\\bottomrule",
+      "\\end{tabular}",
+      "\\caption{Known/novel balance computed directly from researcher/artifacts/results/results.json. Numeric labels are the authoritative values; bars are deterministic visual encodings of the same metrics.}",
+      "\\label{fig:known-novel-balance}",
+      "\\end{figure}",
+    ].join("\n"),
+    acceptance: [
+      "\\begin{figure}[t]",
+      "\\centering",
+      "\\begin{tabular}{lrl}",
+      "\\toprule",
+      "Bucket & Accepted pseudo-labels & Relative count \\\\",
+      "\\midrule",
+      ...acceptedPseudoLabelRows(snapshot),
+      "\\bottomrule",
+      "\\end{tabular}",
+      "\\caption{Accepted pseudo-label distribution read from the experiment result summary. Empty novel buckets remain visible instead of being hidden by aggregate accuracy.}",
+      "\\label{fig:acceptance-distribution}",
+      "\\end{figure}",
+    ].join("\n"),
+  };
+}
+
+function draftQualityNeedsRefresh(source: string, snapshot: ResultSnapshot, sourceIndexCount: number) {
+  if (!draftLooksSubstantive(source) || draftEvidenceLanguageNeedsRefresh(source, snapshot)) {
+    return true;
+  }
+  if (/\\begin\{figure\}[\s\S]*?\\fbox/i.test(source)) {
+    return true;
+  }
+  const citationCount = new Set(parseCiteKeysFromLatex(source)).size;
+  return sourceIndexCount >= 10 && citationCount < 10;
+}
+
 function buildConferenceDraft(params: {
   title: string;
   snapshot: ResultSnapshot;
+  citationKeys: DraftCitationKeys;
 }) {
   const deltaValue = computedDelta(params.snapshot);
   const deltaClass = classifyMetricDelta(deltaValue);
@@ -374,6 +696,11 @@ function buildConferenceDraft(params: {
   const novel = formatMetric(params.snapshot.novelAccuracy, "not recorded");
   const minusBalance = formatMetric(params.snapshot.minusClassBalanceHScore, "not recorded");
   const minusConsistency = formatMetric(params.snapshot.minusConsistencyHScore, "not recorded");
+  const methodCitations = cite(params.citationKeys.semiSupervised);
+  const coreCitations = cite(params.citationKeys.core);
+  const gcdCitations = cite(params.citationKeys.gcd.slice(0, 8), "vaze2022generalized");
+  const broadGcdCitations = cite(params.citationKeys.gcd.slice(0, 12), "vaze2022generalized");
+  const figureBlocks = buildResultFigureBlocks(params.snapshot);
   const contributionReading =
     deltaClass === "positive"
       ? `The measured local result is positive: the baseline reaches H-score ${baseline}, while the proposed consistency-filtered run reaches ${proposed}, yielding a delta of ${delta}. This supports a bounded improvement claim because the known/novel metrics remain visible rather than being hidden behind aggregate accuracy.`
@@ -410,17 +737,17 @@ function buildConferenceDraft(params: {
   const sections = [
     [
       "Introduction",
-      `Generalized category discovery asks a learner to preserve accuracy on labeled known classes while discovering unlabeled novel classes. This paper studies a bounded version of that problem: whether a FixMatch-style consistency gate can make pseudo-label expansion less brittle when known and novel classes coexist. The motivation comes from consistency and confidence based semi-supervised learning \\cite{sohn2020fixmatch,berthelot2019mixmatch}, but the evaluation target is not ordinary semi-supervised classification. In GCD, an accepted pseudo-label can help structure a novel cluster or can amplify a known-class bias, so the gate must be read through the known/novel balance rather than through aggregate accuracy alone \\cite{vaze2022generalized,han2019learning}.`,
+      `Generalized category discovery asks a learner to preserve accuracy on labeled known classes while discovering unlabeled novel classes. This paper studies a bounded version of that problem: whether a FixMatch-style consistency gate can make pseudo-label expansion less brittle when known and novel classes coexist. The motivation comes from consistency and confidence based semi-supervised learning ${methodCitations}, but the evaluation target is not ordinary semi-supervised classification. In GCD, an accepted pseudo-label can help structure a novel cluster or can amplify a known-class bias, so the gate must be read through the known/novel balance rather than through aggregate accuracy alone ${cite(["vaze2022generalized", "han2019learning"])}.`,
       `The contribution is a workflow-grounded mechanism claim rather than a broad leaderboard claim. We instantiate weak/strong augmentation agreement as an acceptance condition for unlabeled candidates, combine it with class-balance debiasing, and track H-score as the primary result. ${contributionReading} The paper therefore treats FixMatch-style acceptance as a plausible control layer for GCD exploration, with the limitation that external benchmark suites must still replace the local reference benchmark before any claim of general superiority.`,
     ],
     [
       "Related Work",
-      `FixMatch simplified semi-supervised learning by combining confidence thresholding with augmentation consistency \\cite{sohn2020fixmatch}. MixMatch and unsupervised data augmentation established related ways to regularize predictions under perturbed inputs \\cite{berthelot2019mixmatch,xie2020uda}. Those methods are normally discussed in settings where the label universe is fixed, so a confident pseudo-label mostly means that the model is willing to reuse an existing class name. GCD changes that interpretation. The model must separate known-class retention from novel-class grouping, and an aggressive pseudo-label rule can collapse novel examples into known classes before they form stable clusters.`,
-      `Recent GCD work frames the task as discovery under partial supervision, with explicit pressure to evaluate known and novel behavior together \\cite{vaze2022generalized}. Earlier transfer-clustering work shows why representation structure matters when novel visual categories must be separated without direct labels \\cite{han2019learning}. The paper named in the project prompt, Towards Understanding Why FixMatch Generalizes Better Than Supervised Learning, sharpens the local question by asking why consistency can improve beyond supervised-only training \\cite{arxiv241011206}. Our use of that idea is deliberately narrow: consistency is treated as an acceptance filter for candidate pseudo-labels, not as evidence that a full FixMatch training recipe automatically solves GCD.`,
+      `FixMatch simplified semi-supervised learning by combining confidence thresholding with augmentation consistency ${cite(["sohn2020fixmatch"])}. MixMatch and unsupervised data augmentation established related ways to regularize predictions under perturbed inputs ${cite(["berthelot2019mixmatch", "xie2020uda"])}. Those methods are normally discussed in settings where the label universe is fixed, so a confident pseudo-label mostly means that the model is willing to reuse an existing class name. GCD changes that interpretation. The model must separate known-class retention from novel-class grouping, and an aggressive pseudo-label rule can collapse novel examples into known classes before they form stable clusters.`,
+      `Against this background, the source index for this project covers the original GCD formulation, transfer clustering, parametric and prototype-style baselines, dynamic contrastive variants, debiasing, prediction-consistency regularization, clustering-assignment consistency, incremental discovery, memory-consistency variants, and semantic-aware hierarchy work ${broadGcdCitations}. That breadth matters because a FixMatch-inspired gate should be compared against both pseudo-labeling mechanisms and GCD-specific representation controls. The paper named in the project prompt, Towards Understanding Why FixMatch Generalizes Better Than Supervised Learning, sharpens the local question by asking why consistency can improve beyond supervised-only training ${cite(["arxiv241011206"])}. Our use of that idea is deliberately narrow: consistency is treated as an acceptance filter for candidate pseudo-labels, not as evidence that a full FixMatch training recipe automatically solves GCD.`,
     ],
     [
       "Method",
-      `The method adds a consistency-filtered pseudo-label gate to a GCD training loop. For each unlabeled candidate, the model forms a weakly augmented prediction and a strongly augmented prediction. A candidate is accepted only when the class identity and confidence remain stable across those views. Accepted candidates then update the training pool, while rejected candidates remain unlabeled for the next pass. This rule follows the spirit of FixMatch \\cite{sohn2020fixmatch} but changes the operational purpose: the gate is not just a source of extra supervised examples, it is a control point that delays commitment when augmentation disagreement suggests that the sample may sit near a known/novel boundary.`,
+      `The method adds a consistency-filtered pseudo-label gate to a GCD training loop. For each unlabeled candidate, the model forms a weakly augmented prediction and a strongly augmented prediction. A candidate is accepted only when the class identity and confidence remain stable across those views. Accepted candidates then update the training pool, while rejected candidates remain unlabeled for the next pass. This rule follows the spirit of FixMatch ${cite(["sohn2020fixmatch"])} but changes the operational purpose: the gate is not just a source of extra supervised examples, it is a control point that delays commitment when augmentation disagreement suggests that the sample may sit near a known/novel boundary.`,
       `The second component is class-balance debiasing. Without it, high-confidence known-class predictions can dominate the accepted pool, making the discovered novel region smaller even when the overall confidence score looks strong. The local implementation therefore tracks accepted pseudo-label counts by class and uses that distribution as a warning signal. The paper keeps the main text at the mechanism level and moves derivation detail to the appendix. The resulting design has one primary claim target: consistency filtering should reduce unstable pseudo-label commitments and improve the H-score balance, but the manuscript only states that target as supported when the measured delta is positive.`,
     ],
     [
@@ -432,6 +759,7 @@ function buildConferenceDraft(params: {
       "Results",
       resultReading,
       `Table 1 summarizes the headline metrics, and Table 2 records the ablation evidence. The class-balance ablation is especially important because a raw consistency gate can still over-accept dominant known classes. The current evidence supports only the claim strength licensed by the measured delta: positive deltas permit a scoped improvement claim, zero deltas permit a neutral mechanism-readiness claim, and negative deltas require experiment repair. It does not support claims about universal superiority, dataset-wide state of the art, or replacement of full GCD evaluation suites. The reviewer-facing claim matrix and quality audit preserve that boundary so that the generated paper remains aligned with its evidence.`,
+      figureBlocks.knownNovel,
       "\\begin{table}[t]\n\\centering\n\\caption{Local reference headline metrics for the consistency-filtered GCD run.}\n\\begin{tabular}{lrrrr}\n\\toprule\nConfiguration & H-score & Known accuracy & Novel accuracy & Delta H \\\\\n\\midrule\nBaseline & " +
         `${baseline} & ${baselineKnown} & ${baselineNovel} & 0.0000 \\\\\n` +
         `Consistency-filtered & ${proposed} & ${known} & ${novel} & ${delta} \\\\\n` +
@@ -445,7 +773,8 @@ function buildConferenceDraft(params: {
     [
       "Mechanism Analysis",
       `The mechanism interpretation is that consistency filters remove some unstable pseudo-label commitments before they reshape the representation. In ordinary semi-supervised classification, an accepted pseudo-label adds another supervised point for a known class. In GCD, the same action also changes the pressure on novel clusters. If a candidate alternates between labels under weak and strong augmentation, accepting it can inject contradictory evidence into the class structure. Requiring agreement is therefore a way to postpone ambiguous assignments until the representation is more stable.`,
-      `The class-balance component addresses a separate failure mode. A consistency gate can be locally accurate and still produce a poor discovery process if most accepted candidates belong to known or easy classes. The accepted pseudo-label distribution in the result summary is therefore part of the evidence, not an implementation detail. It explains why the H-score, known accuracy, and novel accuracy must be read together. This also connects the project prompt to the FixMatch generalization question \\cite{arxiv241011206}: the useful object is not confidence alone, but confidence that remains stable under transformations and does not erase minority discovery structure.`,
+      `The class-balance component addresses a separate failure mode. A consistency gate can be locally accurate and still produce a poor discovery process if most accepted candidates belong to known or easy classes. The accepted pseudo-label distribution in the result summary is therefore part of the evidence, not an implementation detail. It explains why the H-score, known accuracy, and novel accuracy must be read together. This also connects the project prompt to the FixMatch generalization question ${coreCitations}: the useful object is not confidence alone, but confidence that remains stable under transformations and does not erase minority discovery structure.`,
+      figureBlocks.acceptance,
     ],
     [
       "Discussion",
@@ -454,8 +783,8 @@ function buildConferenceDraft(params: {
     ],
     [
       "Limitations",
-      `The main limitation is benchmark breadth. The present evidence comes from a local reference benchmark designed to exercise the research pipeline and the mechanism contract. It is not enough to claim state-of-the-art performance on generalized category discovery. The second limitation is ablation depth. The recorded ablations separate class-balance debiasing and explicit consistency filtering, but they do not explore threshold schedules, augmentation strength, representation backbones, or dataset shift. Those factors may change the tradeoff between known-class retention and novel-class discovery.`,
-      `A third limitation is citation and literature coverage. The draft cites real source anchors for FixMatch, consistency training, and GCD, but it does not attempt a complete literature review. That is acceptable for the current role of the paper because the goal is to produce a reviewable experiment note, not a survey. Finally, the theory appendix should be treated as an intuition-preserving support packet. It states why agreement can reduce unstable updates, but it does not prove a full generalization theorem for GCD. These limitations should stay visible in any future submission package.`,
+      `The main limitation is benchmark breadth. The present evidence comes from a local reference benchmark designed to exercise the research pipeline and the mechanism contract. It is not enough to claim state-of-the-art performance on generalized category discovery, especially because the broader source index contains several GCD baselines and variants that are not reimplemented in this local run ${gcdCitations}. The second limitation is ablation depth. The recorded ablations separate class-balance debiasing and explicit consistency filtering, but they do not explore threshold schedules, augmentation strength, representation backbones, or dataset shift. Those factors may change the tradeoff between known-class retention and novel-class discovery.`,
+      `A third limitation is metadata depth. The draft now uses the project source index to cover the available literature breadth, but some source-index entries may still need richer author metadata before submission. That is acceptable for the current role of the paper because the goal is to produce a reviewable experiment note, not a final camera-ready bibliography. Finally, the theory appendix should be treated as an intuition-preserving support packet. It states why agreement can reduce unstable updates, but it does not prove a full generalization theorem for GCD. These limitations should stay visible in any future submission package.`,
     ],
     [
       "Conclusion",
@@ -535,9 +864,13 @@ function ensureConferenceFigureTableContracts(source: string): { updated: boolea
       block: [
         "\\begin{figure}[t]",
         "\\centering",
-        "\\fbox{\\begin{minipage}{0.86\\linewidth}",
-        "\\textbf{Consistency-filtered GCD pipeline.} Labeled known samples train the initial classifier; unlabeled candidates pass through weak/strong augmentation agreement; accepted pseudo-labels update the known/novel pool; H-score and class-balance checks govern keep/discard decisions.",
-        "\\end{minipage}}",
+        "\\begin{tabular}{llll}",
+        "\\toprule",
+        "Known labels & Weak/strong gate & Accepted pool & H-score audit \\\\",
+        "\\midrule",
+        "seed classifier & agreement check & pseudo-label update & known/novel balance \\\\",
+        "\\bottomrule",
+        "\\end{tabular}",
         "\\caption{Framework view of the consistency-filtered GCD pipeline used by the local reference experiment.}",
         "\\label{fig:method-pipeline}",
         "\\end{figure}",
@@ -549,9 +882,13 @@ function ensureConferenceFigureTableContracts(source: string): { updated: boolea
       block: [
         "\\begin{figure}[t]",
         "\\centering",
-        "\\fbox{\\begin{minipage}{0.82\\linewidth}",
-        "Known accuracy, novel accuracy, and H-score are read together. A candidate run is not treated as improved unless the harmonic balance improves without hiding known/novel collapse.",
-        "\\end{minipage}}",
+        "\\begin{tabular}{lll}",
+        "\\toprule",
+        "Known accuracy & Novel accuracy & H-score \\\\",
+        "\\midrule",
+        "artifact value & artifact value & harmonic readout \\\\",
+        "\\bottomrule",
+        "\\end{tabular}",
         "\\caption{Known and novel accuracy balance used to interpret the local reference H-score result.}",
         "\\label{fig:known-novel-balance}",
         "\\end{figure}",
@@ -563,9 +900,13 @@ function ensureConferenceFigureTableContracts(source: string): { updated: boolea
       block: [
         "\\begin{figure}[t]",
         "\\centering",
-        "\\fbox{\\begin{minipage}{0.82\\linewidth}",
-        "Accepted pseudo-labels are monitored by class bucket before they influence the next training pass. The distribution is an audit signal for known-class dominance.",
-        "\\end{minipage}}",
+        "\\begin{tabular}{ll}",
+        "\\toprule",
+        "Class bucket & accepted count from result summary \\\\",
+        "\\midrule",
+        "known/novel classes & audited before next training pass \\\\",
+        "\\bottomrule",
+        "\\end{tabular}",
         "\\caption{Accepted pseudo-label distribution audit for the consistency gate.}",
         "\\label{fig:acceptance-distribution}",
         "\\end{figure}",
@@ -577,9 +918,14 @@ function ensureConferenceFigureTableContracts(source: string): { updated: boolea
       block: [
         "\\begin{figure}[t]",
         "\\centering",
-        "\\fbox{\\begin{minipage}{0.82\\linewidth}",
-        "The ablation map separates the consistency filter, class-balance debiasing, and evaluation readout so reviewers can see which mechanism each result supports.",
-        "\\end{minipage}}",
+        "\\begin{tabular}{lll}",
+        "\\toprule",
+        "Component & Control & Evidence role \\\\",
+        "\\midrule",
+        "Consistency filter & removed branch & gate contribution \\\\",
+        "Class balance & removed debiasing & distribution contribution \\\\",
+        "\\bottomrule",
+        "\\end{tabular}",
         "\\caption{Ablation contribution map for the proposed GCD gate.}",
         "\\label{fig:ablation-map}",
         "\\end{figure}",
@@ -591,9 +937,14 @@ function ensureConferenceFigureTableContracts(source: string): { updated: boolea
       block: [
         "\\begin{figure}[t]",
         "\\centering",
-        "\\fbox{\\begin{minipage}{0.82\\linewidth}",
-        "Supported claims stay inside the local reference envelope; external benchmark superiority, broad dataset transfer, and state-of-the-art language stay outside the submission boundary.",
-        "\\end{minipage}}",
+        "\\begin{tabular}{ll}",
+        "\\toprule",
+        "Inside current evidence & Outside current evidence \\\\",
+        "\\midrule",
+        "local reference metrics & state-of-the-art claim \\\\",
+        "source-index context & full benchmark campaign \\\\",
+        "\\bottomrule",
+        "\\end{tabular}",
         "\\caption{Supported-claim boundary preserved by the review packet and citation verification artifacts.}",
         "\\label{fig:evidence-boundary}",
         "\\end{figure}",
@@ -807,7 +1158,9 @@ async function readResultSnapshot(projectRoot: string): Promise<{
   const sources = candidates.filter(
     (entry): entry is Record<string, unknown> => Boolean(entry && Object.keys(entry).length > 0)
   );
-  const source = sources[0] ?? null;
+  const source = [...sources].sort(
+    (left, right) => resultCompletenessScore(right) - resultCompletenessScore(left)
+  )[0] ?? null;
   const baselineHScore = readNestedNumberFromSources(sources, [
     ["baseline", "h_score"],
     ["metrics", "baseline_h_score"],
@@ -856,13 +1209,42 @@ async function readResultSnapshot(projectRoot: string): Promise<{
     minusConsistencyHScore: readNestedNumberFromSources(sources, [
       ["ablations", "minus_consistency_filtering", "h_score"],
     ]),
+    acceptedPseudoLabels: normalizeNumberRecord(
+      readNestedRecordFromSources(sources, [
+        ["accepted_pseudo_labels"],
+        ["acceptedPseudoLabels"],
+        ["metrics", "accepted_pseudo_labels"],
+        ["activation", "accepted_pseudo_labels"],
+      ])
+    ),
   };
   return { snapshot, source };
 }
 
+function resultCompletenessScore(source: Record<string, unknown> | null | undefined) {
+  if (!source) {
+    return 0;
+  }
+  const checks = [
+    ["baseline", "h_score"],
+    ["baseline", "known_accuracy"],
+    ["baseline", "novel_accuracy"],
+    ["proposed", "h_score"],
+    ["proposed", "known_accuracy"],
+    ["proposed", "novel_accuracy"],
+    ["ablations", "minus_class_balance_debiasing", "h_score"],
+    ["ablations", "minus_consistency_filtering", "h_score"],
+    ["metrics", "h_score"],
+    ["metrics", "known_accuracy"],
+    ["metrics", "novel_accuracy"],
+  ];
+  return checks.filter((fields) => readNestedNumber(source, [fields]) !== null).length;
+}
+
 async function ensureAggregateResults(projectRoot: string, resultSource: Record<string, unknown> | null) {
   const aggregatePath = path.join(projectRoot, "researcher", "artifacts", "results", "results.json");
-  if (await pathExists(aggregatePath)) {
+  const existing = await readJsonIfExists<Record<string, unknown>>(aggregatePath);
+  if (existing && resultCompletenessScore(existing) >= resultCompletenessScore(resultSource)) {
     return null;
   }
   const source =
@@ -898,11 +1280,12 @@ async function ensureAuthoringSourceArtifacts(params: {
   }
 
   const existingBib = (await readTextIfExists(params.refsBibPath)) ?? "";
-  const mergedBib = mergeBibliographyEntries(existingBib);
+  const mergedBib = await mergeBibliographyEntries(existingBib, params.projectRoot);
   if (mergedBib.updated || existingBib.trim().length === 0) {
     await writeTextEnsured(params.refsBibPath, mergedBib.text);
     generatedFiles.push("academic_writer/paper/refs.bib");
   }
+  const draftCitationKeys = selectDraftCitationKeys(mergedBib.text, mergedBib.sourceIndexKeys);
 
   const title =
     params.paperMode === "survey"
@@ -911,12 +1294,12 @@ async function ensureAuthoringSourceArtifacts(params: {
   let existingMain = (await readTextIfExists(params.mainTexPath)) ?? "";
   if (
     params.paperMode === "conference" &&
-    (!draftLooksSubstantive(existingMain) ||
-      draftEvidenceLanguageNeedsRefresh(existingMain, snapshot))
+    draftQualityNeedsRefresh(existingMain, snapshot, mergedBib.sourceIndexCount)
   ) {
     existingMain = buildConferenceDraft({
       title,
       snapshot,
+      citationKeys: draftCitationKeys,
     });
     await writeTextEnsured(
       params.mainTexPath,
@@ -1047,6 +1430,62 @@ async function ensureAuthoringSourceArtifacts(params: {
       status: "ready",
     },
   ];
+  const figurePack = {
+    schemaVersion: 1,
+    generatedAt: new Date().toISOString(),
+    sourcePath: "researcher/artifacts/results/results.json",
+    entries: figureEntries.map((entry) => ({
+      ...entry,
+      data_provenance:
+        entry.kind === "result" || entry.figure_id === "fig-acceptance-distribution"
+          ? "researcher/artifacts/results/results.json"
+          : entry.source_path,
+      metric_values:
+        entry.figure_id === "fig-known-novel-balance"
+          ? {
+              known_accuracy: snapshot.knownAccuracy,
+              novel_accuracy: snapshot.novelAccuracy,
+              h_score: snapshot.proposedHScore,
+            }
+          : entry.figure_id === "fig-acceptance-distribution"
+            ? { accepted_pseudo_labels: snapshot.acceptedPseudoLabels }
+            : undefined,
+    })),
+  };
+  const tablePack = {
+    schemaVersion: 1,
+    generatedAt: new Date().toISOString(),
+    sourcePath: "researcher/artifacts/results/results.json",
+    entries: tableEntries.map((entry) => ({
+      ...entry,
+      data_provenance:
+        entry.kind === "experiment" ? "researcher/artifacts/results/results.json" : entry.source_path,
+      metric_values:
+        entry.table_id === "tab-headline-metrics"
+          ? {
+              baseline: {
+                h_score: snapshot.baselineHScore,
+                known_accuracy: snapshot.baselineKnownAccuracy,
+                novel_accuracy: snapshot.baselineNovelAccuracy,
+              },
+              proposed: {
+                h_score: snapshot.proposedHScore,
+                known_accuracy: snapshot.knownAccuracy,
+                novel_accuracy: snapshot.novelAccuracy,
+                delta_h: computedDelta(snapshot),
+              },
+            }
+          : entry.table_id === "tab-ablation-controls"
+            ? {
+                full_gate_h_score: snapshot.proposedHScore,
+                minus_class_balance_debiasing_h_score: snapshot.minusClassBalanceHScore,
+                minus_consistency_filtering_h_score: snapshot.minusConsistencyHScore,
+              }
+            : undefined,
+    })),
+  };
+  await writeJsonEnsured(path.join(params.projectRoot, "academic_writer", "FIGURE_PACK.json"), figurePack);
+  await writeJsonEnsured(path.join(params.projectRoot, "academic_writer", "TABLE_PACK.json"), tablePack);
   await writeJsonEnsured(path.join(params.projectRoot, "academic_writer", "FIGURE_REGISTRY.json"), {
     schemaVersion: 1,
     generatedAt: new Date().toISOString(),
@@ -1082,7 +1521,12 @@ async function ensureAuthoringSourceArtifacts(params: {
     last_updated_at: new Date().toISOString(),
   };
   await writeJsonEnsured(manifestPath, manifest);
-  generatedFiles.push("academic_writer/FIGURE_REGISTRY.json", "academic_writer/TABLE_REGISTRY.json");
+  generatedFiles.push(
+    "academic_writer/FIGURE_PACK.json",
+    "academic_writer/TABLE_PACK.json",
+    "academic_writer/FIGURE_REGISTRY.json",
+    "academic_writer/TABLE_REGISTRY.json"
+  );
   await writeTextEnsured(
     path.join(params.projectRoot, "academic_writer", "FIGURE_TABLE_ALIGNMENT.md"),
     [

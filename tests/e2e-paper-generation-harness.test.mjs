@@ -13,7 +13,7 @@ async function write(filePath, content) {
   await fs.writeFile(filePath, content, "utf8");
 }
 
-test("E2E paper generation harness materializes report, checklist, and timeline", async (t) => {
+test("E2E paper generation harness materializes report, scorecard, checklist, and timeline", async (t) => {
   const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-e2e-harness-"));
   t.after(async () => {
     await fs.rm(projectRoot, { recursive: true, force: true });
@@ -100,6 +100,46 @@ test("E2E paper generation harness materializes report, checklist, and timeline"
       2
     )}\n`
   );
+  await write(
+    path.join(projectRoot, "graph", "PAPERNEXUS_TASK_CERTIFICATION.json"),
+    `${JSON.stringify(
+      {
+        schema_version: 1,
+        status: "partial",
+        claim_level: "remote_corpus_summary",
+        source_backed_graph_claim: false,
+        graph: {
+          status: "ready",
+          verification_mode: "remote_corpus_summary",
+        },
+        mcp_contract: {
+          evidence_mode: "remote_api",
+        },
+        limitations: ["remote_corpus_summary_without_per_paper_source_spans"],
+      },
+      null,
+      2
+    )}\n`
+  );
+  await write(
+    path.join(projectRoot, "researcher", "BENCHMARK_ADAPTER_FIXTURE.json"),
+    `${JSON.stringify(
+      {
+        adapter: "mle-bench-fixture",
+        benchmark_id: "gcd-local-fixture",
+        metric: "h_score",
+        baseline_score: 0.42,
+        candidate_score: 0.51,
+        holdout_score: 0.48,
+        iterations: 3,
+        wall_time_seconds: 12.5,
+        cost_usd: 0,
+        evidence_paths: ["researcher/artifacts/results/results.json"],
+      },
+      null,
+      2
+    )}\n`
+  );
 
   const { stdout } = await execFileAsync(process.execPath, [
     "scripts/run-e2e-paper-generation.mjs",
@@ -112,10 +152,80 @@ test("E2E paper generation harness materializes report, checklist, and timeline"
   assert.equal(result.finalVerdict, "pass");
   assert.equal(result.runtimeSafety.openIncidents, 1);
   assert.equal(result.runtimeSafety.blockingOpenIncidents, 0);
+  assert.match(result.scorecardPath, /E2E_RUN_SCORECARD\.json$/);
+  assert.match(result.progressNarrativePath, /E2E_PROGRESS_NARRATIVE\.md$/);
+  assert.match(result.progressChartPath, /progress_chart\.json$/);
+  assert.match(result.progressChartHtmlPath, /progress_chart\.html$/);
+  assert.match(result.runLedgerPath, /E2E_RUN_LEDGER\.jsonl$/);
+  assert.match(result.dashboardPath, /E2E_DASHBOARD\.html$/);
+  assert.match(result.benchmarkAdapterScorecardPath, /E2E_BENCHMARK_ADAPTER_SCORECARD\.json$/);
+  assert.match(result.domainEvaluatorContractPath, /E2E_DOMAIN_EVALUATOR_CONTRACT\.json$/);
+  assert.match(result.platformProfilePath, /PLATFORM_PROFILE\.json$/);
   assert.equal(
     await fs.readFile(path.join(projectRoot, ".openclaw-research", "E2E_RUN_REPORT.md"), "utf8").then((text) => /final_verdict: pass/.test(text)),
     true
   );
+  const scorecard = JSON.parse(
+    await fs.readFile(path.join(projectRoot, ".openclaw-research", "E2E_RUN_SCORECARD.json"), "utf8")
+  );
+  assert.equal(scorecard.verdict.final_verdict, "pass");
+  assert.equal(scorecard.verdict.claim_strength_cap, "artifact_complete_content_unscored");
+  assert.equal(typeof scorecard.quality_score.score_100, "number");
+  assert.equal(scorecard.minimal_scorecard.reproducibility_pass, true);
+  assert.equal(scorecard.minimal_scorecard.baseline_score, 0.42);
+  assert.equal(scorecard.minimal_scorecard.holdout_score, 0.48);
+  assert.equal(scorecard.papernexus_certification.status, "partial");
+  assert.equal(scorecard.papernexus_certification.claim_level, "remote_corpus_summary");
+  assert.equal(
+    scorecard.papernexus_certification.source_backed_graph_claim,
+    false
+  );
+  assert.equal(scorecard.benchmark_adapter.status, "pass");
+  assert.equal(scorecard.benchmark_adapter.adapter, "mle-bench-fixture");
+  assert.equal(scorecard.benchmark_adapter.guardrail.raw_benchmark_score_can_bypass_claim_gate, false);
+  assert.equal(scorecard.domain_evaluator.pack, "systematic_review");
+  assert.equal(typeof scorecard.platform_profile.runtime.platform, "string");
+  assert.match(
+    await fs.readFile(path.join(projectRoot, ".openclaw-research", "E2E_PROGRESS_NARRATIVE.md"), "utf8"),
+    /quality_score_100:/
+  );
+  const progressChart = JSON.parse(
+    await fs.readFile(path.join(projectRoot, ".openclaw-research", "progress_chart.json"), "utf8")
+  );
+  assert.equal(progressChart.verdict.final_verdict, "pass");
+  assert.equal(progressChart.quality_components.some((entry) => entry.name === "artifact_coverage"), true);
+  assert.equal(progressChart.summary.papernexus_certification_status, "partial");
+  assert.equal(progressChart.summary.benchmark_adapter_status, "pass");
+  assert.equal(progressChart.summary.domain_evaluator_pack, "systematic_review");
+  assert.match(progressChart.linked_artifacts.run_ledger_path, /E2E_RUN_LEDGER\.jsonl$/);
+  assert.match(progressChart.linked_artifacts.dashboard_path, /E2E_DASHBOARD\.html$/);
+  assert.equal(
+    progressChart.annotations.some(
+      (entry) => entry.kind === "papernexus_certification"
+    ),
+    true
+  );
+  assert.equal(
+    progressChart.annotations.some((entry) => entry.kind === "benchmark_adapter"),
+    true
+  );
+  assert.equal(progressChart.timeline_points.at(-1).kind, "final_verdict");
+  assert.match(
+    await fs.readFile(path.join(projectRoot, ".openclaw-research", "progress_chart.html"), "utf8"),
+    /<title>E2E Progress Chart<\/title>/
+  );
+  assert.match(
+    await fs.readFile(path.join(projectRoot, ".openclaw-research", "E2E_DASHBOARD.html"), "utf8"),
+    /<title>OpenClaw No-Discord E2E Dashboard<\/title>/
+  );
+  const runLedgerLines = (
+    await fs.readFile(path.join(projectRoot, ".openclaw-research", "E2E_RUN_LEDGER.jsonl"), "utf8")
+  )
+    .trim()
+    .split(/\r?\n/)
+    .filter(Boolean);
+  assert.equal(runLedgerLines.length, 1);
+  assert.equal(JSON.parse(runLedgerLines[0]).verdict.final_verdict, "pass");
   const checklist = JSON.parse(
     await fs.readFile(
       path.join(projectRoot, ".openclaw-research", "E2E_ARTIFACT_CHECKLIST.json"),
@@ -123,4 +233,23 @@ test("E2E paper generation harness materializes report, checklist, and timeline"
     )
   );
   assert.equal(checklist.final_verdict, "pass");
+  assert.equal(checklist.claim_strength_cap, "artifact_complete_content_unscored");
+  const benchmarkAdapter = JSON.parse(
+    await fs.readFile(
+      path.join(projectRoot, ".openclaw-research", "E2E_BENCHMARK_ADAPTER_SCORECARD.json"),
+      "utf8"
+    )
+  );
+  const domainEvaluator = JSON.parse(
+    await fs.readFile(
+      path.join(projectRoot, ".openclaw-research", "E2E_DOMAIN_EVALUATOR_CONTRACT.json"),
+      "utf8"
+    )
+  );
+  const platformProfile = JSON.parse(
+    await fs.readFile(path.join(projectRoot, ".openclaw-research", "PLATFORM_PROFILE.json"), "utf8")
+  );
+  assert.equal(benchmarkAdapter.benchmark_id, "gcd-local-fixture");
+  assert.equal(domainEvaluator.pack, "systematic_review");
+  assert.equal(platformProfile.capability_matrix.cpu.status, "available");
 });

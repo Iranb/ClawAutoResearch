@@ -593,6 +593,11 @@ import { runWorkflowAutoIteratorImpl } from "./workflow-guard-runtime/auto-itera
 import { evaluateExperimentSearchDecision } from "./workflow-experiment-decision";
 
 export { checkGraphPresenceForWorkflow, type GraphPresenceCheckResult } from "./graph-presence";
+export {
+  certifyPapernexusTaskForProject,
+  getPapernexusTaskCertificationPath,
+  type PapernexusTaskCertification,
+} from "./papernexus-task-certification";
 
 export interface WorkflowGuardPolicy extends ChannelProjectBindingPolicy {
   allowWorkspaceFallback?: boolean;

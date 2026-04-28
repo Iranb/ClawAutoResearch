@@ -3170,6 +3170,34 @@ test("remote graph presence accepts summary-only remote corpus PAPER_SOURCE_INDE
   assert.equal(refreshedStatus.status, "ready");
   assert.equal(refreshedStatus.expected_paper_count, 198);
   assert.equal(refreshedStatus.present_paper_count, 198);
+
+  const certification = JSON.parse(
+    await fs.readFile(
+      path.join(projectRoot, "graph", "PAPERNEXUS_TASK_CERTIFICATION.json"),
+      "utf8"
+    )
+  );
+  assert.equal(certification.status, "partial");
+  assert.equal(certification.claim_level, "remote_corpus_summary");
+  assert.equal(certification.source_backed_graph_claim, false);
+  assert.equal(certification.graph.verification_mode, "remote_corpus_summary");
+  assert.equal(certification.mcp_contract.remote_api_fallback, true);
+  assert.ok(
+    certification.limitations.includes(
+      "remote_corpus_summary_without_per_paper_source_spans"
+    )
+  );
+  assert.ok(certification.limitations.includes("paper_source_index_summary_only"));
+
+  const refreshedManifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  assert.equal(
+    refreshedManifest.paper_ingestion.papernexus_certification_status,
+    "partial"
+  );
+  assert.equal(
+    refreshedManifest.paper_ingestion.papernexus_source_backed_graph_claim,
+    false
+  );
 });
 
 test("remote graph presence trusts a healthy remote corpus when no local source index exists", async (t) => {
@@ -3577,6 +3605,19 @@ test("graph presence check refreshes remote status metadata through remote_mcp",
   assert.equal(refreshedStatus.status, "ready");
   assert.equal(refreshedStatus.present_paper_count, 1);
   assert.equal(refreshedStatus.expected_paper_count, 1);
+
+  const certification = JSON.parse(
+    await fs.readFile(
+      path.join(projectRoot, "graph", "PAPERNEXUS_TASK_CERTIFICATION.json"),
+      "utf8"
+    )
+  );
+  assert.equal(certification.status, "ready");
+  assert.equal(certification.claim_level, "source_backed_graph");
+  assert.equal(certification.source_backed_graph_claim, true);
+  assert.equal(certification.graph.source_backed_present_count, 1);
+  assert.equal(certification.mcp_contract.remote_mcp_evidence, true);
+  assert.equal(certification.mcp_contract.skill_aligned_graph_claim, true);
 });
 
 test("graph presence check reports remote PaperNexus reconciliation in progress when wrapper-driven ingestion is active", async (t) => {
