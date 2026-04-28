@@ -90,6 +90,7 @@ export default defineConfig({
           items: [
             { text: '运维索引', link: '/operations/' },
             { text: '测试与调试', link: '/operations/testing-and-debugging' },
+            { text: 'Vite 与当前状态', link: '/operations/vite-and-current-state' },
             { text: 'GitHub Pages 部署', link: '/operations/github-pages' },
           ],
         },
