@@ -68,6 +68,8 @@ type ParagraphLogicBlockingIssue = {
 
 type ResultSnapshot = {
   baselineHScore: number | null;
+  baselineKnownAccuracy: number | null;
+  baselineNovelAccuracy: number | null;
   proposedHScore: number | null;
   deltaHScore: number | null;
   knownAccuracy: number | null;
@@ -211,8 +213,44 @@ function readNestedNumber(
   return null;
 }
 
-function formatMetric(value: number | null, fallback: string) {
+function readNestedNumberFromSources(
+  sources: Array<Record<string, unknown> | null | undefined>,
+  paths: string[][]
+): number | null {
+  for (const source of sources) {
+    const value = readNestedNumber(source, paths);
+    if (value !== null) {
+      return value;
+    }
+  }
+  return null;
+}
+
+function formatMetric(value: number | null, fallback = "not recorded") {
   return value === null ? fallback : value.toFixed(4);
+}
+
+function computedDelta(snapshot: ResultSnapshot): number | null {
+  if (snapshot.deltaHScore !== null) {
+    return snapshot.deltaHScore;
+  }
+  if (snapshot.proposedHScore !== null && snapshot.baselineHScore !== null) {
+    return Number((snapshot.proposedHScore - snapshot.baselineHScore).toFixed(4));
+  }
+  return null;
+}
+
+function classifyMetricDelta(delta: number | null): "positive" | "neutral" | "negative" | "missing" {
+  if (delta === null) {
+    return "missing";
+  }
+  if (delta > 0) {
+    return "positive";
+  }
+  if (delta < 0) {
+    return "negative";
+  }
+  return "neutral";
 }
 
 function citationBibliographyEntries() {
@@ -288,23 +326,92 @@ function draftLooksSubstantive(source: string) {
   return /\\begin\{document\}/.test(source) && sectionCount >= 6 && wordCount >= 1800;
 }
 
+function draftEvidenceLanguageNeedsRefresh(source: string, snapshot: ResultSnapshot) {
+  const deltaClass = classifyMetricDelta(computedDelta(snapshot));
+  if (!source.trim()) {
+    return false;
+  }
+  const positiveResultClaim =
+    /This improvement is useful|improves the local reference H-score|H-score gain|supports a bounded mechanism claim:\s*consistency filtering can make pseudo-label expansion less brittle/i;
+  const neutralOrNegativeClaim =
+    /does not support an empirical improvement claim|not an improvement|underperforms the local reference baseline|does not show a measured H-score improvement/i;
+  if ((deltaClass === "neutral" || deltaClass === "negative" || deltaClass === "missing") &&
+      positiveResultClaim.test(source)) {
+    return true;
+  }
+  if (deltaClass === "positive" && neutralOrNegativeClaim.test(source)) {
+    return true;
+  }
+  const expectedMinusBalance =
+    snapshot.minusClassBalanceHScore === null
+      ? null
+      : `Minus class-balance debiasing & ${formatMetric(snapshot.minusClassBalanceHScore)}`;
+  if (expectedMinusBalance && source.includes("Minus class-balance debiasing &") && !source.includes(expectedMinusBalance)) {
+    return true;
+  }
+  const expectedMinusConsistency =
+    snapshot.minusConsistencyHScore === null
+      ? null
+      : `Minus explicit consistency filtering & ${formatMetric(snapshot.minusConsistencyHScore)}`;
+  if (expectedMinusConsistency && source.includes("Minus explicit consistency filtering &") && !source.includes(expectedMinusConsistency)) {
+    return true;
+  }
+  return false;
+}
+
 function buildConferenceDraft(params: {
   title: string;
   snapshot: ResultSnapshot;
 }) {
-  const baseline = formatMetric(params.snapshot.baselineHScore, "0.0000");
-  const proposed = formatMetric(params.snapshot.proposedHScore, "0.3404");
-  const delta = formatMetric(params.snapshot.deltaHScore, "0.3404");
-  const known = formatMetric(params.snapshot.knownAccuracy, "0.8778");
-  const novel = formatMetric(params.snapshot.novelAccuracy, "0.2111");
-  const minusBalance = formatMetric(params.snapshot.minusClassBalanceHScore, "0.2801");
-  const minusConsistency = formatMetric(params.snapshot.minusConsistencyHScore, proposed);
+  const deltaValue = computedDelta(params.snapshot);
+  const deltaClass = classifyMetricDelta(deltaValue);
+  const baseline = formatMetric(params.snapshot.baselineHScore, "not recorded");
+  const baselineKnown = formatMetric(params.snapshot.baselineKnownAccuracy, "not recorded");
+  const baselineNovel = formatMetric(params.snapshot.baselineNovelAccuracy, "not recorded");
+  const proposed = formatMetric(params.snapshot.proposedHScore, "not recorded");
+  const delta = formatMetric(deltaValue, "not recorded");
+  const known = formatMetric(params.snapshot.knownAccuracy, "not recorded");
+  const novel = formatMetric(params.snapshot.novelAccuracy, "not recorded");
+  const minusBalance = formatMetric(params.snapshot.minusClassBalanceHScore, "not recorded");
+  const minusConsistency = formatMetric(params.snapshot.minusConsistencyHScore, "not recorded");
+  const contributionReading =
+    deltaClass === "positive"
+      ? `The measured local result is positive: the baseline reaches H-score ${baseline}, while the proposed consistency-filtered run reaches ${proposed}, yielding a delta of ${delta}. This supports a bounded improvement claim because the known/novel metrics remain visible rather than being hidden behind aggregate accuracy.`
+      : deltaClass === "neutral"
+        ? `The measured local result is neutral: the baseline and proposed consistency-filtered run both reach H-score ${proposed}, yielding a delta of ${delta}. This does not support an empirical improvement claim; it supports only a bounded mechanism and pipeline-readiness claim until a stronger experiment produces a positive known/novel balance.`
+        : deltaClass === "negative"
+          ? `The measured local result is negative: the baseline reaches H-score ${baseline}, while the proposed consistency-filtered run reaches ${proposed}, yielding a delta of ${delta}. This falsifies the current improvement claim under the local reference envelope, so the manuscript presents the method as an analyzed failure mode rather than a supported GCD advance.`
+          : `The measured local result is incomplete: the available artifacts do not record enough H-score information to support an empirical improvement claim. The manuscript therefore treats the method as a mechanism proposal and keeps benchmark claims out of scope.`;
+  const resultReading =
+    deltaClass === "positive"
+      ? `The main result is that the consistency-filtered run improves the local reference H-score from ${baseline} to ${proposed}. The absolute value should not be over-read because the reference benchmark is intentionally compact, but the direction is meaningful for workflow validation. Known accuracy is ${known}, and novel accuracy is ${novel}, so the evidence can be read through the intended known/novel balance.`
+      : deltaClass === "neutral"
+        ? `The main result is that the consistency-filtered run matches the local reference baseline at H-score ${proposed}, with delta ${delta}. This is not an improvement, and the text should not describe it as a gain. Known accuracy is ${known}, while novel accuracy is ${novel}, so the current evidence shows that the local run has not yet produced novel-class discovery benefit.`
+        : deltaClass === "negative"
+          ? `The main result is that the consistency-filtered run underperforms the local reference baseline, moving from H-score ${baseline} to ${proposed}. This should trigger experiment repair before any positive claim is made. Known accuracy is ${known}, and novel accuracy is ${novel}, so the failure must be interpreted through the known/novel balance rather than hidden by aggregate language.`
+          : `The main result cannot be scored from the available artifacts because the H-score record is incomplete. The paper therefore reports the missing evidence boundary directly and treats the current draft as a workflow artifact rather than a benchmark claim.`;
+  const abstractReading =
+    deltaClass === "positive"
+      ? "The evidence supports a bounded mechanism claim: consistency filtering can make pseudo-label expansion less brittle under the validated local envelope."
+      : deltaClass === "neutral"
+        ? "The evidence does not show a measured H-score improvement, so the draft limits itself to a bounded mechanism and instrumentation claim under the validated local envelope."
+        : deltaClass === "negative"
+          ? "The evidence does not support the current improvement hypothesis under the validated local envelope, so the draft records the failure boundary and required experiment repair."
+          : "The evidence is incomplete, so the draft records the missing result boundary and avoids empirical performance claims.";
+  const conclusionReading =
+    deltaClass === "positive"
+      ? `In the local reference evaluation, the proposed run improves H-score from ${baseline} to ${proposed} while retaining known accuracy ${known} and introducing novel accuracy ${novel}. The result supports a bounded mechanism claim that consistency filtering can stabilize pseudo-label expansion when known and novel classes must be evaluated together.`
+      : deltaClass === "neutral"
+        ? `In the local reference evaluation, the proposed run matches the baseline at H-score ${proposed}, with known accuracy ${known} and novel accuracy ${novel}. The result does not support an improvement claim; it shows that the current implementation is pipeline-complete but scientifically neutral under this evidence envelope.`
+        : deltaClass === "negative"
+          ? `In the local reference evaluation, the proposed run fails to beat the baseline, moving from H-score ${baseline} to ${proposed}. The result should be treated as a repair signal for the experiment design rather than as support for the method.`
+          : "The current artifacts do not provide a complete scored result, so the conclusion is limited to the workflow contract and the need for a complete benchmark run.";
 
   const sections = [
     [
       "Introduction",
       `Generalized category discovery asks a learner to preserve accuracy on labeled known classes while discovering unlabeled novel classes. This paper studies a bounded version of that problem: whether a FixMatch-style consistency gate can make pseudo-label expansion less brittle when known and novel classes coexist. The motivation comes from consistency and confidence based semi-supervised learning \\cite{sohn2020fixmatch,berthelot2019mixmatch}, but the evaluation target is not ordinary semi-supervised classification. In GCD, an accepted pseudo-label can help structure a novel cluster or can amplify a known-class bias, so the gate must be read through the known/novel balance rather than through aggregate accuracy alone \\cite{vaze2022generalized,han2019learning}.`,
-      `The contribution is a workflow-grounded mechanism claim rather than a broad leaderboard claim. We instantiate weak/strong augmentation agreement as an acceptance condition for unlabeled candidates, combine it with class-balance debiasing, and track H-score as the primary result. In the current local reference benchmark evaluation, the baseline reaches H-score ${baseline}, while the proposed consistency-filtered run reaches ${proposed}, yielding a delta of ${delta}. This improvement is useful because known accuracy remains ${known} while novel accuracy becomes ${novel}. The paper therefore argues that FixMatch-style acceptance is a plausible control layer for GCD exploration, with the limitation that external benchmark suites must still replace the local reference benchmark before any claim of general superiority.`,
+      `The contribution is a workflow-grounded mechanism claim rather than a broad leaderboard claim. We instantiate weak/strong augmentation agreement as an acceptance condition for unlabeled candidates, combine it with class-balance debiasing, and track H-score as the primary result. ${contributionReading} The paper therefore treats FixMatch-style acceptance as a plausible control layer for GCD exploration, with the limitation that external benchmark suites must still replace the local reference benchmark before any claim of general superiority.`,
     ],
     [
       "Related Work",
@@ -314,7 +421,7 @@ function buildConferenceDraft(params: {
     [
       "Method",
       `The method adds a consistency-filtered pseudo-label gate to a GCD training loop. For each unlabeled candidate, the model forms a weakly augmented prediction and a strongly augmented prediction. A candidate is accepted only when the class identity and confidence remain stable across those views. Accepted candidates then update the training pool, while rejected candidates remain unlabeled for the next pass. This rule follows the spirit of FixMatch \\cite{sohn2020fixmatch} but changes the operational purpose: the gate is not just a source of extra supervised examples, it is a control point that delays commitment when augmentation disagreement suggests that the sample may sit near a known/novel boundary.`,
-      `The second component is class-balance debiasing. Without it, high-confidence known-class predictions can dominate the accepted pool, making the discovered novel region smaller even when the overall confidence score looks strong. The local implementation therefore tracks accepted pseudo-label counts by class and uses that distribution as a warning signal. The paper keeps the main text at the mechanism level and moves derivation detail to the appendix. The resulting design has one primary claim: consistency filtering can reduce unstable pseudo-label commitments and improve the H-score balance under a fixed local reference envelope.`,
+      `The second component is class-balance debiasing. Without it, high-confidence known-class predictions can dominate the accepted pool, making the discovered novel region smaller even when the overall confidence score looks strong. The local implementation therefore tracks accepted pseudo-label counts by class and uses that distribution as a warning signal. The paper keeps the main text at the mechanism level and moves derivation detail to the appendix. The resulting design has one primary claim target: consistency filtering should reduce unstable pseudo-label commitments and improve the H-score balance, but the manuscript only states that target as supported when the measured delta is positive.`,
     ],
     [
       "Experiments",
@@ -323,10 +430,10 @@ function buildConferenceDraft(params: {
     ],
     [
       "Results",
-      `The main result is that the consistency-filtered run improves the local reference H-score from ${baseline} to ${proposed}. The absolute value should not be over-read because the reference benchmark is intentionally compact, but the direction is meaningful for workflow validation. Known accuracy remains ${known}, which means the gate does not simply discard known-class structure. Novel accuracy reaches ${novel}, which is the channel that creates the H-score gain. This pattern matches the intended mechanism: the gate is useful when it protects the known/novel balance rather than when it only increases confidence on already easy examples.`,
-      `Table 1 summarizes the headline metrics, and Table 2 records the ablation evidence. The class-balance ablation is especially important because a raw consistency gate can still over-accept dominant known classes. The current evidence supports a scoped writing claim: FixMatch-style agreement is a plausible way to make GCD pseudo-label expansion more stable under the local envelope. It does not support claims about universal superiority, dataset-wide state of the art, or replacement of full GCD evaluation suites. The reviewer-facing claim matrix and quality audit preserve that boundary so that the generated paper remains aligned with its evidence.`,
+      resultReading,
+      `Table 1 summarizes the headline metrics, and Table 2 records the ablation evidence. The class-balance ablation is especially important because a raw consistency gate can still over-accept dominant known classes. The current evidence supports only the claim strength licensed by the measured delta: positive deltas permit a scoped improvement claim, zero deltas permit a neutral mechanism-readiness claim, and negative deltas require experiment repair. It does not support claims about universal superiority, dataset-wide state of the art, or replacement of full GCD evaluation suites. The reviewer-facing claim matrix and quality audit preserve that boundary so that the generated paper remains aligned with its evidence.`,
       "\\begin{table}[t]\n\\centering\n\\caption{Local reference headline metrics for the consistency-filtered GCD run.}\n\\begin{tabular}{lrrrr}\n\\toprule\nConfiguration & H-score & Known accuracy & Novel accuracy & Delta H \\\\\n\\midrule\nBaseline & " +
-        `${baseline} & 1.0000 & 0.0000 & 0.0000 \\\\\n` +
+        `${baseline} & ${baselineKnown} & ${baselineNovel} & 0.0000 \\\\\n` +
         `Consistency-filtered & ${proposed} & ${known} & ${novel} & ${delta} \\\\\n` +
         "\\bottomrule\n\\end{tabular}\n\\end{table}",
       "\\begin{table}[t]\n\\centering\n\\caption{Local ablation controls for the proposed GCD gate.}\n\\begin{tabular}{lr}\n\\toprule\nAblation & H-score \\\\\n\\midrule\nFull gate & " +
@@ -352,7 +459,7 @@ function buildConferenceDraft(params: {
     ],
     [
       "Conclusion",
-      `This paper tested a narrow but useful idea: adapt FixMatch-style consistency to generalized category discovery by making agreement under weak and strong augmentation a pseudo-label acceptance condition. In the local reference evaluation, the proposed run improves H-score from ${baseline} to ${proposed} while retaining known accuracy ${known} and introducing novel accuracy ${novel}. The result supports a bounded mechanism claim that consistency filtering can stabilize pseudo-label expansion when known and novel classes must be evaluated together.`,
+      `This paper tested a narrow but useful idea: adapt FixMatch-style consistency to generalized category discovery by making agreement under weak and strong augmentation a pseudo-label acceptance condition. ${conclusionReading}`,
       `The broader contribution is a durable research workflow contract. The pipeline now carries experiment outputs into analysis artifacts, then into a structured manuscript with citations, figure/table registries, review packets, and citation verification. That matters because automated research systems fail when a stage marks itself ready without producing the artifacts the next stage needs. The no-Discord path should therefore advance only when the draft, bibliography, review state, and evidence boundary are present. This closeout implements that contract for the current GCD project and leaves benchmark expansion as the next research task.`,
     ],
   ];
@@ -370,7 +477,7 @@ function buildConferenceDraft(params: {
     "\\date{}",
     "\\maketitle",
     "\\begin{abstract}",
-    `We study a FixMatch-inspired consistency filter for generalized category discovery. The method accepts unlabeled candidates only when weak and strong augmentations agree, then reads the result through known accuracy, novel accuracy, and H-score. In the current local reference evaluation, the proposed run reaches H-score ${proposed}, compared with baseline ${baseline}, for a delta of ${delta}. The evidence supports a bounded mechanism claim: consistency filtering can make pseudo-label expansion less brittle under the validated local envelope. The paper preserves that boundary and treats external GCD benchmark evaluation as future work.`,
+    `We study a FixMatch-inspired consistency filter for generalized category discovery. The method accepts unlabeled candidates only when weak and strong augmentations agree, then reads the result through known accuracy, novel accuracy, and H-score. In the current local reference evaluation, the proposed run reaches H-score ${proposed}, compared with baseline ${baseline}, for a delta of ${delta}. ${abstractReading} The paper preserves that boundary and treats external GCD benchmark evaluation as future work.`,
     "\\end{abstract}",
     "",
     ...sections.flatMap(([title, ...paragraphs]) => [
@@ -697,38 +804,56 @@ async function readResultSnapshot(projectRoot: string): Promise<{
     ),
     readExperimentLedgerResultSource(projectRoot),
   ]);
-  const source = candidates.find((entry) => entry && Object.keys(entry).length > 0) ?? null;
+  const sources = candidates.filter(
+    (entry): entry is Record<string, unknown> => Boolean(entry && Object.keys(entry).length > 0)
+  );
+  const source = sources[0] ?? null;
+  const baselineHScore = readNestedNumberFromSources(sources, [
+    ["baseline", "h_score"],
+    ["metrics", "baseline_h_score"],
+    ["baseline_h_score"],
+  ]);
+  const proposedHScore = readNestedNumberFromSources(sources, [
+    ["proposed", "h_score"],
+    ["metrics", "h_score"],
+    ["primary_result", "h_score"],
+    ["h_score"],
+  ]);
+  const recordedDeltaHScore = readNestedNumberFromSources(sources, [
+    ["delta_h"],
+    ["metrics", "delta_h_score"],
+    ["primary_result", "delta_h_score"],
+  ]);
   const snapshot: ResultSnapshot = {
-    baselineHScore: readNestedNumber(source, [
-      ["baseline", "h_score"],
-      ["metrics", "baseline_h_score"],
-      ["baseline_h_score"],
+    baselineHScore,
+    baselineKnownAccuracy: readNestedNumberFromSources(sources, [
+      ["baseline", "known_accuracy"],
+      ["baseline", "knownAccuracy"],
     ]),
-    proposedHScore: readNestedNumber(source, [
-      ["proposed", "h_score"],
-      ["metrics", "h_score"],
-      ["primary_result", "h_score"],
-      ["h_score"],
+    baselineNovelAccuracy: readNestedNumberFromSources(sources, [
+      ["baseline", "novel_accuracy"],
+      ["baseline", "novelAccuracy"],
     ]),
-    deltaHScore: readNestedNumber(source, [
-      ["delta_h"],
-      ["metrics", "delta_h_score"],
-      ["primary_result", "delta_h_score"],
-    ]),
-    knownAccuracy: readNestedNumber(source, [
+    proposedHScore,
+    deltaHScore:
+      recordedDeltaHScore ??
+      (proposedHScore !== null && baselineHScore !== null
+        ? Number((proposedHScore - baselineHScore).toFixed(4))
+        : null),
+    knownAccuracy: readNestedNumberFromSources(sources, [
       ["proposed", "known_accuracy"],
       ["metrics", "known_accuracy"],
       ["primary_result", "known_accuracy"],
     ]),
-    novelAccuracy: readNestedNumber(source, [
+    novelAccuracy: readNestedNumberFromSources(sources, [
       ["proposed", "novel_accuracy"],
       ["metrics", "novel_accuracy"],
       ["primary_result", "novel_accuracy"],
     ]),
-    minusClassBalanceHScore: readNestedNumber(source, [
+    minusClassBalanceHScore: readNestedNumberFromSources(sources, [
       ["ablations", "minus_class_balance_debiasing", "h_score"],
     ]),
-    minusConsistencyHScore: readNestedNumber(source, [
+    minusConsistencyHScore: readNestedNumberFromSources(sources, [
       ["ablations", "minus_consistency_filtering", "h_score"],
     ]),
   };
@@ -784,7 +909,11 @@ async function ensureAuthoringSourceArtifacts(params: {
       ? "Evidence-Grounded Review of Generalized Category Discovery"
       : "Consistency-Filtered Pseudo-Labeling for Generalized Category Discovery";
   let existingMain = (await readTextIfExists(params.mainTexPath)) ?? "";
-  if (params.paperMode === "conference" && !draftLooksSubstantive(existingMain)) {
+  if (
+    params.paperMode === "conference" &&
+    (!draftLooksSubstantive(existingMain) ||
+      draftEvidenceLanguageNeedsRefresh(existingMain, snapshot))
+  ) {
     existingMain = buildConferenceDraft({
       title,
       snapshot,

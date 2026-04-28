@@ -87,6 +87,98 @@ function readMetrics(params: {
   };
 }
 
+type MetricEvidenceReading = {
+  className: "positive" | "neutral" | "negative";
+  c1Claim: string;
+  c1Verdict: "supported" | "partial" | "unsupported";
+  narrativeClaim: string;
+  trackReason: string;
+  unsupportedClaims: string[];
+  qualityMetricCheck: string;
+  reasonableness: string;
+  theoryGuidance: string;
+  appendixClaimScope: string;
+  theoryOverallSignal: "supportive" | "bounded" | "weak";
+};
+
+function readMetricEvidence(params: {
+  oneChange: string;
+  metrics: Record<string, number>;
+  datasets: string[];
+}): MetricEvidenceReading {
+  const delta = params.metrics.delta_h_score;
+  const baseline = params.metrics.baseline_h_score.toFixed(4);
+  const proposed = params.metrics.h_score.toFixed(4);
+  const deltaText = delta.toFixed(4);
+  if (delta > 0) {
+    return {
+      className: "positive",
+      c1Claim: `${params.oneChange} improves the local GCD reference H-score while preserving known-class accuracy.`,
+      c1Verdict: "supported",
+      narrativeClaim:
+        `The supported paper claim is that FixMatch-style consistency filtering is a plausible GCD improvement mechanism under the validated envelope: ${params.datasets.join(", ")}.`,
+      trackReason:
+        `${params.oneChange} produced a positive local H-score delta of ${deltaText} with known/novel metrics available for inspection.`,
+      unsupportedClaims: [],
+      qualityMetricCheck:
+        `The H-score delta is ${deltaText}. This positive delta supports the bounded local improvement claim; future negative benchmark results should trigger rollback to experiment repair rather than manuscript expansion.`,
+      reasonableness:
+        `The causal attribution remains bounded: ${params.oneChange} is supported by a positive local H-score delta of ${deltaText}, but the claim should not be generalized beyond the current reference benchmark until external runs are added.`,
+      theoryGuidance:
+        `Use a lemma-result style in the body: consistency filtering reduces unstable pseudo-label updates, which can improve the harmonic balance between known and novel accuracy. The empirical anchor is the positive local H-score delta of ${deltaText}.`,
+      appendixClaimScope:
+        "The local experiment supports a bounded mechanism claim: consistency-filtered pseudo-label expansion can improve the known/novel H-score balance under a fixed reference evaluation envelope.",
+      theoryOverallSignal: "supportive",
+    };
+  }
+  if (delta === 0) {
+    return {
+      className: "neutral",
+      c1Claim: `${params.oneChange} matches the local GCD reference H-score and does not yet show a measured improvement.`,
+      c1Verdict: "partial",
+      narrativeClaim:
+        `The draftable paper claim is neutral: FixMatch-style consistency filtering is instrumented under the validated envelope (${params.datasets.join(", ")}), but the current local run matches the baseline (${baseline} to ${proposed}) and must not be described as an improvement.`,
+      trackReason:
+        `${params.oneChange} produced a neutral local H-score delta of ${deltaText}; known/novel metrics are available, but the result is not an empirical gain.`,
+      unsupportedClaims: [
+        "Do not claim that the method improves H-score in the current local reference run.",
+        "Do not claim a novel-class discovery gain until a positive known/novel result is recorded.",
+      ],
+      qualityMetricCheck:
+        `The H-score delta is ${deltaText}. This neutral result is sufficient for pipeline and artifact validation, but it does not support an improvement claim.`,
+      reasonableness:
+        `The causal attribution remains bounded and neutral: ${params.oneChange} is fully instrumented, but the local H-score delta is ${deltaText}, so the result should be written as no measured gain under the current reference benchmark.`,
+      theoryGuidance:
+        `Use a lemma-result style in the body only as mechanism intuition. The empirical anchor is a neutral local H-score delta of ${deltaText}, so the main text must say that the current run does not demonstrate improvement.`,
+      appendixClaimScope:
+        "The local experiment supports only a bounded mechanism and instrumentation claim: consistency-filtered pseudo-label expansion is implemented and evaluated, but it does not improve the known/novel H-score balance in this run.",
+      theoryOverallSignal: "bounded",
+    };
+  }
+  return {
+    className: "negative",
+    c1Claim: `${params.oneChange} underperforms the local GCD reference H-score and does not support the current improvement hypothesis.`,
+    c1Verdict: "unsupported",
+    narrativeClaim:
+      `The draft should present the current method as a failed local experiment under the validated envelope (${params.datasets.join(", ")}): H-score moves from ${baseline} to ${proposed}, a delta of ${deltaText}.`,
+    trackReason:
+      `${params.oneChange} produced a negative local H-score delta of ${deltaText}; the result should be routed to experiment repair before any positive claim is made.`,
+    unsupportedClaims: [
+      "Do not claim that the method improves H-score in the current local reference run.",
+      "Do not claim that the method is supported by the local benchmark until experiment repair produces a positive result.",
+    ],
+    qualityMetricCheck:
+      `The H-score delta is ${deltaText}. This negative result should trigger experiment repair before manuscript expansion.`,
+    reasonableness:
+      `The causal attribution is currently negative: ${params.oneChange} underperforms by ${deltaText} H-score under the local reference benchmark, so the result should be treated as a repair signal.`,
+    theoryGuidance:
+      `Use theory text only to explain the intended mechanism and the observed failure. The empirical anchor is a negative local H-score delta of ${deltaText}, so the body must not present the method as supported.`,
+    appendixClaimScope:
+      "The local experiment does not support the improvement hypothesis; the appendix should document the intended mechanism and the failure boundary under the fixed reference envelope.",
+    theoryOverallSignal: "weak",
+  };
+}
+
 function firstLedgerExperiment(ledger: Record<string, unknown>): Record<string, unknown> | null {
   const experiments = Array.isArray(ledger.experiments)
     ? ledger.experiments
@@ -146,18 +238,23 @@ function buildClaimRows(params: {
   experimentId: string;
   datasets: string[];
 }): Array<Record<string, unknown>> {
+  const evidence = readMetricEvidence({
+    oneChange: params.oneChange,
+    metrics: params.metrics,
+    datasets: params.datasets,
+  });
   return [
     {
       claim_id: "C1",
-      claim:
-        `${params.oneChange} improves the local GCD reference H-score while preserving known-class accuracy.`,
-      verdict: params.metrics.delta_h_score >= 0 ? "supported" : "partial",
+      claim: evidence.c1Claim,
+      verdict: evidence.c1Verdict,
       evidence: [
         "researcher/evaluation_summary.json",
         "researcher/EXPERIMENT_LEDGER.json",
         `researcher/artifacts/results/${params.experimentId}/RESULT_SUMMARY.json`,
       ],
       metric_delta: params.metrics.delta_h_score,
+      metric_evidence_class: evidence.className,
     },
     {
       claim_id: "C2",
@@ -192,6 +289,11 @@ function buildNarrativeMarkdown(params: {
   experimentId: string;
   datasets: string[];
 }): string {
+  const evidence = readMetricEvidence({
+    oneChange: params.oneChange,
+    metrics: params.metrics,
+    datasets: params.datasets,
+  });
   return `# Narrative Report
 
 ## Analysis Focus
@@ -206,7 +308,7 @@ Known-class accuracy is ${params.metrics.known_accuracy.toFixed(4)} and novel-cl
 
 ## Claim Boundaries
 
-The supported paper claim is that FixMatch-style consistency filtering is a plausible GCD improvement mechanism under the validated envelope: ${params.datasets.join(", ")}.
+${evidence.narrativeClaim}
 The analysis should avoid claims about broad benchmark superiority until the same contract is rerun on external GCD suites.
 `;
 }
@@ -230,19 +332,43 @@ function buildTrackVerdictsMarkdown(params: {
   oneChange: string;
   metrics: Record<string, number>;
 }): string {
+  const evidence = readMetricEvidence({
+    oneChange: params.oneChange,
+    metrics: params.metrics,
+    datasets: [],
+  });
   return `# Track Verdicts
 
 | Track | Verdict | Reason |
 | --- | --- | --- |
-| FixMatch-GCD consistency track | advance_to_writing | ${params.oneChange} produced a local H-score delta of ${params.metrics.delta_h_score.toFixed(4)} with known/novel metrics available for inspection. |
+| FixMatch-GCD consistency track | advance_to_writing | ${evidence.trackReason} |
 
 ## Next Writing Constraint
 
-Write the result as a bounded mechanism-backed empirical finding. The current evidence is sufficient for drafting, but external benchmark language must remain conditional.
+Write the result at the exact strength supported by the metric delta. The current evidence is sufficient for drafting, but external benchmark language and unsupported improvement claims must remain conditional.
 `;
 }
 
-function buildUnsupportedClaimsMarkdown(): string {
+function buildUnsupportedClaimsMarkdown(params: {
+  oneChange: string;
+  metrics: Record<string, number>;
+}): string {
+  const evidence = readMetricEvidence({
+    oneChange: params.oneChange,
+    metrics: params.metrics,
+    datasets: [],
+  });
+  if (evidence.unsupportedClaims.length > 0) {
+    return `# Unsupported Claims
+
+Status: scoped.
+
+Primary claims to exclude:
+${evidence.unsupportedClaims.map((entry) => `- ${entry}`).join("\n")}
+
+Scope limits that should stay out of the manuscript are tracked in analyzer/QUALITY_AUDIT.md.
+`;
+  }
   return `# Unsupported Claims
 
 Status: clear.
@@ -259,6 +385,11 @@ function buildQualityAuditMarkdown(params: {
   metrics: Record<string, number>;
   datasets: string[];
 }): string {
+  const evidence = readMetricEvidence({
+    oneChange: params.oneChange,
+    metrics: params.metrics,
+    datasets: params.datasets,
+  });
   return `# Quality Audit
 
 ## Evidence Completeness
@@ -276,7 +407,7 @@ The remaining risk is external validity: the paper must label this as local refe
 
 ## Metric Check
 
-The H-score delta is ${params.metrics.delta_h_score.toFixed(4)}. A positive delta supports the bounded claim; a future negative benchmark result should trigger rollback to experiment repair rather than manuscript expansion.
+${evidence.qualityMetricCheck}
 `;
 }
 
@@ -284,11 +415,16 @@ function buildReasonablenessMarkdown(params: {
   oneChange: string;
   metrics: Record<string, number>;
 }): string {
+  const evidence = readMetricEvidence({
+    oneChange: params.oneChange,
+    metrics: params.metrics,
+    datasets: [],
+  });
   return `# Experiment Reasonableness Report
 
 The experiment is reasonable for local no-Discord progression because it records the exact one-change signature, uses one dataset envelope, and reports baseline plus proposed known/novel metrics.
 
-The causal attribution remains bounded: ${params.oneChange} is supported by a local H-score delta of ${params.metrics.delta_h_score.toFixed(4)}, but the claim should not be generalized beyond the current reference benchmark until external runs are added.
+${evidence.reasonableness}
 `;
 }
 
@@ -296,6 +432,11 @@ function buildTheoryNoteMarkdown(params: {
   oneChange: string;
   metrics: Record<string, number>;
 }): string {
+  const evidence = readMetricEvidence({
+    oneChange: params.oneChange,
+    metrics: params.metrics,
+    datasets: [],
+  });
   return `# Theory Support Note
 
 ## Thesis
@@ -304,7 +445,7 @@ ${params.oneChange} can be framed as a noise-control mechanism for generalized c
 
 ## Main-Text Guidance
 
-Use a lemma-result style in the body: consistency filtering reduces unstable pseudo-label updates, which can improve the harmonic balance between known and novel accuracy. The empirical anchor is the local H-score delta of ${params.metrics.delta_h_score.toFixed(4)}.
+${evidence.theoryGuidance}
 
 ## Appendix Scope
 
@@ -356,12 +497,18 @@ function buildProofPacket(params: {
 function buildTheoryState(params: {
   now: string;
   oneChange: string;
+  metrics: Record<string, number>;
   proofPacket: Record<string, unknown>;
 }): Record<string, unknown> {
+  const evidence = readMetricEvidence({
+    oneChange: params.oneChange,
+    metrics: params.metrics,
+    datasets: [],
+  });
   return {
     schema_version: 1,
     status: "ready",
-    overall_signal: "supportive",
+    overall_signal: evidence.theoryOverallSignal,
     source_theory_note_path: ANALYZER_FILES.theoryNote,
     thesis: `${params.oneChange} supports a bounded consistency-as-noise-control explanation for GCD.`,
     body_guidance:
@@ -445,6 +592,18 @@ export async function materializeAnalysisArtifactsImpl(params: {
   const oneChange = inferOneChange({ manifest, ledgerExperiment });
   const datasets = inferDatasets({ manifest, experimentSearch, ledgerExperiment });
   const claimRows = buildClaimRows({ oneChange, metrics, experimentId, datasets });
+  const evidence = readMetricEvidence({ oneChange, metrics, datasets });
+  const supportedClaimCount = claimRows.filter(
+    (row) => typeof row.verdict === "string" && row.verdict.startsWith("supported")
+  ).length;
+  const partialClaimCount = claimRows.filter((row) => row.verdict === "partial").length;
+  const unsupportedClaimCount = claimRows.filter((row) => row.verdict === "unsupported").length;
+  const claimSupportStatus =
+    supportedClaimCount === 0 && partialClaimCount === 0 && unsupportedClaimCount > 0
+      ? "unsupported"
+      : partialClaimCount > 0 || unsupportedClaimCount > 0
+        ? "partial"
+        : "supported";
 
   await writeTextEnsured(
     resolve(projectRoot, ANALYZER_FILES.narrative),
@@ -463,7 +622,7 @@ export async function materializeAnalysisArtifactsImpl(params: {
   generatedFiles.push(ANALYZER_FILES.verdicts);
   await writeTextEnsured(
     resolve(projectRoot, ANALYZER_FILES.unsupported),
-    buildUnsupportedClaimsMarkdown()
+    buildUnsupportedClaimsMarkdown({ oneChange, metrics })
   );
   generatedFiles.push(ANALYZER_FILES.unsupported);
   await writeTextEnsured(
@@ -513,7 +672,7 @@ export async function materializeAnalysisArtifactsImpl(params: {
   generatedFiles.push("researcher/ablation_summary.json");
 
   const proofPacket = buildProofPacket({ now, oneChange });
-  const theoryState = buildTheoryState({ now, oneChange, proofPacket });
+  const theoryState = buildTheoryState({ now, oneChange, metrics, proofPacket });
   await writeTextEnsured(
     resolve(projectRoot, ANALYZER_FILES.theoryNote),
     buildTheoryNoteMarkdown({ oneChange, metrics })
@@ -551,7 +710,7 @@ The appendix should keep assumptions explicit and should preserve the local refe
     `\\section{Theory Support for Consistency-Filtered GCD}
 
 \\paragraph{Claim scope.}
-The local experiment supports a bounded mechanism claim: consistency-filtered pseudo-label expansion can improve the known/novel H-score balance under a fixed reference evaluation envelope.
+${evidence.appendixClaimScope}
 
 \\paragraph{Lemma.}
 When weak and strong augmentation predictions agree before accepting an unlabeled candidate, unstable pseudo-label updates are reduced relative to an unfiltered expansion path.
@@ -602,10 +761,10 @@ The empirical anchor is the recorded H-score delta of ${metrics.delta_h_score.to
     claimEvidenceMatrixPath: ANALYZER_FILES.claimMatrix,
     trackVerdictsPath: ANALYZER_FILES.verdicts,
     unsupportedClaimsPath: ANALYZER_FILES.unsupported,
-    claimSupportStatus: "supported",
-    supportedClaimCount: claimRows.length,
-    partialClaimCount: 0,
-    unsupportedClaimCount: 0,
+    claimSupportStatus,
+    supportedClaimCount,
+    partialClaimCount,
+    unsupportedClaimCount,
     pendingReason: null,
     lastUpdatedAt: now,
   });
@@ -614,7 +773,7 @@ The empirical anchor is the recorded H-score delta of ${metrics.delta_h_score.to
   manifest.theory_state = serializeTheorySupportState({
     ...theorySupport,
     status: "ready",
-    overallSignal: "supportive",
+    overallSignal: evidence.theoryOverallSignal,
     theoryStatePath: ANALYZER_FILES.theoryState,
     sourceTheoryNotePath: ANALYZER_FILES.theoryNote,
     proofPacketDir: "analyzer/proof-packets",

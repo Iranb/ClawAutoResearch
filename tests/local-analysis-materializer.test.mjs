@@ -72,10 +72,46 @@ async function seedExperimentReadyProject() {
   return projectRoot;
 }
 
+async function overwriteEvaluationMetrics(projectRoot, metrics) {
+  const result = {
+    schema_version: 1,
+    generated_at: "2026-04-28T00:00:00.000Z",
+    experiment_id: "exp-1",
+    status: "ready",
+    metrics,
+    baseline: {
+      known_accuracy: metrics.baseline_known_accuracy ?? 1,
+      novel_accuracy: metrics.baseline_novel_accuracy ?? 0,
+      h_score: metrics.baseline_h_score,
+    },
+    proposed: {
+      known_accuracy: metrics.known_accuracy,
+      novel_accuracy: metrics.novel_accuracy,
+      h_score: metrics.h_score,
+    },
+    ablations: {
+      minus_class_balance_debiasing: { h_score: metrics.h_score },
+      minus_consistency_filtering: { h_score: metrics.h_score },
+    },
+  };
+  await writeJson(path.join(projectRoot, "researcher", "evaluation_summary.json"), result);
+  await writeJson(
+    path.join(projectRoot, "researcher", "artifacts", "results", "exp-1", "RESULT_SUMMARY.json"),
+    result
+  );
+}
+
 test("local analysis materializer writes analyzer contracts and manifest support state", async (t) => {
   const projectRoot = await seedExperimentReadyProject();
   t.after(async () => {
     await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+  await overwriteEvaluationMetrics(projectRoot, {
+    h_score: 0.3404,
+    known_accuracy: 0.8778,
+    novel_accuracy: 0.2111,
+    baseline_h_score: 0,
+    delta_h_score: 0.3404,
   });
 
   const result = await materializeAnalysisArtifactsImpl({
@@ -102,10 +138,59 @@ test("local analysis materializer writes analyzer contracts and manifest support
   assert.equal(manifest.venue_competition.graph_context_status, "ready");
 });
 
+test("local analysis materializer scopes zero-delta results as partial, not supported improvement", async (t) => {
+  const projectRoot = await seedExperimentReadyProject();
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+  await overwriteEvaluationMetrics(projectRoot, {
+    h_score: 0,
+    known_accuracy: 1,
+    novel_accuracy: 0,
+    baseline_h_score: 0,
+    delta_h_score: 0,
+  });
+
+  const result = await materializeAnalysisArtifactsImpl({
+    projectRoot,
+    trigger: "test",
+    agentId: "analyzer",
+  });
+
+  assert.equal(result.materialized, true);
+  const manifest = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "PROJECT_MANIFEST.json"), "utf8")
+  );
+  assert.equal(manifest.paper_story_state.claim_support_status, "partial");
+  assert.equal(manifest.paper_story_state.partial_claim_count, 1);
+  assert.equal(manifest.paper_story_state.unsupported_claim_count, 0);
+
+  const claimMatrix = await fs.readFile(
+    path.join(projectRoot, "analyzer", "CLAIM_EVIDENCE_MATRIX.md"),
+    "utf8"
+  );
+  assert.match(claimMatrix, /does not yet show a measured improvement/i);
+  assert.match(claimMatrix, /\| partial \|/);
+  assert.doesNotMatch(claimMatrix, /improves the local GCD reference H-score/i);
+
+  const unsupported = await fs.readFile(
+    path.join(projectRoot, "analyzer", "UNSUPPORTED_CLAIMS.md"),
+    "utf8"
+  );
+  assert.match(unsupported, /Do not claim that the method improves H-score/i);
+});
+
 test("auto iterator commits experiment to analyze after local analysis target preflight", async (t) => {
   const projectRoot = await seedExperimentReadyProject();
   t.after(async () => {
     await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+  await overwriteEvaluationMetrics(projectRoot, {
+    h_score: 0.3404,
+    known_accuracy: 0.8778,
+    novel_accuracy: 0.2111,
+    baseline_h_score: 0,
+    delta_h_score: 0.3404,
   });
 
   const result = await runWorkflowAutoIterator({

@@ -202,6 +202,50 @@ test("authoring closeout synthesizes a substantive no-Discord conference draft",
   assert.equal(harness.contentQuality.status, "pass");
 });
 
+test("authoring closeout writes neutral result language when H-score delta is zero", async (t) => {
+  const projectRoot = await seedWriteReadyProject();
+  t.after(() => fs.rm(projectRoot, { recursive: true, force: true }));
+
+  const neutralResult = {
+    baseline: { known_accuracy: 1, novel_accuracy: 0, h_score: 0 },
+    proposed: { known_accuracy: 1, novel_accuracy: 0, h_score: 0 },
+    ablations: {
+      minus_class_balance_debiasing: { known_accuracy: 1, novel_accuracy: 0, h_score: 0 },
+      minus_consistency_filtering: { known_accuracy: 1, novel_accuracy: 0, h_score: 0 },
+    },
+    metrics: {
+      h_score: 0,
+      known_accuracy: 1,
+      novel_accuracy: 0,
+      baseline_h_score: 0,
+      delta_h_score: 0,
+    },
+  };
+  await writeJson(
+    path.join(projectRoot, "researcher", "artifacts", "results", "exp-1", "RESULT_SUMMARY.json"),
+    neutralResult
+  );
+  await writeJson(path.join(projectRoot, "researcher", "evaluation_summary.json"), neutralResult);
+
+  await reconcileAuthoringCloseout({
+    projectRoot,
+    compilePdf: false,
+    currentStageOverride: "write",
+  });
+
+  const mainTex = await fs.readFile(
+    path.join(projectRoot, "academic_writer", "paper", "main.tex"),
+    "utf8"
+  );
+  assert.match(mainTex, /does not support an empirical improvement claim/i);
+  assert.match(mainTex, /not an improvement/i);
+  assert.match(mainTex, /Minus class-balance debiasing & 0\.0000/);
+  assert.doesNotMatch(mainTex, /This improvement is useful/i);
+  assert.doesNotMatch(mainTex, /improves the local reference H-score/i);
+  assert.doesNotMatch(mainTex, /H-score gain/i);
+  assert.doesNotMatch(mainTex, /0\.2801/);
+});
+
 test("authoring closeout repairs paragraph audit blockers from the audit artifact", async (t) => {
   const projectRoot = await seedWriteReadyProject();
   t.after(() => fs.rm(projectRoot, { recursive: true, force: true }));
