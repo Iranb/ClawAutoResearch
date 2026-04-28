@@ -502,8 +502,17 @@ node scripts/run_auto_command_end_to_end.mjs \
 - `.openclaw-research/e2e-runs/<timestamp>-.../payload.json`
 - `.openclaw-research/e2e-runs/<timestamp>-.../stdout.log`
 - `.openclaw-research/e2e-runs/<timestamp>-.../stderr.log`
+- `<projectsRoot>/.openclaw-research/E2E_PROJECTS_DASHBOARD.json`
+- `<projectsRoot>/.openclaw-research/E2E_PROJECTS_DASHBOARD.html`
 
 如果最终 `E2E_RUN_REPORT.md` 不是 `final_verdict: pass`，runner 会以失败退出；这让它适合直接放进本地验证或 CI-like smoke check。
+
+projectsRoot 级别的 `E2E_PROJECTS_DASHBOARD.*` 会汇总所有已经有 `PROJECT_MANIFEST.json` 或 `E2E_RUN_SCORECARD.json` 的本地项目，按 missing scorecard、regression、fail、partial、failed checks 排序，并暴露 final verdict、claim cap、quality score、run trend、stage/owner、PaperNexus certification、domain evaluator、failed checks 和单项目 dashboard 链接。它由 `run_auto_workflow_e2e_test.mjs` 自动生成，也可以手动刷新：
+
+```bash
+node scripts/build-e2e-project-dashboard.mjs \
+  --projects-root "/path/to/AutoResearchProjects"
+```
 
 每个被测项目的 `.openclaw-research/` 目录还会生成本地可审计产物：
 
@@ -512,9 +521,14 @@ node scripts/run_auto_command_end_to_end.mjs \
 - `E2E_PROGRESS_NARRATIVE.md`：面向调试的短叙事，直接列出当前 stage/owner、证据快照、失败 required checks 和下一步动作。
 - `progress_chart.json` / `progress_chart.html`：从 scorecard、runtime timeline 和 handoff events 派生的进度图表；JSON 供自动测试消费，HTML 供人工快速查看质量组件、timeline 和 breakthrough annotations。
 - `E2E_RUN_LEDGER.jsonl`：每次 harness 运行追加一行 run summary，用来比较多次 no-Discord 测试的 verdict、claim cap、score、domain pack 和失败检查数量。
+- `E2E_RUN_TRENDS.json`：从 run ledger 派生同一 lane 的趋势摘要，记录 previous/latest score、score delta、failed-check delta、verdict transition、pass streak 和 regression flag，避免多次真实测试后只能人工对比 dashboard。
 - `E2E_DASHBOARD.html`：只读本地 dashboard，直接链接 scorecard、narrative、timeline、progress chart、ledger、PaperNexus certification 和平台画像，不需要 Discord thread 才能判断运行状态。
 - `E2E_BENCHMARK_ADAPTER_SCORECARD.json`：统一 benchmark adapter fixture 与本地实验结果，固定 `baseline_score`、`candidate_score`、`holdout_score`、`iterations`、`cost_usd` 和 guardrail，避免裸 benchmark 分数绕过 claim/evidence gate。
 - `E2E_DOMAIN_EVALUATOR_CONTRACT.json`：记录当前运行使用的 domain evaluator pack，例如 `gcd_ml_experiment`、`systematic_review`、`proof_checker` 或 `kernel_optimization`，并列出 metric、holdout、artifact expectations 和 failure semantics。
+- `E2E_REVIEWER_CALIBRATION.json`：把 reviewer score 对齐到明确 rubric、venue profile 和 issue schema；当缺少 rubric 或 venue 时，scorecard 会把 reviewer score 标成 partial/uncalibrated，而不是当作可比较审稿分。
+- `E2E_COPYEDIT_STYLE_AUDIT.json`：检查 placeholder、过长句、marketing language、强 claim 是否有边界语言；用于避免 no-Discord 论文在 artifact complete 后仍带有不可投稿的表达问题。
+- `E2E_EXPERIMENT_LEASE_CONTRACT.json`：审计实验搜索的 shared incumbent/CAS 合同，记录 incumbent commit、candidate base/head、活跃实验写锁冲突和裸结果是否能绕过 shared incumbent；用于发现多 worker 并行实验覆盖风险。
+- `researcher/literature-research-controller/*`：no-Discord E2E 会自动物化文献调研闭环合同，包括 `literature_need_assessment.json`、`retrieval_keyword_bank.json`、`literature_query_plan.json`、`candidate_screening_report.json`、`literature_coverage_report.json` 和 `LITERATURE_RESEARCH_CONTROLLER_STATUS.md`。
 - `PLATFORM_PROFILE.json`：记录本次 E2E 的 runtime/platform profile 和 CPU/MLX/CUDA/WebGPU capability matrix；未知硬件只标记为 `unknown_not_probed`，不会伪造可复现实验能力。
 - `E2E_ARTIFACT_CHECKLIST.json`：required artifact 的机器可读 presence gate。
 - `E2E_STATE_TIMELINE.jsonl`：runtime/handoff 事件时间线。
@@ -524,6 +538,17 @@ Graph build 结束后还会写入 `graph/PAPERNEXUS_TASK_CERTIFICATION.json`，�
 - `remote_corpus_summary`：远端 corpus 计数健康，但缺少逐篇论文 source span；只能作为 partial claim。
 - `paper_index_confirmed`：逐篇 paper index 已确认，但 source span 不完整；不能声称 source-backed graph。
 - `source_backed_graph`：逐篇论文具备 source-backed graph evidence；这是 no-Discord E2E 里允许继续强化论文 claim 的 PaperNexus 状态。
+
+`literature-research-controller` 的 status/decision 会同时进入 `E2E_RUN_SCORECARD.json`、`progress_chart.json` 和 `E2E_DASHBOARD.html`。如果它是 `blocked` 或 `needs_research`，优先看 `literature_coverage_report.json.next_actions`：常见动作是继续跑 `run_broad_paper_search`、补 PaperNexus import/graph refresh，或先补明确的 project topic/source index。这个 controller 不把 metadata-only 搜索结果当作 source-backed evidence；没有 PaperNexus source-backed graph claim 时，只允许 guarded claim。
+
+同一个 certification 文件还会记录 `upload.import_tasks`，用于判断 PaperNexus 上传和构图是否真的逐项完成：
+
+- `task_count` / `completed_task_count`：batch manifest、runtime batch items、paper operations 和 completed papers 合并后的 import task 完成情况。
+- `stage_completed_task_count`：远端 task stage 是否明确到达 `completed`，用来区别“论文已提交/同步”与“远端构图阶段完成”。
+- `missing_task_id_count`：batch manifest 中还没有拿到远端 task id 的论文数量。
+- `items[]`：逐篇论文的 `task_id`、`canonical_id`、`status`、`stage`、`submitted`、`synced`、`graph_index_confirmed`、`source_span_confirmed` 和 `evidence_sources`。
+
+如果这些字段显示未完成，`limitations` 会包含 `incomplete_import_task_completion_evidence`、`incomplete_import_task_stage_completion_evidence` 或 `missing_import_task_ids`，避免 graph build 看起来 ready 但远端 import 证据不完整时被误判为 source-backed 完成。
 
 真实模式的前置条件：
 

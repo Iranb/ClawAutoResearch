@@ -64,10 +64,14 @@ test("strict E2E paper gate rejects shallow placeholder content", async (t) => {
   assert.equal(payload.contentQuality.status, "fail");
   assert.equal(payload.claimStrengthCap, "blocked");
   assert.match(payload.progressChartPath, /progress_chart\.json$/);
+  assert.match(payload.copyeditStyleAuditPath, /E2E_COPYEDIT_STYLE_AUDIT\.json$/);
   const scorecard = JSON.parse(await fs.readFile(payload.scorecardPath, "utf8"));
   const progressChart = JSON.parse(await fs.readFile(payload.progressChartPath, "utf8"));
+  const copyeditStyleAudit = JSON.parse(await fs.readFile(payload.copyeditStyleAuditPath, "utf8"));
   assert.equal(scorecard.verdict.final_verdict, "fail");
   assert.equal(scorecard.verdict.claim_strength_cap, "blocked");
+  assert.equal(scorecard.copyedit_style_audit.status, "partial");
+  assert.equal(copyeditStyleAudit.checks.some((entry) => entry.name === "no_placeholder_language" && entry.ok === false), true);
   assert.equal(progressChart.summary.failed_required_check_count > 0, true);
   assert.equal(
     scorecard.failed_required_checks.some((entry) => entry.group === "content_substance"),

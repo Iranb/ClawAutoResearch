@@ -261,10 +261,26 @@ export async function executeExperimentGitAction(params: {
   }
 
   if (params.actionType === "promote_candidate") {
+    const actualIncumbentCommit = await resolveCommit(
+      params.projectRoot,
+      incumbentBranch
+    );
+    const expectedIncumbentCommit = params.incumbentCommit?.trim()
+      ? ((await resolveCommit(
+          params.projectRoot,
+          params.incumbentCommit.trim()
+        )) ?? params.incumbentCommit.trim())
+      : null;
+    if (
+      expectedIncumbentCommit &&
+      actualIncumbentCommit !== expectedIncumbentCommit
+    ) {
+      throw new Error(
+        `Experiment incumbent CAS mismatch: expected ${expectedIncumbentCommit} on ${incumbentBranch ?? "incumbent ref"} but found ${actualIncumbentCommit ?? "missing"}. Re-review the candidate against the current shared incumbent before promotion.`
+      );
+    }
     const incumbentCommit =
-      (await resolveCommit(params.projectRoot, incumbentBranch)) ??
-      (await resolveCommit(params.projectRoot, params.incumbentCommit?.trim())) ??
-      null;
+      expectedIncumbentCommit ?? actualIncumbentCommit ?? null;
     if (params.requireCleanCandidateHistory !== false) {
       await ensureAncestor(params.projectRoot, incumbentCommit, candidateCommit);
     }

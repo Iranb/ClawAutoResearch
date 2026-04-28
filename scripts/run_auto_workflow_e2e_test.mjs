@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { buildE2EProjectsDashboard } from "./build-e2e-project-dashboard.mjs";
 import { syncOpenClawAgentModels } from "./sync_openclaw_agent_models.mjs";
 import {
   appendLocalPapernexusArgs,
@@ -1021,9 +1022,13 @@ function summarizeLane(name, value) {
     progressChartPath: value.harness?.progressChartPath ?? null,
     progressChartHtmlPath: value.harness?.progressChartHtmlPath ?? null,
     runLedgerPath: value.harness?.runLedgerPath ?? null,
+    runTrendPath: value.harness?.runTrendPath ?? null,
     dashboardPath: value.harness?.dashboardPath ?? null,
     benchmarkAdapterScorecardPath: value.harness?.benchmarkAdapterScorecardPath ?? null,
     domainEvaluatorContractPath: value.harness?.domainEvaluatorContractPath ?? null,
+    reviewerCalibrationPath: value.harness?.reviewerCalibrationPath ?? null,
+    copyeditStyleAuditPath: value.harness?.copyeditStyleAuditPath ?? null,
+    experimentLeaseContractPath: value.harness?.experimentLeaseContractPath ?? null,
     platformProfilePath: value.harness?.platformProfilePath ?? null,
     checklistPath: value.harness?.checklistPath ?? null,
     timelinePath: value.harness?.timelinePath ?? null,
@@ -1270,6 +1275,8 @@ function formatHumanSummary(summary) {
     `run root: ${summary.runRoot}`,
     `projects root: ${summary.projectsRoot}`,
     `summary: ${summary.summaryPath}`,
+    `projects dashboard: ${summary.projectsDashboardHtmlPath ?? "unknown"}`,
+    `projects dashboard json: ${summary.projectsDashboardPath ?? "unknown"}`,
   ];
   if (summary.localPapernexus) {
     lines.push(
@@ -1291,8 +1298,12 @@ function formatHumanSummary(summary) {
       `progress chart: ${lane.progressChartHtmlPath ?? lane.progressChartPath ?? "unknown"}`,
       `dashboard: ${lane.dashboardPath ?? "unknown"}`,
       `run ledger: ${lane.runLedgerPath ?? "unknown"}`,
+      `run trend: ${lane.runTrendPath ?? "unknown"}`,
       `benchmark adapter: ${lane.benchmarkAdapterScorecardPath ?? "unknown"}`,
       `domain evaluator: ${lane.domainEvaluatorContractPath ?? "unknown"}`,
+      `reviewer calibration: ${lane.reviewerCalibrationPath ?? "unknown"}`,
+      `copyedit/style audit: ${lane.copyeditStyleAuditPath ?? "unknown"}`,
+      `experiment lease: ${lane.experimentLeaseContractPath ?? "unknown"}`,
       `platform profile: ${lane.platformProfilePath ?? "unknown"}`,
       `claim cap: ${lane.claimStrengthCap ?? "unknown"}`,
       `quality score: ${lane.qualityScore100 ?? "unknown"}`
@@ -1629,6 +1640,14 @@ async function main(argv = process.argv) {
   const summaryPath = path.join(runRoot, "AUTO_WORKFLOW_E2E_SUMMARY.json");
   const markdownSummaryPath = path.join(runRoot, "AUTO_WORKFLOW_E2E_SUMMARY.md");
   const snapshots = await collectProjectSnapshots({ runRoot, resultSummary });
+  let projectsDashboard = null;
+  try {
+    projectsDashboard = await buildE2EProjectsDashboard({ projectsRoot });
+  } catch (error) {
+    projectsDashboard = {
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
   const summary = {
     status,
     failureReason,
@@ -1652,6 +1671,9 @@ async function main(argv = process.argv) {
     result: resultSummary,
     snapshots,
     snapshotRoot: path.join(runRoot, "snapshots"),
+    projectsDashboardPath: projectsDashboard.projectsDashboardPath ?? null,
+    projectsDashboardHtmlPath: projectsDashboard.projectsDashboardHtmlPath ?? null,
+    projectsDashboard: projectsDashboard.summary ?? projectsDashboard,
     summaryPath,
     markdownSummaryPath,
     stdoutPath: path.join(runRoot, "stdout.log"),

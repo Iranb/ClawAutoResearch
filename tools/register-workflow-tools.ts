@@ -118,6 +118,7 @@ import {
   setCrossDomainInspirationState,
 } from "./idea-catalyst/cross-domain-contract";
 import { queueLiteratureDiscoveryRequisition } from "./literature-discovery/workflow-bridge";
+import { materializeLiteratureResearchControllerArtifacts } from "./literature-discovery/controller-contract";
 import { materializePapernexusPacketContracts } from "./papernexus-packets/materializer";
 import { materializeCycleMemory } from "./research-memory-cycle";
 import { materializeWritingSupportArtifacts } from "./research-writing/materializers";
@@ -1483,6 +1484,7 @@ const SERIALIZED_WORKFLOW_ACTIONS = new Set([
   "set_paper_ingestion",
   "materialize_ideation_contract",
   "materialize_experiment_review_state",
+  "materialize_literature_research_controller",
   "materialize_literature_discovery_packet",
   "materialize_plan_state",
   "materialize_papernexus_packet_contracts",
@@ -1567,6 +1569,8 @@ const WORKFLOW_ACTION_FUNCTIONS: Record<string, string> = {
   refresh_graph_presence: "checkGraphPresenceForWorkflow",
   accept_remote_graph_ready: "checkGraphPresenceForWorkflow",
   audit_literature_coverage: "auditLiteratureCoverageForWorkflow",
+  materialize_literature_research_controller:
+    "materializeLiteratureResearchControllerArtifacts",
   plan_citation_expansion: "planCitationExpansionForWorkflow",
   run_broad_paper_search: "runBroadPaperSearchForWorkflow",
   auto_iterator_tick: "runWorkflowAutoIterator",
@@ -2864,9 +2868,10 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               "check_graph_presence",
               "refresh_graph_presence",
               "accept_remote_graph_ready",
-  "audit_literature_coverage",
-  "plan_citation_expansion",
-  "run_broad_paper_search",
+              "audit_literature_coverage",
+              "materialize_literature_research_controller",
+              "plan_citation_expansion",
+              "run_broad_paper_search",
               "auto_iterator_tick",
               "start_background_run",
               "run_papernexus_wrapper",
@@ -3039,6 +3044,10 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
             additionalProperties: true,
           },
           literatureCoverage: {
+            type: "object",
+            additionalProperties: true,
+          },
+          literatureController: {
             type: "object",
             additionalProperties: true,
           },
@@ -3630,10 +3639,45 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
             }
             case "audit_literature_coverage": {
               const resolvedProjectRoot = requireWorkflowProjectRoot(state);
-              const audit = await auditLiteratureCoverageForWorkflow({
-                projectRoot: resolvedProjectRoot,
-              });
-              return textResponse(JSON.stringify(audit, null, 2));
+              const controller =
+                await materializeLiteratureResearchControllerArtifacts({
+                  projectRoot: resolvedProjectRoot,
+                  trigger: "audit_literature_coverage",
+                });
+              return textResponse(
+                JSON.stringify(
+                  {
+                    audit: controller.coverage_audit,
+                    controller,
+                  },
+                  null,
+                  2
+                )
+              );
+            }
+            case "materialize_literature_research_controller": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const literatureController = asObject(params.literatureController);
+              const controller =
+                await materializeLiteratureResearchControllerArtifacts({
+                  projectRoot: resolvedProjectRoot,
+                  trigger:
+                    readString(literatureController?.trigger) ??
+                    "materialize_literature_research_controller",
+                  minCorePapers: readNumber(
+                    literatureController?.minCorePapers ??
+                      literatureController?.min_core_papers
+                  ),
+                  minRecentPapers: readNumber(
+                    literatureController?.minRecentPapers ??
+                      literatureController?.min_recent_papers
+                  ),
+                  maxCandidateRecords: readNumber(
+                    literatureController?.maxCandidateRecords ??
+                      literatureController?.max_candidate_records
+                  ),
+                });
+              return textResponse(JSON.stringify(controller, null, 2));
             }
             case "plan_citation_expansion": {
               const resolvedProjectRoot = requireWorkflowProjectRoot(state);

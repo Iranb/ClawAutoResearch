@@ -27,6 +27,18 @@ test("E2E paper generation harness materializes report, scorecard, checklist, an
         current_stage: "submit",
         owner_agent: "academic_writer",
         writing_contract: { paper_mode: "survey" },
+        research_program: { target_venues: ["ICLR"] },
+        experiment_search: {
+          status: "running",
+          incumbent_experiment_id: "exp-base",
+          incumbent_branch: "incumbent-track-a",
+          incumbent_commit: "abc123",
+          last_candidate_experiment_id: "exp-cand-1",
+          last_candidate_branch: "candidate-track-a/exp-cand-1",
+          candidate_base_commit: "abc123",
+          candidate_head_commit: "def456",
+          last_decision: "retain_incumbent",
+        },
       },
       null,
       2
@@ -76,6 +88,29 @@ test("E2E paper generation harness materializes report, scorecard, checklist, an
       await write(
         targetPath,
         JSON.stringify({ issues: [], open_counts: { critical: 0, high: 0, medium: 0, low: 0 } }, null, 2) + "\n"
+      );
+    } else if (artifact.endsWith("REVIEW_PACKET.json")) {
+      await write(
+        targetPath,
+        JSON.stringify(
+          {
+            status: "completed",
+            verdict: "accept_with_minor_revisions",
+            venue_profile: "ICLR",
+            target_venues: ["ICLR"],
+            rubric: {
+              novelty: 4,
+              evidence: 4,
+              method: 4,
+              clarity: 4,
+              reproducibility: 4,
+              coverage: 4,
+              synthesis: 4,
+            },
+          },
+          null,
+          2
+        ) + "\n"
       );
     } else if (artifact.endsWith(".json")) {
       await write(targetPath, "{}\n");
@@ -140,6 +175,26 @@ test("E2E paper generation harness materializes report, scorecard, checklist, an
       2
     )}\n`
   );
+  await write(
+    path.join(projectRoot, ".openclaw-research", "E2E_RUN_LEDGER.jsonl"),
+    `${JSON.stringify({
+      schema_version: 1,
+      run_id: "previous-survey-run",
+      generated_at: "2026-04-28T00:00:00.000Z",
+      project: { lane: "survey" },
+      verdict: {
+        final_verdict: "partial",
+        claim_strength_cap: "partial",
+      },
+      quality_score_100: 50,
+      failed_required_check_count: 2,
+      diagnostic_failed_check_count: 1,
+      domain_evaluator_pack: "systematic_review",
+      reviewer_calibration_status: "partial",
+      copyedit_style_status: "partial",
+      experiment_lease_status: "partial",
+    })}\n`
+  );
 
   const { stdout } = await execFileAsync(process.execPath, [
     "scripts/run-e2e-paper-generation.mjs",
@@ -157,9 +212,17 @@ test("E2E paper generation harness materializes report, scorecard, checklist, an
   assert.match(result.progressChartPath, /progress_chart\.json$/);
   assert.match(result.progressChartHtmlPath, /progress_chart\.html$/);
   assert.match(result.runLedgerPath, /E2E_RUN_LEDGER\.jsonl$/);
+  assert.match(result.runTrendPath, /E2E_RUN_TRENDS\.json$/);
   assert.match(result.dashboardPath, /E2E_DASHBOARD\.html$/);
   assert.match(result.benchmarkAdapterScorecardPath, /E2E_BENCHMARK_ADAPTER_SCORECARD\.json$/);
   assert.match(result.domainEvaluatorContractPath, /E2E_DOMAIN_EVALUATOR_CONTRACT\.json$/);
+  assert.match(result.reviewerCalibrationPath, /E2E_REVIEWER_CALIBRATION\.json$/);
+  assert.match(result.copyeditStyleAuditPath, /E2E_COPYEDIT_STYLE_AUDIT\.json$/);
+  assert.match(result.experimentLeaseContractPath, /E2E_EXPERIMENT_LEASE_CONTRACT\.json$/);
+  assert.match(
+    result.literatureControllerStatusPath,
+    /LITERATURE_RESEARCH_CONTROLLER_STATUS\.md$/
+  );
   assert.match(result.platformProfilePath, /PLATFORM_PROFILE\.json$/);
   assert.equal(
     await fs.readFile(path.join(projectRoot, ".openclaw-research", "E2E_RUN_REPORT.md"), "utf8").then((text) => /final_verdict: pass/.test(text)),
@@ -180,10 +243,29 @@ test("E2E paper generation harness materializes report, scorecard, checklist, an
     scorecard.papernexus_certification.source_backed_graph_claim,
     false
   );
+  assert.equal(scorecard.papernexus_certification.import_task_count, 0);
+  assert.equal(scorecard.papernexus_certification.completed_import_task_count, 0);
   assert.equal(scorecard.benchmark_adapter.status, "pass");
   assert.equal(scorecard.benchmark_adapter.adapter, "mle-bench-fixture");
   assert.equal(scorecard.benchmark_adapter.guardrail.raw_benchmark_score_can_bypass_claim_gate, false);
   assert.equal(scorecard.domain_evaluator.pack, "systematic_review");
+  assert.equal(scorecard.reviewer_calibration.status, "pass");
+  assert.equal(scorecard.reviewer_calibration.claim_guardrail, "reviewer_score_calibrated");
+  assert.equal(scorecard.copyedit_style_audit.status, "pass");
+  assert.equal(scorecard.experiment_lease_contract.status, "pass");
+  assert.equal(
+    ["blocked", "needs_research", "guardrailed", "ready"].includes(
+      scorecard.literature_research_controller.status
+    ),
+    true
+  );
+  assert.match(
+    scorecard.literature_research_controller.artifact_paths.coverage_report_path,
+    /literature_coverage_report\.json$/
+  );
+  assert.equal(scorecard.run_trends.status, "improved");
+  assert.equal(scorecard.run_trends.previous_score_100, 50);
+  assert.equal(scorecard.run_trends.lane_run_count, 2);
   assert.equal(typeof scorecard.platform_profile.runtime.platform, "string");
   assert.match(
     await fs.readFile(path.join(projectRoot, ".openclaw-research", "E2E_PROGRESS_NARRATIVE.md"), "utf8"),
@@ -195,10 +277,29 @@ test("E2E paper generation harness materializes report, scorecard, checklist, an
   assert.equal(progressChart.verdict.final_verdict, "pass");
   assert.equal(progressChart.quality_components.some((entry) => entry.name === "artifact_coverage"), true);
   assert.equal(progressChart.summary.papernexus_certification_status, "partial");
+  assert.equal(progressChart.summary.papernexus_import_task_count, 0);
+  assert.equal(progressChart.summary.papernexus_completed_import_task_count, 0);
   assert.equal(progressChart.summary.benchmark_adapter_status, "pass");
   assert.equal(progressChart.summary.domain_evaluator_pack, "systematic_review");
+  assert.equal(progressChart.summary.reviewer_calibration_status, "pass");
+  assert.equal(progressChart.summary.copyedit_style_status, "pass");
+  assert.equal(progressChart.summary.experiment_lease_status, "pass");
+  assert.equal(
+    typeof progressChart.summary.literature_controller_status,
+    "string"
+  );
+  assert.equal(progressChart.summary.run_trend_status, "improved");
+  assert.equal(progressChart.summary.run_trend_lane_run_count, 2);
   assert.match(progressChart.linked_artifacts.run_ledger_path, /E2E_RUN_LEDGER\.jsonl$/);
+  assert.match(progressChart.linked_artifacts.run_trend_path, /E2E_RUN_TRENDS\.json$/);
   assert.match(progressChart.linked_artifacts.dashboard_path, /E2E_DASHBOARD\.html$/);
+  assert.match(progressChart.linked_artifacts.reviewer_calibration_path, /E2E_REVIEWER_CALIBRATION\.json$/);
+  assert.match(progressChart.linked_artifacts.copyedit_style_audit_path, /E2E_COPYEDIT_STYLE_AUDIT\.json$/);
+  assert.match(progressChart.linked_artifacts.experiment_lease_contract_path, /E2E_EXPERIMENT_LEASE_CONTRACT\.json$/);
+  assert.match(
+    progressChart.linked_artifacts.literature_controller_coverage_report_path,
+    /literature_coverage_report\.json$/
+  );
   assert.equal(
     progressChart.annotations.some(
       (entry) => entry.kind === "papernexus_certification"
@@ -207,6 +308,26 @@ test("E2E paper generation harness materializes report, scorecard, checklist, an
   );
   assert.equal(
     progressChart.annotations.some((entry) => entry.kind === "benchmark_adapter"),
+    true
+  );
+  assert.equal(
+    progressChart.annotations.some((entry) => entry.kind === "reviewer_calibration"),
+    true
+  );
+  assert.equal(
+    progressChart.annotations.some((entry) => entry.kind === "copyedit_style"),
+    true
+  );
+  assert.equal(
+    progressChart.annotations.some((entry) => entry.kind === "experiment_lease"),
+    true
+  );
+  assert.equal(
+    progressChart.annotations.some((entry) => entry.kind === "literature_research_controller"),
+    true
+  );
+  assert.equal(
+    progressChart.annotations.some((entry) => entry.kind === "run_trend"),
     true
   );
   assert.equal(progressChart.timeline_points.at(-1).kind, "final_verdict");
@@ -224,8 +345,15 @@ test("E2E paper generation harness materializes report, scorecard, checklist, an
     .trim()
     .split(/\r?\n/)
     .filter(Boolean);
-  assert.equal(runLedgerLines.length, 1);
-  assert.equal(JSON.parse(runLedgerLines[0]).verdict.final_verdict, "pass");
+  assert.equal(runLedgerLines.length, 2);
+  assert.equal(JSON.parse(runLedgerLines[1]).verdict.final_verdict, "pass");
+  const runTrends = JSON.parse(
+    await fs.readFile(path.join(projectRoot, ".openclaw-research", "E2E_RUN_TRENDS.json"), "utf8")
+  );
+  assert.equal(runTrends.status, "improved");
+  assert.equal(runTrends.verdict_transition.from, "partial");
+  assert.equal(runTrends.verdict_transition.to, "pass");
+  assert.equal(runTrends.regression_detected, false);
   const checklist = JSON.parse(
     await fs.readFile(
       path.join(projectRoot, ".openclaw-research", "E2E_ARTIFACT_CHECKLIST.json"),
@@ -249,7 +377,45 @@ test("E2E paper generation harness materializes report, scorecard, checklist, an
   const platformProfile = JSON.parse(
     await fs.readFile(path.join(projectRoot, ".openclaw-research", "PLATFORM_PROFILE.json"), "utf8")
   );
+  const reviewerCalibration = JSON.parse(
+    await fs.readFile(
+      path.join(projectRoot, ".openclaw-research", "E2E_REVIEWER_CALIBRATION.json"),
+      "utf8"
+    )
+  );
+  const copyeditStyleAudit = JSON.parse(
+    await fs.readFile(
+      path.join(projectRoot, ".openclaw-research", "E2E_COPYEDIT_STYLE_AUDIT.json"),
+      "utf8"
+    )
+  );
+  const experimentLeaseContract = JSON.parse(
+    await fs.readFile(
+      path.join(projectRoot, ".openclaw-research", "E2E_EXPERIMENT_LEASE_CONTRACT.json"),
+      "utf8"
+    )
+  );
+  const literatureCoverageReport = JSON.parse(
+    await fs.readFile(
+      path.join(
+        projectRoot,
+        "researcher",
+        "literature-research-controller",
+        "literature_coverage_report.json"
+      ),
+      "utf8"
+    )
+  );
   assert.equal(benchmarkAdapter.benchmark_id, "gcd-local-fixture");
   assert.equal(domainEvaluator.pack, "systematic_review");
+  assert.equal(reviewerCalibration.status, "pass");
+  assert.equal(copyeditStyleAudit.status, "pass");
+  assert.equal(experimentLeaseContract.cas_guardrail.raw_candidate_result_can_bypass_shared_incumbent, false);
+  assert.equal(experimentLeaseContract.shared_incumbent.commit, "abc123");
+  assert.equal(typeof literatureCoverageReport.decision, "string");
+  assert.equal(
+    Array.isArray(literatureCoverageReport.next_actions),
+    true
+  );
   assert.equal(platformProfile.capability_matrix.cpu.status, "available");
 });

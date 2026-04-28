@@ -938,7 +938,13 @@ test("auto workflow E2E runner creates a durable local summary for /autoresearch
   await fs.access(payload.stdoutPath);
   await fs.access(payload.stderrPath);
   await fs.access(payload.payloadPath);
+  await fs.access(payload.projectsDashboardPath);
+  await fs.access(payload.projectsDashboardHtmlPath);
   await fs.access(path.join(payload.result.lanes[0].projectRoot, ".openclaw-research", "E2E_RUN_REPORT.md"));
+  assert.match(payload.projectsDashboardPath, /E2E_PROJECTS_DASHBOARD\.json$/);
+  assert.match(payload.projectsDashboardHtmlPath, /E2E_PROJECTS_DASHBOARD\.html$/);
+  assert.equal(payload.projectsDashboard.project_count, 1);
+  assert.deepEqual(payload.projectsDashboard.final_verdict, { pass: 1 });
 
   const commandText = await fs.readFile(path.join(runRoot, "command.txt"), "utf8");
   assert.match(commandText, /"--bootstrap-timeout-ms" "1234"/);

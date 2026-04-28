@@ -8,6 +8,7 @@ import { promisify } from "node:util";
 
 import { createPluginRegistrationContext } from "../tools/plugin-registration-shared.ts";
 import { registerWorkflowTools } from "../tools/register-workflow-tools.ts";
+import { executeExperimentGitAction } from "../tools/workflow-experiment-git.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -332,6 +333,75 @@ test("research_workflow enforces multi-agent review before creating and promotin
     )
   );
   assert.equal(syncStatus.status, "pending");
+});
+
+test("experiment git promotion rejects stale shared incumbent CAS", async () => {
+  const { projectRoot, incumbentCommit, incumbentBranch, candidateBranchPrefix } =
+    await makeSearchGitProject();
+  const unique = Date.now();
+  const firstBranch = `${candidateBranchPrefix}cas-first-${unique}`;
+  const staleBranch = `${candidateBranchPrefix}cas-stale-${unique}`;
+  const firstWorktreePath = path.join(
+    os.tmpdir(),
+    `openclaw-candidate-cas-first-${unique}`
+  );
+  const staleWorktreePath = path.join(
+    os.tmpdir(),
+    `openclaw-candidate-cas-stale-${unique}`
+  );
+
+  await executeExperimentGitAction({
+    projectRoot,
+    actionType: "create_candidate_worktree",
+    incumbentBranch,
+    incumbentCommit,
+    candidateBranch: firstBranch,
+    candidateWorktreePath: firstWorktreePath,
+  });
+  await executeExperimentGitAction({
+    projectRoot,
+    actionType: "create_candidate_worktree",
+    incumbentBranch,
+    incumbentCommit,
+    candidateBranch: staleBranch,
+    candidateWorktreePath: staleWorktreePath,
+  });
+
+  await writeText(path.join(firstWorktreePath, "model.txt"), "first winner\n");
+  await runGit(firstWorktreePath, ["add", "model.txt"]);
+  await runGit(firstWorktreePath, ["commit", "-m", "first candidate"]);
+  const firstCommit = await runGit(firstWorktreePath, ["rev-parse", "HEAD"]);
+
+  await writeText(path.join(staleWorktreePath, "model.txt"), "stale candidate\n");
+  await runGit(staleWorktreePath, ["add", "model.txt"]);
+  await runGit(staleWorktreePath, ["commit", "-m", "stale candidate"]);
+  const staleCommit = await runGit(staleWorktreePath, ["rev-parse", "HEAD"]);
+
+  await executeExperimentGitAction({
+    projectRoot,
+    actionType: "promote_candidate",
+    incumbentBranch,
+    incumbentCommit,
+    candidateBranch: firstBranch,
+    candidateHeadCommit: firstCommit,
+    candidateWorktreePath: firstWorktreePath,
+  });
+
+  await assert.rejects(
+    async () => {
+      await executeExperimentGitAction({
+        projectRoot,
+        actionType: "promote_candidate",
+        incumbentBranch,
+        incumbentCommit,
+        candidateBranch: staleBranch,
+        candidateHeadCommit: staleCommit,
+        candidateWorktreePath: staleWorktreePath,
+      });
+    },
+    /CAS mismatch|current shared incumbent|Re-review/i
+  );
+  assert.equal(await runGit(projectRoot, ["rev-parse", incumbentBranch]), firstCommit);
 });
 
 test("research_workflow can discard a reviewed candidate and keep the loss in workflow-owned memory only", async () => {

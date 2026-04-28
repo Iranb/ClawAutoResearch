@@ -23,6 +23,22 @@ async function readJson(filePath) {
   }
 }
 
+async function loadLiteratureResearchController() {
+  const candidates = [
+    "../dist/tools/literature-discovery/controller-contract.js",
+    "../tools/literature-discovery/controller-contract.ts",
+  ];
+  for (const candidate of candidates) {
+    try {
+      return await import(new URL(candidate, import.meta.url));
+    } catch {
+      // Keep the E2E harness runnable before a build; the scorecard records
+      // controller import failures as diagnostics instead of crashing early.
+    }
+  }
+  return null;
+}
+
 async function exists(filePath) {
   try {
     await fs.access(filePath);
@@ -148,6 +164,284 @@ function asStringArray(value) {
   return Array.isArray(value)
     ? value.map((entry) => String(entry ?? "").trim()).filter(Boolean)
     : [];
+}
+
+function readFirstString(source, paths, fallback = null) {
+  for (const fields of paths) {
+    let cursor = source;
+    for (const field of fields) {
+      cursor = cursor && typeof cursor === "object" ? cursor[field] : null;
+    }
+    if (typeof cursor === "string" && cursor.trim()) {
+      return cursor.trim();
+    }
+  }
+  return fallback;
+}
+
+function extractRubricScores(...sources) {
+  const rubric = {};
+  for (const source of sources) {
+    if (!source || typeof source !== "object") {
+      continue;
+    }
+    for (const [key, value] of Object.entries(source)) {
+      const normalizedKey = String(key ?? "")
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "_")
+        .replace(/^_+|_+$/g, "");
+      const score =
+        typeof value === "number"
+          ? value
+          : value && typeof value === "object" && typeof value.score === "number"
+            ? value.score
+            : null;
+      if (normalizedKey && typeof score === "number" && Number.isFinite(score)) {
+        rubric[normalizedKey] = score;
+      }
+    }
+  }
+  return rubric;
+}
+
+function rubricHasCriterion(rubric, aliases) {
+  const keys = Object.keys(rubric);
+  return aliases.some((alias) => {
+    const normalizedAlias = alias.toLowerCase();
+    return keys.some((key) => key.includes(normalizedAlias) || normalizedAlias.includes(key));
+  });
+}
+
+function buildReviewerCalibrationContract({
+  generatedAt,
+  lane,
+  manifest,
+  reviewPacket,
+  reviewPacketPath,
+  reviewIssues,
+  reviewIssuesPath,
+  reviewCloseoutRatio,
+}) {
+  const reviewSession = manifest.review_session ?? manifest.reviewSession ?? {};
+  const venueProfile =
+    readFirstString(reviewPacket, [["venue_profile"], ["venueProfile"], ["target_venue"], ["targetVenue"]]) ??
+    readFirstString(manifest, [
+      ["writing_contract", "target_venue"],
+      ["writing_contract", "targetVenue"],
+      ["research_program", "target_venue"],
+      ["research_program", "targetVenue"],
+    ]) ??
+    "general_research";
+  const targetVenues = [
+    ...asStringArray(reviewPacket?.target_venues ?? reviewPacket?.targetVenues),
+    ...asStringArray(manifest.research_program?.target_venues ?? manifest.research_program?.targetVenues),
+    ...asStringArray(manifest.research_program?.preferred_venues ?? manifest.research_program?.preferredVenues),
+  ];
+  const rubric = extractRubricScores(
+    reviewPacket?.rubric,
+    reviewPacket?.review_rubric,
+    reviewPacket?.reviewRubric,
+    reviewSession?.rubric
+  );
+  const rubricScores = Object.values(rubric);
+  const averageRubricScore =
+    rubricScores.length > 0
+      ? Number((rubricScores.reduce((sum, value) => sum + value, 0) / rubricScores.length).toFixed(3))
+      : null;
+  const criteria = [
+    { name: "novelty", aliases: ["novelty", "significance", "contribution"] },
+    { name: "evidence", aliases: ["evidence", "soundness", "support"] },
+    { name: "method", aliases: ["method", "technical", "correctness"] },
+    { name: "clarity", aliases: ["clarity", "presentation", "writing"] },
+    { name: "reproducibility", aliases: ["reproducibility", "artifact", "replication"] },
+    ...(lane === "survey"
+      ? [
+          { name: "coverage", aliases: ["coverage", "scope"] },
+          { name: "synthesis", aliases: ["synthesis", "taxonomy"] },
+        ]
+      : [
+          { name: "baseline", aliases: ["baseline", "comparison"] },
+          { name: "ablation", aliases: ["ablation", "analysis"] },
+        ]),
+  ];
+  const coveredCriteria = criteria
+    .filter((criterion) => rubricHasCriterion(rubric, criterion.aliases))
+    .map((criterion) => criterion.name);
+  const issues = Array.isArray(reviewIssues?.issues) ? reviewIssues.issues : [];
+  const issueSchemaOk = issues.every((issue) => {
+    if (!issue || typeof issue !== "object") {
+      return false;
+    }
+    return typeof issue.status === "string" && typeof issue.severity === "string";
+  });
+  const scoreInRange = rubricScores.every((score) => score >= 1 && score <= 5);
+  const checks = [
+    {
+      name: "review_packet_present",
+      ok: Boolean(reviewPacket && typeof reviewPacket === "object"),
+      observed: Boolean(reviewPacket && typeof reviewPacket === "object"),
+      expected: true,
+    },
+    {
+      name: "venue_profile_declared",
+      ok: venueProfile !== "general_research" || targetVenues.length > 0,
+      observed: { venue_profile: venueProfile, target_venues: targetVenues },
+      expected: "venue_profile or target_venues",
+    },
+    {
+      name: "rubric_numeric_scores",
+      ok: rubricScores.length >= 4 && scoreInRange,
+      observed: rubric,
+      expected: ">=4 numeric rubric scores in [1,5]",
+    },
+    {
+      name: "core_criteria_coverage",
+      ok: coveredCriteria.length >= Math.min(5, criteria.length),
+      observed: coveredCriteria,
+      expected: "at least 5 venue/rubric criteria covered",
+    },
+    {
+      name: "review_issue_schema",
+      ok: issueSchemaOk,
+      observed: issues.map((issue) => ({
+        status: issue?.status ?? null,
+        severity: issue?.severity ?? null,
+      })),
+      expected: "each issue has status and severity",
+    },
+  ];
+  const score = passRatio(checks);
+  const status =
+    checks.every((entry) => entry.ok)
+      ? "pass"
+      : checks.some((entry) => entry.ok)
+        ? "partial"
+        : "fail";
+  return {
+    schema_version: 1,
+    generated_at: generatedAt,
+    status,
+    venue_profile: venueProfile,
+    target_venues: targetVenues,
+    rubric,
+    covered_criteria: coveredCriteria,
+    average_rubric_score: averageRubricScore,
+    calibrated_score_100: score100(score),
+    review_closeout_score_100: score100(reviewCloseoutRatio),
+    source_paths: {
+      review_packet_path: reviewPacketPath,
+      review_issues_path: reviewIssuesPath,
+    },
+    checks,
+    claim_guardrail:
+      status === "pass"
+        ? "reviewer_score_calibrated"
+        : status === "partial"
+          ? "reviewer_score_partially_calibrated"
+          : "reviewer_score_uncalibrated",
+  };
+}
+
+function buildCopyeditStyleAudit({
+  generatedAt,
+  lane,
+  mainTex,
+  placeholderMatches,
+  claimStrengthCap,
+}) {
+  const stripped = stripLatexForWordCount(mainTex);
+  const sentences = stripped
+    ? stripped
+        .split(/(?<=[.!?])\s+/)
+        .map((entry) => entry.trim())
+        .filter(Boolean)
+    : [];
+  const sentenceWordCounts = sentences.map((sentence) => countWords(sentence));
+  const maxSentenceWords =
+    sentenceWordCounts.length > 0 ? Math.max(...sentenceWordCounts) : 0;
+  const averageSentenceWords =
+    sentenceWordCounts.length > 0
+      ? Number(
+          (
+            sentenceWordCounts.reduce((sum, value) => sum + value, 0) /
+            sentenceWordCounts.length
+          ).toFixed(2)
+        )
+      : 0;
+  const longSentenceCount = sentenceWordCounts.filter((count) => count > 45).length;
+  const strongClaimMatches = [
+    ...stripped.matchAll(/\b(state[-\s]?of[-\s]?the[-\s]?art|outperform(?:s|ed|ing)?|superior|guarantee(?:s|d)?|prove(?:s|d)?|solves?|universal(?:ly)?|always|never)\b/gi),
+  ].map((match) => match[0].toLowerCase());
+  const marketingMatches = [
+    ...stripped.matchAll(/\b(breakthrough|game[-\s]?changing|revolutionary|unprecedented)\b/gi),
+  ].map((match) => match[0].toLowerCase());
+  const boundaryLanguageMatches = [
+    ...stripped.matchAll(/\b(bounded|local|preliminary|suggest(?:s|ed)?|may|might|under|within|limited|exploratory|does not support|not enough to claim)\b/gi),
+  ].map((match) => match[0].toLowerCase());
+  const checks = [
+    {
+      name: "no_placeholder_language",
+      ok: placeholderMatches.length === 0,
+      observed: [...new Set(placeholderMatches)],
+      expected: "no TODO/placeholder/dummy/smoke/test-only/lorem ipsum",
+    },
+    {
+      name: "sentence_length_reasonable",
+      ok: maxSentenceWords <= 75 && longSentenceCount <= 2,
+      observed: { max_sentence_words: maxSentenceWords, long_sentence_count: longSentenceCount, average_sentence_words: averageSentenceWords },
+      expected: "max sentence <=75 words and <=2 sentences above 45 words",
+    },
+    {
+      name: "overclaims_hedged",
+      ok: strongClaimMatches.length === 0 || boundaryLanguageMatches.length > 0,
+      observed: { strong_claim_terms: [...new Set(strongClaimMatches)], boundary_terms: [...new Set(boundaryLanguageMatches)] },
+      expected: "strong claim terms must be paired with explicit boundary language",
+    },
+    {
+      name: "no_marketing_language",
+      ok: marketingMatches.length === 0,
+      observed: [...new Set(marketingMatches)],
+      expected: "no breakthrough/game-changing/revolutionary/unprecedented language",
+    },
+    {
+      name: "claim_cap_style_alignment",
+      ok:
+        claimStrengthCap === "evidence_backed" ||
+        boundaryLanguageMatches.length > 0 ||
+        strongClaimMatches.length === 0,
+      observed: { claim_strength_cap: claimStrengthCap, boundary_terms: [...new Set(boundaryLanguageMatches)] },
+      expected: "non-evidence-backed claim caps need bounded language when strong terms appear",
+    },
+  ];
+  const status =
+    checks.every((entry) => entry.ok)
+      ? "pass"
+      : checks.some((entry) => entry.ok)
+        ? "partial"
+        : "fail";
+  return {
+    schema_version: 1,
+    generated_at: generatedAt,
+    status,
+    lane,
+    sentence_summary: {
+      sentence_count: sentences.length,
+      max_sentence_words: maxSentenceWords,
+      average_sentence_words: averageSentenceWords,
+      long_sentence_count: longSentenceCount,
+    },
+    strong_claim_terms: [...new Set(strongClaimMatches)],
+    boundary_terms: [...new Set(boundaryLanguageMatches)],
+    marketing_terms: [...new Set(marketingMatches)],
+    checks,
+    claim_guardrail:
+      status === "pass"
+        ? "copyedit_style_clean"
+        : status === "partial"
+          ? "copyedit_style_needs_revision"
+          : "copyedit_style_blocks_claim_upgrade",
+  };
 }
 
 function inferDomainEvaluatorPack({ lane, manifest, mainTex }) {
@@ -296,6 +590,289 @@ function buildBenchmarkAdapterScorecard({
       unified_scorecard_required: true,
       raw_benchmark_score_can_bypass_claim_gate: false,
     },
+  };
+}
+
+function asRecordOrNull(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : null;
+}
+
+function normalizeExperimentLedgerEntries(experimentLedger) {
+  if (Array.isArray(experimentLedger)) {
+    return experimentLedger.filter((entry) => asRecordOrNull(entry));
+  }
+  const record = asRecordOrNull(experimentLedger);
+  if (!record) {
+    return [];
+  }
+  for (const field of ["experiments", "runs", "entries"]) {
+    if (Array.isArray(record[field])) {
+      return record[field].filter((entry) => asRecordOrNull(entry));
+    }
+  }
+  return [];
+}
+
+function ledgerExperimentId(entry) {
+  return readFirstString(entry, [
+    ["experiment_id"],
+    ["experimentId"],
+    ["run_id"],
+    ["runId"],
+    ["id"],
+  ]);
+}
+
+function ledgerExperimentStatus(entry) {
+  return readFirstString(entry, [["status"], ["state"]], "unknown").toLowerCase();
+}
+
+function ledgerExperimentDecision(entry) {
+  return readFirstString(entry, [["decision"], ["result"], ["outcome"]]);
+}
+
+function activeExperimentWriteScopeConflicts(activeClaims) {
+  const experimentClaims = activeClaims.filter((claim) => {
+    const paths = [
+      ...(Array.isArray(claim?.ownedDirs) ? claim.ownedDirs : []),
+      ...(Array.isArray(claim?.exclusiveFiles) ? claim.exclusiveFiles : []),
+    ].map((entry) => String(entry ?? ""));
+    return paths.some((entry) =>
+      /EXPERIMENT_LEDGER|EXPERIMENT_SEARCH|experiment_search|artifacts\/results|PROJECT_MANIFEST/.test(entry)
+    );
+  });
+  const conflicts = [];
+  for (let leftIndex = 0; leftIndex < experimentClaims.length; leftIndex += 1) {
+    for (let rightIndex = leftIndex + 1; rightIndex < experimentClaims.length; rightIndex += 1) {
+      const left = experimentClaims[leftIndex];
+      const right = experimentClaims[rightIndex];
+      if (left.sessionKey === right.sessionKey) {
+        continue;
+      }
+      if (left.mode === "read_only" || right.mode === "read_only") {
+        continue;
+      }
+      const leftPaths = [...(left.ownedDirs ?? []), ...(left.exclusiveFiles ?? [])];
+      const rightPaths = [...(right.ownedDirs ?? []), ...(right.exclusiveFiles ?? [])];
+      const overlaps = leftPaths.some((leftPath) =>
+        rightPaths.some(
+          (rightPath) =>
+            leftPath === rightPath ||
+            leftPath.startsWith(`${rightPath}/`) ||
+            rightPath.startsWith(`${leftPath}/`)
+        )
+      );
+      if (overlaps) {
+        conflicts.push({
+          left_claim_id: left.claimId ?? null,
+          left_session_key: left.sessionKey ?? null,
+          right_claim_id: right.claimId ?? null,
+          right_session_key: right.sessionKey ?? null,
+          left_paths: leftPaths,
+          right_paths: rightPaths,
+        });
+      }
+    }
+  }
+  return { experimentClaims, conflicts };
+}
+
+function buildExperimentLeaseContract({
+  generatedAt,
+  lane,
+  manifest,
+  experimentLedger,
+  writeScopeStore,
+}) {
+  const experimentSearch =
+    asRecordOrNull(manifest.experiment_search) ??
+    asRecordOrNull(asRecordOrNull(manifest.paper_ingestion)?.experiment_search) ??
+    {};
+  const ledgerEntries = normalizeExperimentLedgerEntries(experimentLedger);
+  const activeStatuses = new Set([
+    "active",
+    "claimable",
+    "claimed",
+    "dispatching",
+    "in_progress",
+    "launched",
+    "pending",
+    "queued",
+    "running",
+    "started",
+    "submitted",
+  ]);
+  const terminalStatuses = new Set([
+    "cancelled",
+    "completed",
+    "discarded",
+    "done",
+    "failed",
+    "merged",
+    "skipped",
+    "succeeded",
+    "success",
+  ]);
+  const normalizedLedger = ledgerEntries.map((entry) => ({
+    id: ledgerExperimentId(entry),
+    status: ledgerExperimentStatus(entry),
+    decision: ledgerExperimentDecision(entry),
+  }));
+  const activeExperimentIds = normalizedLedger
+    .filter((entry) => activeStatuses.has(entry.status))
+    .map((entry) => entry.id)
+    .filter(Boolean);
+  const duplicateActiveExperimentIds = activeExperimentIds.filter(
+    (id, index, values) => values.indexOf(id) !== index
+  );
+  const terminalExperiments = normalizedLedger.filter((entry) =>
+    terminalStatuses.has(entry.status)
+  );
+  const terminalExperimentsWithoutDecision = terminalExperiments.filter(
+    (entry) =>
+      !entry.decision &&
+      !["failed", "discarded", "cancelled", "skipped"].includes(entry.status)
+  );
+  const incumbentExperimentId = readFirstString(experimentSearch, [
+    ["incumbent_experiment_id"],
+    ["incumbentExperimentId"],
+    ["best_experiment_id"],
+    ["bestExperimentId"],
+  ]);
+  const incumbentBranch = readFirstString(experimentSearch, [
+    ["incumbent_branch"],
+    ["incumbentBranch"],
+  ]);
+  const incumbentCommit = readFirstString(experimentSearch, [
+    ["incumbent_commit"],
+    ["incumbentCommit"],
+  ]);
+  const candidateBranch = readFirstString(experimentSearch, [
+    ["last_candidate_branch"],
+    ["lastCandidateBranch"],
+    ["candidate_branch"],
+    ["candidateBranch"],
+  ]);
+  const candidateBaseCommit = readFirstString(experimentSearch, [
+    ["candidate_base_commit"],
+    ["candidateBaseCommit"],
+  ]);
+  const candidateHeadCommit = readFirstString(experimentSearch, [
+    ["candidate_head_commit"],
+    ["candidateHeadCommit"],
+    ["last_candidate_commit"],
+    ["lastCandidateCommit"],
+  ]);
+  const activeClaims = (writeScopeStore.claims ?? []).filter(
+    (entry) => !entry.releasedAt && Date.parse(entry.leaseExpiresAt ?? 0) > Date.now()
+  );
+  const { experimentClaims, conflicts } = activeExperimentWriteScopeConflicts(activeClaims);
+  const searchStatePresent = Object.keys(experimentSearch).length > 0;
+  const hasExperimentEvidence =
+    searchStatePresent || ledgerEntries.length > 0 || experimentClaims.length > 0;
+  const checks =
+    lane === "survey" && !hasExperimentEvidence
+      ? [
+          {
+            name: "experiment_lease_not_applicable",
+            ok: true,
+            observed: lane,
+            expected: "survey lane without experiment state",
+          },
+        ]
+      : [
+          {
+            name: "experiment_search_state_present",
+            ok: searchStatePresent,
+            observed: searchStatePresent,
+            expected: true,
+          },
+          {
+            name: "shared_incumbent_recorded",
+            ok: Boolean(incumbentExperimentId || incumbentBranch || incumbentCommit),
+            observed: { incumbent_experiment_id: incumbentExperimentId, incumbent_branch: incumbentBranch, incumbent_commit: incumbentCommit },
+            expected: "incumbent experiment, branch, or commit",
+          },
+          {
+            name: "candidate_lineage_records_base",
+            ok: !candidateBranch || Boolean(candidateBaseCommit || incumbentCommit),
+            observed: { candidate_branch: candidateBranch, candidate_base_commit: candidateBaseCommit, incumbent_commit: incumbentCommit },
+            expected: "candidate branches must record a base or expected incumbent commit",
+          },
+          {
+            name: "duplicate_active_experiment_ids_absent",
+            ok: duplicateActiveExperimentIds.length === 0,
+            observed: duplicateActiveExperimentIds,
+            expected: [],
+          },
+          {
+            name: "active_experiment_write_scope_conflicts_absent",
+            ok: conflicts.length === 0,
+            observed: conflicts,
+            expected: [],
+          },
+          {
+            name: "terminal_experiments_have_decisions",
+            ok: terminalExperimentsWithoutDecision.length === 0,
+            observed: terminalExperimentsWithoutDecision,
+            expected: [],
+          },
+          {
+            name: "promotion_has_expected_old_incumbent",
+            ok: Boolean(incumbentCommit || candidateBaseCommit) || activeExperimentIds.length === 0,
+            observed: { incumbent_commit: incumbentCommit, candidate_base_commit: candidateBaseCommit, active_experiment_ids: activeExperimentIds },
+            expected: "expected old incumbent commit before promotion",
+          },
+        ];
+  const status =
+    lane === "survey" && !hasExperimentEvidence
+      ? "not_applicable"
+      : checks.every((entry) => entry.ok)
+        ? "pass"
+        : checks.some((entry) => entry.ok)
+          ? "partial"
+          : "fail";
+  return {
+    schema_version: 1,
+    generated_at: generatedAt,
+    status,
+    lane,
+    search_state_present: searchStatePresent,
+    shared_incumbent: {
+      experiment_id: incumbentExperimentId,
+      branch: incumbentBranch,
+      commit: incumbentCommit,
+    },
+    candidate_lineage: {
+      branch: candidateBranch,
+      base_commit: candidateBaseCommit,
+      head_commit: candidateHeadCommit,
+    },
+    ledger: {
+      experiment_count: ledgerEntries.length,
+      active_experiment_ids: activeExperimentIds,
+      terminal_experiment_count: terminalExperiments.length,
+      duplicate_active_experiment_ids: [...new Set(duplicateActiveExperimentIds)],
+    },
+    write_scopes: {
+      active_experiment_claim_count: experimentClaims.length,
+      active_conflicts: conflicts,
+    },
+    cas_guardrail: {
+      shared_incumbent_required: true,
+      expected_old_incumbent_commit_required: true,
+      raw_candidate_result_can_bypass_shared_incumbent: false,
+      runtime_promotion_uses_expected_old_update_ref: true,
+    },
+    checks,
+    claim_guardrail:
+      status === "pass"
+        ? "shared_incumbent_cas_backed"
+        : status === "not_applicable"
+          ? "experiment_lease_not_applicable"
+          : status === "partial"
+            ? "shared_incumbent_partially_declared"
+            : "shared_incumbent_unverified",
   };
 }
 
@@ -520,7 +1097,14 @@ function buildProgressAnnotations(scorecard, timelinePoints) {
     annotations.push({
       kind: "papernexus_certification",
       label: "PaperNexus task certification",
-      summary: `status=${scorecard.papernexus_certification.status}; claim_level=${scorecard.papernexus_certification.claim_level}; source_backed_graph=${scorecard.papernexus_certification.source_backed_graph_claim}`,
+      summary: `status=${scorecard.papernexus_certification.status}; claim_level=${scorecard.papernexus_certification.claim_level}; source_backed_graph=${scorecard.papernexus_certification.source_backed_graph_claim}; import_tasks=${scorecard.papernexus_certification.completed_import_task_count ?? 0}/${scorecard.papernexus_certification.import_task_count ?? 0}; stage_completed=${scorecard.papernexus_certification.stage_completed_import_task_count ?? 0}/${scorecard.papernexus_certification.import_task_count ?? 0}`,
+    });
+  }
+  if (scorecard.literature_research_controller?.status) {
+    annotations.push({
+      kind: "literature_research_controller",
+      label: "literature research controller",
+      summary: `status=${scorecard.literature_research_controller.status}; decision=${scorecard.literature_research_controller.decision}; coverage_score=${scorecard.literature_research_controller.coverage_score_100 ?? "n/a"}; blocking_gaps=${scorecard.literature_research_controller.blocking_gap_count ?? "n/a"}`,
     });
   }
   if (scorecard.benchmark_adapter.status !== "missing") {
@@ -534,6 +1118,21 @@ function buildProgressAnnotations(scorecard, timelinePoints) {
     kind: "domain_evaluator",
     label: "domain evaluator",
     summary: `pack=${scorecard.domain_evaluator.pack}; status=${scorecard.domain_evaluator.status}; guardrail=${scorecard.domain_evaluator.claim_guardrail}`,
+  });
+  annotations.push({
+    kind: "reviewer_calibration",
+    label: "reviewer calibration",
+    summary: `status=${scorecard.reviewer_calibration.status}; venue=${scorecard.reviewer_calibration.venue_profile}; score=${scorecard.reviewer_calibration.calibrated_score_100 ?? "n/a"}`,
+  });
+  annotations.push({
+    kind: "copyedit_style",
+    label: "copyedit/style audit",
+    summary: `status=${scorecard.copyedit_style_audit.status}; guardrail=${scorecard.copyedit_style_audit.claim_guardrail}`,
+  });
+  annotations.push({
+    kind: "experiment_lease",
+    label: "experiment lease / incumbent CAS",
+    summary: `status=${scorecard.experiment_lease_contract.status}; guardrail=${scorecard.experiment_lease_contract.claim_guardrail}; active_claims=${scorecard.experiment_lease_contract.write_scopes.active_experiment_claim_count}`,
   });
   if (scorecard.failed_required_checks.length > 0) {
     annotations.push({
@@ -641,16 +1240,143 @@ function buildRunLedgerEntry({ runId, scorecard, progressChart, linkedArtifacts 
     diagnostic_failed_check_count: scorecard.diagnostic_failed_checks.length,
     timeline_point_count: progressChart.timeline_points.length,
     papernexus_certification_status: scorecard.papernexus_certification.status,
+    literature_controller_status: scorecard.literature_research_controller.status,
+    literature_controller_decision: scorecard.literature_research_controller.decision,
     benchmark_adapter_status: scorecard.benchmark_adapter.status,
     domain_evaluator_status: scorecard.domain_evaluator.status,
     domain_evaluator_pack: scorecard.domain_evaluator.pack,
+    reviewer_calibration_status: scorecard.reviewer_calibration.status,
+    copyedit_style_status: scorecard.copyedit_style_audit.status,
+    experiment_lease_status: scorecard.experiment_lease_contract.status,
     platform: scorecard.platform_profile.runtime.platform,
     linked_artifacts: linkedArtifacts,
   };
 }
 
+function verdictRank(verdict) {
+  const normalized = String(verdict ?? "").toLowerCase();
+  if (normalized === "pass") {
+    return 2;
+  }
+  if (normalized === "partial") {
+    return 1;
+  }
+  if (normalized === "fail") {
+    return 0;
+  }
+  return null;
+}
+
+function finiteNumberOrNull(value) {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function numericDelta(latest, previous) {
+  const latestValue = finiteNumberOrNull(latest);
+  const previousValue = finiteNumberOrNull(previous);
+  return latestValue === null || previousValue === null
+    ? null
+    : Number((latestValue - previousValue).toFixed(3));
+}
+
+function buildRunTrendSummary({ generatedAt, lane, runLedgerEntries }) {
+  const validRuns = (runLedgerEntries ?? []).filter(
+    (entry) => entry && typeof entry === "object" && !entry.raw
+  );
+  const laneRuns = validRuns.filter(
+    (entry) => (entry.project?.lane ?? entry.lane ?? null) === lane
+  );
+  const latest = laneRuns.at(-1) ?? null;
+  const previous = laneRuns.length > 1 ? laneRuns.at(-2) : null;
+  const scoreDelta100 = numericDelta(
+    latest?.quality_score_100,
+    previous?.quality_score_100
+  );
+  const failedRequiredCheckDelta = numericDelta(
+    latest?.failed_required_check_count,
+    previous?.failed_required_check_count
+  );
+  const latestVerdict = latest?.verdict?.final_verdict ?? null;
+  const previousVerdict = previous?.verdict?.final_verdict ?? null;
+  const latestVerdictRank = verdictRank(latestVerdict);
+  const previousVerdictRank = verdictRank(previousVerdict);
+  const verdictRankDelta =
+    latestVerdictRank === null || previousVerdictRank === null
+      ? null
+      : latestVerdictRank - previousVerdictRank;
+  let passStreak = 0;
+  for (const entry of [...laneRuns].reverse()) {
+    if (entry?.verdict?.final_verdict !== "pass") {
+      break;
+    }
+    passStreak += 1;
+  }
+  const regressionDetected =
+    (scoreDelta100 !== null && scoreDelta100 < -0.1) ||
+    (failedRequiredCheckDelta !== null && failedRequiredCheckDelta > 0) ||
+    (verdictRankDelta !== null && verdictRankDelta < 0);
+  const improvementDetected =
+    (scoreDelta100 !== null && scoreDelta100 > 0.1) ||
+    (failedRequiredCheckDelta !== null && failedRequiredCheckDelta < 0) ||
+    (verdictRankDelta !== null && verdictRankDelta > 0);
+  const status = previous
+    ? regressionDetected
+      ? "regressed"
+      : improvementDetected
+        ? "improved"
+        : "stable"
+    : "baseline";
+  return {
+    schema_version: 1,
+    generated_at: generatedAt,
+    status,
+    lane,
+    run_count: validRuns.length,
+    lane_run_count: laneRuns.length,
+    latest_run_id: latest?.run_id ?? null,
+    previous_run_id: previous?.run_id ?? null,
+    latest_score_100: latest?.quality_score_100 ?? null,
+    previous_score_100: previous?.quality_score_100 ?? null,
+    score_delta_100: scoreDelta100,
+    latest_failed_required_check_count:
+      latest?.failed_required_check_count ?? null,
+    previous_failed_required_check_count:
+      previous?.failed_required_check_count ?? null,
+    failed_required_check_delta: failedRequiredCheckDelta,
+    verdict_transition: {
+      from: previousVerdict,
+      to: latestVerdict,
+      rank_delta: verdictRankDelta,
+    },
+    pass_streak: passStreak,
+    regression_detected: regressionDetected,
+    improvement_detected: improvementDetected,
+    recent_runs: laneRuns.slice(-10).map((entry) => ({
+      run_id: entry.run_id ?? null,
+      generated_at: entry.generated_at ?? null,
+      final_verdict: entry.verdict?.final_verdict ?? null,
+      claim_strength_cap: entry.verdict?.claim_strength_cap ?? null,
+      quality_score_100: entry.quality_score_100 ?? null,
+      failed_required_check_count: entry.failed_required_check_count ?? null,
+      domain_evaluator_pack: entry.domain_evaluator_pack ?? null,
+      reviewer_calibration_status: entry.reviewer_calibration_status ?? null,
+      copyedit_style_status: entry.copyedit_style_status ?? null,
+      experiment_lease_status: entry.experiment_lease_status ?? null,
+    })),
+  };
+}
+
 function buildE2EDashboardHtml({ openclawDir, scorecard, progressChart, runLedgerEntries }) {
   const latest = scorecard;
+  const runTrends = scorecard.run_trends ?? {
+    status: "unknown",
+    lane_run_count: 0,
+    score_delta_100: null,
+    failed_required_check_delta: null,
+    pass_streak: 0,
+    regression_detected: false,
+    recent_runs: [],
+  };
   const artifactRows = Object.entries(progressChart.linked_artifacts)
     .map(([name, filePath]) => {
       const href = artifactHref(openclawDir, filePath);
@@ -673,13 +1399,21 @@ function buildE2EDashboardHtml({ openclawDir, scorecard, progressChart, runLedge
     .reverse()
     .map(
       (entry) =>
-        `<tr><td>${escapeHtml(entry.generated_at ?? "unknown")}</td><td>${escapeHtml(entry.project?.lane ?? "unknown")}</td><td>${escapeHtml(entry.verdict?.final_verdict ?? "unknown")}</td><td>${escapeHtml(entry.verdict?.claim_strength_cap ?? "unknown")}</td><td>${escapeHtml(entry.quality_score_100 ?? "n/a")}</td><td>${escapeHtml(entry.domain_evaluator_pack ?? "unknown")}</td><td>${escapeHtml(entry.failed_required_check_count ?? "n/a")}</td></tr>`
+        `<tr><td>${escapeHtml(entry.generated_at ?? "unknown")}</td><td>${escapeHtml(entry.project?.lane ?? "unknown")}</td><td>${escapeHtml(entry.verdict?.final_verdict ?? "unknown")}</td><td>${escapeHtml(entry.verdict?.claim_strength_cap ?? "unknown")}</td><td>${escapeHtml(entry.quality_score_100 ?? "n/a")}</td><td>${escapeHtml(entry.domain_evaluator_pack ?? "unknown")}</td><td>${escapeHtml(entry.reviewer_calibration_status ?? "unknown")}</td><td>${escapeHtml(entry.copyedit_style_status ?? "unknown")}</td><td>${escapeHtml(entry.experiment_lease_status ?? "unknown")}</td><td>${escapeHtml(entry.failed_required_check_count ?? "n/a")}</td></tr>`
     )
     .join("\n");
   const componentRows = latest.quality_score.components
     .map(
       (component) =>
         `<tr><td>${escapeHtml(component.name)}</td><td>${escapeHtml(component.status)}</td><td>${escapeHtml(component.weight)}</td><td>${escapeHtml(component.score_100 ?? "n/a")}</td></tr>`
+    )
+    .join("\n");
+  const trendRows = (runTrends.recent_runs ?? [])
+    .slice()
+    .reverse()
+    .map(
+      (entry) =>
+        `<tr><td>${escapeHtml(entry.generated_at ?? "unknown")}</td><td>${escapeHtml(entry.final_verdict ?? "unknown")}</td><td>${escapeHtml(entry.claim_strength_cap ?? "unknown")}</td><td>${escapeHtml(entry.quality_score_100 ?? "n/a")}</td><td>${escapeHtml(entry.failed_required_check_count ?? "n/a")}</td><td>${escapeHtml(entry.domain_evaluator_pack ?? "unknown")}</td><td>${escapeHtml(entry.experiment_lease_status ?? "unknown")}</td></tr>`
     )
     .join("\n");
   return `<!doctype html>
@@ -711,15 +1445,31 @@ a{color:#1f6feb;text-decoration:none}
 <div class="metric">Quality Score<b>${escapeHtml(latest.quality_score.score_100 ?? "n/a")}</b></div>
 <div class="metric">Failed Checks<b>${escapeHtml(latest.failed_required_checks.length)}</b></div>
 <div class="metric">PaperNexus<b>${escapeHtml(latest.papernexus_certification.status)}</b></div>
+<div class="metric">Literature<b>${escapeHtml(latest.literature_research_controller.status)}</b></div>
 <div class="metric">Domain Pack<b>${escapeHtml(latest.domain_evaluator.pack)}</b></div>
+<div class="metric">Reviewer Calib.<b>${escapeHtml(latest.reviewer_calibration.status)}</b></div>
+<div class="metric">Copyedit<b>${escapeHtml(latest.copyedit_style_audit.status)}</b></div>
+<div class="metric">Experiment Lease<b>${escapeHtml(latest.experiment_lease_contract.status)}</b></div>
+<div class="metric">Trend<b>${escapeHtml(runTrends.status)}</b></div>
 </section>
 <section>
 <h2>Quality Components</h2>
 <table><thead><tr><th>Name</th><th>Status</th><th>Weight</th><th>Score 100</th></tr></thead><tbody>${componentRows}</tbody></table>
 </section>
 <section>
+<h2>Run Trends</h2>
+<div class="summary">
+<div class="metric">Lane Runs<b>${escapeHtml(runTrends.lane_run_count ?? "n/a")}</b></div>
+<div class="metric">Score Delta<b>${escapeHtml(runTrends.score_delta_100 ?? "n/a")}</b></div>
+<div class="metric">Failed Check Delta<b>${escapeHtml(runTrends.failed_required_check_delta ?? "n/a")}</b></div>
+<div class="metric">Pass Streak<b>${escapeHtml(runTrends.pass_streak ?? "n/a")}</b></div>
+<div class="metric">Regression<b>${escapeHtml(runTrends.regression_detected ? "yes" : "no")}</b></div>
+</div>
+<table><thead><tr><th>Generated</th><th>Verdict</th><th>Claim Cap</th><th>Score</th><th>Failed</th><th>Domain</th><th>Lease</th></tr></thead><tbody>${trendRows || "<tr><td colspan=\"7\">none</td></tr>"}</tbody></table>
+</section>
+<section>
 <h2>Run Ledger</h2>
-<table><thead><tr><th>Generated</th><th>Lane</th><th>Verdict</th><th>Claim Cap</th><th>Score</th><th>Domain</th><th>Failed</th></tr></thead><tbody>${historyRows || "<tr><td colspan=\"7\">none</td></tr>"}</tbody></table>
+<table><thead><tr><th>Generated</th><th>Lane</th><th>Verdict</th><th>Claim Cap</th><th>Score</th><th>Domain</th><th>Reviewer</th><th>Copyedit</th><th>Lease</th><th>Failed</th></tr></thead><tbody>${historyRows || "<tr><td colspan=\"10\">none</td></tr>"}</tbody></table>
 </section>
 <section>
 <h2>Artifacts</h2>
@@ -843,6 +1593,7 @@ if (!projectRoot || projectRoot === process.cwd()) {
 
 const openclawDir = path.join(projectRoot, ".openclaw-research");
 await fs.mkdir(openclawDir, { recursive: true });
+const now = new Date().toISOString();
 
 const manifest = (await readJson(path.join(projectRoot, "PROJECT_MANIFEST.json"))) ?? {};
 const handoffStore =
@@ -888,6 +1639,7 @@ const [
   refsBib,
   citationVerificationText,
   reviewIssues,
+  reviewPacket,
   includedPapers,
   paperSourceIndex,
   sotaMatrix,
@@ -903,6 +1655,7 @@ const [
   readTextIfExists(refsBibPath),
   readTextIfExists(citationVerificationPath),
   readJson(reviewIssuesPath),
+  readJson(reviewPacketPath),
   readJson(includedPapersPath),
   readJson(paperSourceIndexPath),
   readTextIfExists(sotaMatrixPath),
@@ -1180,6 +1933,54 @@ const contentQualityStatus = !strictContent
     ? "pass"
     : "fail";
 
+const literatureControllerModule = await loadLiteratureResearchController();
+let literatureResearchController;
+try {
+  literatureResearchController =
+    literatureControllerModule?.materializeLiteratureResearchControllerArtifacts
+      ? await literatureControllerModule.materializeLiteratureResearchControllerArtifacts({
+          projectRoot,
+          generatedAt: now,
+          trigger: "no_discord_e2e_harness",
+        })
+      : {
+          status: "unavailable",
+          decision: "blocked",
+          coverage_report: {
+            coverage_score_100: null,
+            blocking_gaps: [
+              {
+                code: "controller_module_unavailable",
+                severity: "critical",
+                summary:
+                  "Literature research controller module was not importable from dist or tools.",
+              },
+            ],
+            next_actions: ["run npm run build or execute the harness with a Node runtime that can load tools/*.ts"],
+          },
+          artifact_paths: {},
+          relative_artifact_paths: {},
+        };
+} catch (error) {
+  literatureResearchController = {
+    status: "error",
+    decision: "blocked",
+    coverage_report: {
+      coverage_score_100: null,
+      blocking_gaps: [
+        {
+          code: "controller_materialization_failed",
+          severity: "critical",
+          summary: error instanceof Error ? error.message : String(error),
+        },
+      ],
+      next_actions: ["repair literature controller inputs and rerun the E2E harness"],
+    },
+    artifact_paths: {},
+    relative_artifact_paths: {},
+  };
+}
+
 const surveyChecks = [
   "researcher/SURVEY_QUERY_REGISTRY.json",
   "researcher/INCLUDED_PAPERS.json",
@@ -1213,13 +2014,27 @@ const crossDomainChecks = [
   "researcher/ideation/NEURO_COGNITIVE_CONCEPT_MAP.md",
   "researcher/ideation/CROSS_DOMAIN_RECONTEXTUALIZATION.md",
 ];
+const literatureControllerChecks = [
+  "researcher/literature-research-controller/literature_need_assessment.json",
+  "researcher/literature-research-controller/retrieval_keyword_bank.json",
+  "researcher/literature-research-controller/literature_query_plan.json",
+  "researcher/literature-research-controller/candidate_screening_report.json",
+  "researcher/literature-research-controller/literature_coverage_report.json",
+  "researcher/literature-research-controller/LITERATURE_RESEARCH_CONTROLLER_STATUS.md",
+];
 
 const requiredPaths =
   lane === "survey"
-    ? [...surveyChecks, ...writingChecks, ...crossDomainChecks]
+    ? [...surveyChecks, ...writingChecks, ...crossDomainChecks, ...literatureControllerChecks]
     : lane === "experiment"
-      ? [...experimentChecks, ...writingChecks, ...crossDomainChecks]
-      : [...surveyChecks, ...experimentChecks, ...writingChecks, ...crossDomainChecks];
+      ? [...experimentChecks, ...writingChecks, ...crossDomainChecks, ...literatureControllerChecks]
+      : [
+          ...surveyChecks,
+          ...experimentChecks,
+          ...writingChecks,
+          ...crossDomainChecks,
+          ...literatureControllerChecks,
+        ];
 
 const artifactChecklist = [];
 for (const relativePath of requiredPaths) {
@@ -1230,7 +2045,6 @@ for (const relativePath of requiredPaths) {
   });
 }
 
-const now = new Date().toISOString();
 const runId = `${now.replace(/[:.]/g, "")}-${lane}`;
 const reportPath = path.join(openclawDir, "E2E_RUN_REPORT.md");
 const scorecardPath = path.join(openclawDir, "E2E_RUN_SCORECARD.json");
@@ -1239,6 +2053,7 @@ const progressChartPath = path.join(openclawDir, "progress_chart.json");
 const progressChartHtmlPath = path.join(openclawDir, "progress_chart.html");
 const runLedgerPath = path.join(openclawDir, "E2E_RUN_LEDGER.jsonl");
 const dashboardPath = path.join(openclawDir, "E2E_DASHBOARD.html");
+const runTrendPath = path.join(openclawDir, "E2E_RUN_TRENDS.json");
 const benchmarkAdapterScorecardPath = path.join(
   openclawDir,
   "E2E_BENCHMARK_ADAPTER_SCORECARD.json"
@@ -1246,6 +2061,12 @@ const benchmarkAdapterScorecardPath = path.join(
 const domainEvaluatorContractPath = path.join(
   openclawDir,
   "E2E_DOMAIN_EVALUATOR_CONTRACT.json"
+);
+const reviewerCalibrationPath = path.join(openclawDir, "E2E_REVIEWER_CALIBRATION.json");
+const copyeditStyleAuditPath = path.join(openclawDir, "E2E_COPYEDIT_STYLE_AUDIT.json");
+const experimentLeaseContractPath = path.join(
+  openclawDir,
+  "E2E_EXPERIMENT_LEASE_CONTRACT.json"
 );
 const platformProfilePath = path.join(openclawDir, "PLATFORM_PROFILE.json");
 const checklistPath = path.join(openclawDir, "E2E_ARTIFACT_CHECKLIST.json");
@@ -1428,6 +2249,20 @@ const papernexusCertification =
           papernexusTaskCertification.graph?.verification_mode ?? null,
         evidence_mode:
           papernexusTaskCertification.mcp_contract?.evidence_mode ?? null,
+        import_task_count:
+          papernexusTaskCertification.upload?.import_tasks?.task_count ?? 0,
+        completed_import_task_count:
+          papernexusTaskCertification.upload?.import_tasks?.completed_task_count ?? 0,
+        stage_completed_import_task_count:
+          papernexusTaskCertification.upload?.import_tasks?.stage_completed_task_count ?? 0,
+        failed_import_task_count:
+          papernexusTaskCertification.upload?.import_tasks?.failed_task_count ?? 0,
+        missing_import_task_id_count:
+          papernexusTaskCertification.upload?.import_tasks?.missing_task_id_count ?? 0,
+        all_import_tasks_completed:
+          papernexusTaskCertification.upload?.import_tasks?.all_tasks_completed ?? null,
+        all_import_task_stages_completed:
+          papernexusTaskCertification.upload?.import_tasks?.all_task_stages_completed ?? null,
         limitations: Array.isArray(papernexusTaskCertification.limitations)
           ? papernexusTaskCertification.limitations
           : [],
@@ -1440,6 +2275,13 @@ const papernexusCertification =
         graph_status: null,
         verification_mode: null,
         evidence_mode: null,
+        import_task_count: 0,
+        completed_import_task_count: 0,
+        stage_completed_import_task_count: 0,
+        failed_import_task_count: 0,
+        missing_import_task_id_count: 0,
+        all_import_tasks_completed: null,
+        all_import_task_stages_completed: null,
         limitations: [],
       };
 const claimStrengthCap =
@@ -1454,6 +2296,56 @@ const claimStrengthCap =
           : finalVerdict === "pass"
             ? "evidence_backed"
             : "partial";
+const reviewerCalibration = buildReviewerCalibrationContract({
+  generatedAt: now,
+  lane,
+  manifest,
+  reviewPacket,
+  reviewPacketPath,
+  reviewIssues,
+  reviewIssuesPath,
+  reviewCloseoutRatio,
+});
+const copyeditStyleAudit = buildCopyeditStyleAudit({
+  generatedAt: now,
+  lane,
+  mainTex,
+  placeholderMatches,
+  claimStrengthCap,
+});
+const experimentLeaseContract = buildExperimentLeaseContract({
+  generatedAt: now,
+  lane,
+  manifest,
+  experimentLedger,
+  writeScopeStore,
+});
+const literatureResearchControllerSummary = {
+  status: literatureResearchController.status ?? "unknown",
+  decision: literatureResearchController.decision ?? "unknown",
+  coverage_score_100:
+    literatureResearchController.coverage_report?.coverage_score_100 ?? null,
+  coverage_verdict:
+    literatureResearchController.coverage_audit?.verdict ??
+    literatureResearchController.coverage_report?.coverage_audit?.verdict ??
+    null,
+  query_count: Array.isArray(literatureResearchController.query_plan?.queries)
+    ? literatureResearchController.query_plan.queries.length
+    : null,
+  blocking_gap_count: Array.isArray(
+    literatureResearchController.coverage_report?.blocking_gaps
+  )
+    ? literatureResearchController.coverage_report.blocking_gaps.length
+    : null,
+  weak_gap_count: Array.isArray(literatureResearchController.coverage_report?.weak_gaps)
+    ? literatureResearchController.coverage_report.weak_gaps.length
+    : null,
+  next_actions: Array.isArray(literatureResearchController.coverage_report?.next_actions)
+    ? literatureResearchController.coverage_report.next_actions
+    : [],
+  artifact_paths: literatureResearchController.artifact_paths ?? {},
+  relative_artifact_paths: literatureResearchController.relative_artifact_paths ?? {},
+};
 const failedRequiredChecks = failedCheckRecords([
   {
     name: "artifacts",
@@ -1509,6 +2401,28 @@ if (benchmarkAdapter.status === "missing") {
 if (domainEvaluator.status !== "pass") {
   nextActions.push(`complete ${domainEvaluator.pack} evaluator requirements before strengthening claims`);
 }
+if (reviewerCalibration.status !== "pass") {
+  nextActions.push("calibrate reviewer score against a rubric and venue profile before treating reviewer_score as comparable");
+}
+if (copyeditStyleAudit.status !== "pass") {
+  nextActions.push("run copyedit/style revision to remove overclaiming, placeholder language, or hard-to-review prose");
+}
+if (
+  experimentLeaseContract.status !== "pass" &&
+  experimentLeaseContract.status !== "not_applicable"
+) {
+  nextActions.push("record shared incumbent/CAS lineage before allowing parallel experiment promotion");
+}
+if (
+  literatureResearchControllerSummary.status === "blocked" ||
+  literatureResearchControllerSummary.status === "needs_research" ||
+  literatureResearchControllerSummary.status === "error" ||
+  literatureResearchControllerSummary.status === "unavailable"
+) {
+  nextActions.push(
+    ...literatureResearchControllerSummary.next_actions.filter((entry) => entry !== "none")
+  );
+}
 if (lane !== "survey" && !resultBackedFigureTablePass) {
   nextActions.push("refresh figure/table packs from researcher/artifacts/results before final paper closeout");
 }
@@ -1550,7 +2464,8 @@ const scorecard = {
     wall_time_seconds: benchmarkAdapter.wall_time_seconds,
     cost_usd: benchmarkAdapter.cost_usd,
     artifact_count: artifactChecklist.filter((entry) => entry.exists).length,
-    reviewer_score: score100(reviewCloseoutRatio),
+    reviewer_score: reviewerCalibration.calibrated_score_100 ?? score100(reviewCloseoutRatio),
+    reviewer_closeout_score: score100(reviewCloseoutRatio),
     reproducibility_pass: reproducibilityPass,
     safety_incidents: blockingOpenIncidents.length,
   },
@@ -1587,8 +2502,12 @@ const scorecard = {
     checks: runtimeSafetyChecks,
   },
   papernexus_certification: papernexusCertification,
+  literature_research_controller: literatureResearchControllerSummary,
   benchmark_adapter: benchmarkAdapter,
   domain_evaluator: domainEvaluator,
+  reviewer_calibration: reviewerCalibration,
+  copyedit_style_audit: copyeditStyleAudit,
+  experiment_lease_contract: experimentLeaseContract,
   platform_profile: {
     path: platformProfilePath,
     runtime: platformProfile.runtime,
@@ -1637,9 +2556,28 @@ const progressChart = {
     papernexus_claim_level: papernexusCertification.claim_level,
     papernexus_source_backed_graph_claim:
       papernexusCertification.source_backed_graph_claim,
+    papernexus_import_task_count: papernexusCertification.import_task_count,
+    papernexus_completed_import_task_count:
+      papernexusCertification.completed_import_task_count,
+    papernexus_stage_completed_import_task_count:
+      papernexusCertification.stage_completed_import_task_count,
+    papernexus_missing_import_task_id_count:
+      papernexusCertification.missing_import_task_id_count,
+    literature_controller_status: literatureResearchControllerSummary.status,
+    literature_controller_decision: literatureResearchControllerSummary.decision,
+    literature_controller_coverage_score_100:
+      literatureResearchControllerSummary.coverage_score_100,
+    literature_controller_blocking_gap_count:
+      literatureResearchControllerSummary.blocking_gap_count,
     benchmark_adapter_status: benchmarkAdapter.status,
     domain_evaluator_status: domainEvaluator.status,
     domain_evaluator_pack: domainEvaluator.pack,
+    reviewer_calibration_status: reviewerCalibration.status,
+    reviewer_calibration_score_100: reviewerCalibration.calibrated_score_100,
+    copyedit_style_status: copyeditStyleAudit.status,
+    experiment_lease_status: experimentLeaseContract.status,
+    experiment_lease_active_claims:
+      experimentLeaseContract.write_scopes.active_experiment_claim_count,
     platform_profile_os: platformProfile.runtime.platform,
     artifact_count: artifactChecklist.filter((entry) => entry.exists).length,
     missing_artifact_count: artifactChecklist.filter((entry) => entry.required && !entry.exists).length,
@@ -1662,12 +2600,28 @@ const progressChart = {
     papernexus_task_certification_path: papernexusCertification.path,
     benchmark_adapter_scorecard_path: benchmarkAdapterScorecardPath,
     domain_evaluator_contract_path: domainEvaluatorContractPath,
+    reviewer_calibration_path: reviewerCalibrationPath,
+    copyedit_style_audit_path: copyeditStyleAuditPath,
+    experiment_lease_contract_path: experimentLeaseContractPath,
+    literature_controller_status_path:
+      literatureResearchControllerSummary.artifact_paths.status_markdown_path ?? null,
+    literature_controller_need_assessment_path:
+      literatureResearchControllerSummary.artifact_paths.need_assessment_path ?? null,
+    literature_controller_keyword_bank_path:
+      literatureResearchControllerSummary.artifact_paths.keyword_bank_path ?? null,
+    literature_controller_query_plan_path:
+      literatureResearchControllerSummary.artifact_paths.query_plan_path ?? null,
+    literature_controller_candidate_screening_report_path:
+      literatureResearchControllerSummary.artifact_paths
+        .candidate_screening_report_path ?? null,
+    literature_controller_coverage_report_path:
+      literatureResearchControllerSummary.artifact_paths.coverage_report_path ?? null,
     platform_profile_path: platformProfilePath,
     run_ledger_path: runLedgerPath,
+    run_trend_path: runTrendPath,
     dashboard_path: dashboardPath,
   },
 };
-const progressChartHtml = buildProgressChartHtml(progressChart);
 const runLedgerEntry = buildRunLedgerEntry({
   runId,
   scorecard,
@@ -1675,6 +2629,25 @@ const runLedgerEntry = buildRunLedgerEntry({
   linkedArtifacts: progressChart.linked_artifacts,
 });
 const runLedgerEntries = [...(await listJsonl(runLedgerPath)), runLedgerEntry];
+const runTrendSummary = buildRunTrendSummary({
+  generatedAt: now,
+  lane,
+  runLedgerEntries,
+});
+scorecard.run_trends = runTrendSummary;
+progressChart.summary.run_trend_status = runTrendSummary.status;
+progressChart.summary.run_trend_lane_run_count = runTrendSummary.lane_run_count;
+progressChart.summary.run_trend_score_delta_100 = runTrendSummary.score_delta_100;
+progressChart.summary.run_trend_failed_required_check_delta =
+  runTrendSummary.failed_required_check_delta;
+progressChart.summary.run_trend_regression_detected =
+  runTrendSummary.regression_detected;
+progressChart.annotations.push({
+  kind: "run_trend",
+  label: "run trend",
+  summary: `status=${runTrendSummary.status}; lane_runs=${runTrendSummary.lane_run_count}; score_delta=${runTrendSummary.score_delta_100 ?? "n/a"}; failed_check_delta=${runTrendSummary.failed_required_check_delta ?? "n/a"}`,
+});
+const progressChartHtml = buildProgressChartHtml(progressChart);
 const dashboardHtml = buildE2EDashboardHtml({
   openclawDir,
   scorecard,
@@ -1703,6 +2676,7 @@ const report = `# E2E Run Report
 - progress_chart: ${progressChartHtmlPath}
 - dashboard: ${dashboardPath}
 - run_ledger: ${runLedgerPath}
+- run_trend: ${runTrendPath}
 
 ## PaperNexus Task Certification
 
@@ -1712,8 +2686,22 @@ const report = `# E2E Run Report
 - graph_status: ${papernexusCertification.graph_status ?? "unknown"}
 - verification_mode: ${papernexusCertification.verification_mode ?? "unknown"}
 - evidence_mode: ${papernexusCertification.evidence_mode ?? "unknown"}
+- import_tasks: ${papernexusCertification.completed_import_task_count}/${papernexusCertification.import_task_count}
+- import_task_stages_completed: ${papernexusCertification.stage_completed_import_task_count}/${papernexusCertification.import_task_count}
+- missing_import_task_ids: ${papernexusCertification.missing_import_task_id_count}
 - limitations: ${papernexusCertification.limitations.length > 0 ? papernexusCertification.limitations.join(", ") : "none"}
 - path: ${papernexusCertification.path}
+
+## Literature Research Controller
+
+- status: ${literatureResearchControllerSummary.status}
+- decision: ${literatureResearchControllerSummary.decision}
+- coverage_score_100: ${literatureResearchControllerSummary.coverage_score_100 ?? "unknown"}
+- coverage_verdict: ${literatureResearchControllerSummary.coverage_verdict ?? "unknown"}
+- query_count: ${literatureResearchControllerSummary.query_count ?? "unknown"}
+- blocking_gap_count: ${literatureResearchControllerSummary.blocking_gap_count ?? "unknown"}
+- weak_gap_count: ${literatureResearchControllerSummary.weak_gap_count ?? "unknown"}
+- status_path: ${literatureResearchControllerSummary.artifact_paths.status_markdown_path ?? "unknown"}
 
 ## Benchmark Adapter
 
@@ -1735,6 +2723,40 @@ const report = `# E2E Run Report
 - holdout: ${domainEvaluator.holdout}
 - claim_guardrail: ${domainEvaluator.claim_guardrail}
 
+## Reviewer Calibration
+
+- status: ${reviewerCalibration.status}
+- venue_profile: ${reviewerCalibration.venue_profile}
+- target_venues: ${reviewerCalibration.target_venues.length > 0 ? reviewerCalibration.target_venues.join(", ") : "none"}
+- calibrated_score_100: ${reviewerCalibration.calibrated_score_100 ?? "unknown"}
+- average_rubric_score: ${reviewerCalibration.average_rubric_score ?? "unknown"}
+- covered_criteria: ${reviewerCalibration.covered_criteria.length > 0 ? reviewerCalibration.covered_criteria.join(", ") : "none"}
+- claim_guardrail: ${reviewerCalibration.claim_guardrail}
+- path: ${reviewerCalibrationPath}
+
+## Copyedit / Style Audit
+
+- status: ${copyeditStyleAudit.status}
+- sentence_count: ${copyeditStyleAudit.sentence_summary.sentence_count}
+- max_sentence_words: ${copyeditStyleAudit.sentence_summary.max_sentence_words}
+- strong_claim_terms: ${copyeditStyleAudit.strong_claim_terms.length > 0 ? copyeditStyleAudit.strong_claim_terms.join(", ") : "none"}
+- boundary_terms: ${copyeditStyleAudit.boundary_terms.length > 0 ? copyeditStyleAudit.boundary_terms.join(", ") : "none"}
+- claim_guardrail: ${copyeditStyleAudit.claim_guardrail}
+- path: ${copyeditStyleAuditPath}
+
+## Experiment Lease / Shared Incumbent
+
+- status: ${experimentLeaseContract.status}
+- shared_incumbent_experiment: ${experimentLeaseContract.shared_incumbent.experiment_id ?? "unknown"}
+- shared_incumbent_branch: ${experimentLeaseContract.shared_incumbent.branch ?? "unknown"}
+- shared_incumbent_commit: ${experimentLeaseContract.shared_incumbent.commit ?? "unknown"}
+- candidate_branch: ${experimentLeaseContract.candidate_lineage.branch ?? "unknown"}
+- candidate_base_commit: ${experimentLeaseContract.candidate_lineage.base_commit ?? "unknown"}
+- active_experiment_write_scope_claims: ${experimentLeaseContract.write_scopes.active_experiment_claim_count}
+- active_experiment_write_scope_conflicts: ${experimentLeaseContract.write_scopes.active_conflicts.length}
+- claim_guardrail: ${experimentLeaseContract.claim_guardrail}
+- path: ${experimentLeaseContractPath}
+
 ## Platform Profile
 
 - os: ${platformProfile.runtime.platform}
@@ -1745,6 +2767,20 @@ const report = `# E2E Run Report
 - cuda: ${platformProfile.capability_matrix.cuda.status}
 - mlx: ${platformProfile.capability_matrix.mlx.status}
 - webgpu: ${platformProfile.capability_matrix.webgpu.status}
+
+## Run Trends
+
+- status: ${runTrendSummary.status}
+- run_count: ${runTrendSummary.run_count}
+- lane_run_count: ${runTrendSummary.lane_run_count}
+- previous_score_100: ${runTrendSummary.previous_score_100 ?? "unknown"}
+- latest_score_100: ${runTrendSummary.latest_score_100 ?? "unknown"}
+- score_delta_100: ${runTrendSummary.score_delta_100 ?? "unknown"}
+- failed_required_check_delta: ${runTrendSummary.failed_required_check_delta ?? "unknown"}
+- verdict_transition: ${runTrendSummary.verdict_transition.from ?? "unknown"} -> ${runTrendSummary.verdict_transition.to ?? "unknown"}
+- regression_detected: ${runTrendSummary.regression_detected}
+- pass_streak: ${runTrendSummary.pass_streak}
+- path: ${runTrendPath}
 
 ## Artifact Coverage
 
@@ -1818,6 +2854,7 @@ const progressNarrative = `# E2E Progress Narrative
 - quality_score_100: ${scorecard.quality_score.score_100 ?? "unknown"}
 - dashboard: ${dashboardPath}
 - run_ledger: ${runLedgerPath}
+- run_trend: ${runTrendPath}
 
 ## Current State
 
@@ -1841,11 +2878,25 @@ const progressNarrative = `# E2E Progress Narrative
 - papernexus_certification_status: ${papernexusCertification.status}
 - papernexus_claim_level: ${papernexusCertification.claim_level}
 - papernexus_source_backed_graph_claim: ${papernexusCertification.source_backed_graph_claim}
+- papernexus_import_tasks: ${papernexusCertification.completed_import_task_count}/${papernexusCertification.import_task_count}
+- papernexus_import_task_stages_completed: ${papernexusCertification.stage_completed_import_task_count}/${papernexusCertification.import_task_count}
+- literature_controller_status: ${literatureResearchControllerSummary.status}
+- literature_controller_decision: ${literatureResearchControllerSummary.decision}
+- literature_controller_coverage_score_100: ${literatureResearchControllerSummary.coverage_score_100 ?? "unknown"}
+- literature_controller_blocking_gap_count: ${literatureResearchControllerSummary.blocking_gap_count ?? "unknown"}
 - benchmark_adapter_status: ${benchmarkAdapter.status}
 - benchmark_adapter_metric: ${benchmarkAdapter.metric}
 - benchmark_candidate_score: ${benchmarkAdapter.candidate_score ?? "unknown"}
 - domain_evaluator_pack: ${domainEvaluator.pack}
 - domain_evaluator_status: ${domainEvaluator.status}
+- reviewer_calibration_status: ${reviewerCalibration.status}
+- reviewer_calibration_score_100: ${reviewerCalibration.calibrated_score_100 ?? "unknown"}
+- copyedit_style_status: ${copyeditStyleAudit.status}
+- experiment_lease_status: ${experimentLeaseContract.status}
+- experiment_lease_guardrail: ${experimentLeaseContract.claim_guardrail}
+- run_trend_status: ${runTrendSummary.status}
+- run_trend_score_delta_100: ${runTrendSummary.score_delta_100 ?? "unknown"}
+- run_trend_regression_detected: ${runTrendSummary.regression_detected}
 - platform_profile_os: ${platformProfile.runtime.platform}
 
 ## Runtime Safety
@@ -1883,6 +2934,11 @@ await fs.writeFile(
 );
 await fs.writeFile(progressChartHtmlPath, progressChartHtml, "utf8");
 await fs.appendFile(runLedgerPath, `${JSON.stringify(runLedgerEntry)}\n`, "utf8");
+await fs.writeFile(
+  runTrendPath,
+  `${JSON.stringify(runTrendSummary, null, 2)}\n`,
+  "utf8"
+);
 await fs.writeFile(dashboardPath, dashboardHtml, "utf8");
 await fs.writeFile(
   benchmarkAdapterScorecardPath,
@@ -1892,6 +2948,21 @@ await fs.writeFile(
 await fs.writeFile(
   domainEvaluatorContractPath,
   `${JSON.stringify(domainEvaluator, null, 2)}\n`,
+  "utf8"
+);
+await fs.writeFile(
+  reviewerCalibrationPath,
+  `${JSON.stringify(reviewerCalibration, null, 2)}\n`,
+  "utf8"
+);
+await fs.writeFile(
+  copyeditStyleAuditPath,
+  `${JSON.stringify(copyeditStyleAudit, null, 2)}\n`,
+  "utf8"
+);
+await fs.writeFile(
+  experimentLeaseContractPath,
+  `${JSON.stringify(experimentLeaseContract, null, 2)}\n`,
   "utf8"
 );
 await fs.writeFile(
@@ -1923,6 +2994,7 @@ await fs.writeFile(
         active_repairs: activeRepairs.length,
         active_write_scopes: activeWriteScopes.length,
       },
+      literature_research_controller: literatureResearchControllerSummary,
       artifacts: artifactChecklist,
     },
     null,
@@ -1963,9 +3035,17 @@ console.log(
       progressChartPath,
       progressChartHtmlPath,
       runLedgerPath,
+      runTrendPath,
       dashboardPath,
       benchmarkAdapterScorecardPath,
       domainEvaluatorContractPath,
+      reviewerCalibrationPath,
+      copyeditStyleAuditPath,
+      experimentLeaseContractPath,
+      literatureControllerStatusPath:
+        literatureResearchControllerSummary.artifact_paths.status_markdown_path ?? null,
+      literatureControllerCoverageReportPath:
+        literatureResearchControllerSummary.artifact_paths.coverage_report_path ?? null,
       platformProfilePath,
       checklistPath,
       timelinePath,
@@ -1974,8 +3054,13 @@ console.log(
       scorecard,
       progressChart,
       runLedgerEntry,
+      runTrendSummary,
       benchmarkAdapter,
       domainEvaluator,
+      reviewerCalibration,
+      copyeditStyleAudit,
+      experimentLeaseContract,
+      literatureResearchController: literatureResearchControllerSummary,
       platformProfile,
     },
     null,
