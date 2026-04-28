@@ -118,7 +118,11 @@ import {
   setCrossDomainInspirationState,
 } from "./idea-catalyst/cross-domain-contract";
 import { queueLiteratureDiscoveryRequisition } from "./literature-discovery/workflow-bridge";
-import { materializeLiteratureResearchControllerArtifacts } from "./literature-discovery/controller-contract";
+import {
+  buildBroadPaperSearchQueriesFromControllerPlan,
+  materializeLiteratureResearchControllerArtifacts,
+  writeLiteratureResearchControllerRunReceipt,
+} from "./literature-discovery/controller-contract";
 import { materializePapernexusPacketContracts } from "./papernexus-packets/materializer";
 import { materializeCycleMemory } from "./research-memory-cycle";
 import { materializeWritingSupportArtifacts } from "./research-writing/materializers";
@@ -668,6 +672,20 @@ const BROAD_PAPER_SEARCH_PROVIDER_NAMES = new Set([
   "dblp",
   "core",
 ]);
+
+function normalizeBroadPaperSearchProviderNames(value: unknown) {
+  return (Array.isArray(value) ? value : [])
+    .map((entry) => readString(entry)?.toLowerCase())
+    .filter(
+      (entry): entry is
+        | "openalex"
+        | "semanticscholar"
+        | "crossref"
+        | "dblp"
+        | "core" =>
+        Boolean(entry && BROAD_PAPER_SEARCH_PROVIDER_NAMES.has(entry))
+    );
+}
 
 function normalizeTypedPaperIngestionPaper(
   value: unknown
@@ -1485,6 +1503,7 @@ const SERIALIZED_WORKFLOW_ACTIONS = new Set([
   "materialize_ideation_contract",
   "materialize_experiment_review_state",
   "materialize_literature_research_controller",
+  "run_literature_research_controller",
   "materialize_literature_discovery_packet",
   "materialize_plan_state",
   "materialize_papernexus_packet_contracts",
@@ -1570,6 +1589,8 @@ const WORKFLOW_ACTION_FUNCTIONS: Record<string, string> = {
   accept_remote_graph_ready: "checkGraphPresenceForWorkflow",
   audit_literature_coverage: "auditLiteratureCoverageForWorkflow",
   materialize_literature_research_controller:
+    "materializeLiteratureResearchControllerArtifacts",
+  run_literature_research_controller:
     "materializeLiteratureResearchControllerArtifacts",
   plan_citation_expansion: "planCitationExpansionForWorkflow",
   run_broad_paper_search: "runBroadPaperSearchForWorkflow",
@@ -2870,6 +2891,7 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               "accept_remote_graph_ready",
               "audit_literature_coverage",
               "materialize_literature_research_controller",
+              "run_literature_research_controller",
               "plan_citation_expansion",
               "run_broad_paper_search",
               "auto_iterator_tick",
@@ -3679,6 +3701,210 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                 });
               return textResponse(JSON.stringify(controller, null, 2));
             }
+            case "run_literature_research_controller": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const literatureController = asObject(params.literatureController);
+              const generatedAt = new Date().toISOString();
+              const controllerBefore =
+                await materializeLiteratureResearchControllerArtifacts({
+                  projectRoot: resolvedProjectRoot,
+                  generatedAt,
+                  trigger:
+                    readString(literatureController?.trigger) ??
+                    "run_literature_research_controller",
+                  minCorePapers: readNumber(
+                    literatureController?.minCorePapers ??
+                      literatureController?.min_core_papers
+                  ),
+                  minRecentPapers: readNumber(
+                    literatureController?.minRecentPapers ??
+                      literatureController?.min_recent_papers
+                  ),
+                  maxCandidateRecords: readNumber(
+                    literatureController?.maxCandidateRecords ??
+                      literatureController?.max_candidate_records
+                  ),
+                });
+              const controllerSearchPlan =
+                buildBroadPaperSearchQueriesFromControllerPlan(
+                  controllerBefore.query_plan,
+                  readNumber(
+                    literatureController?.maxQueries ??
+                      literatureController?.max_queries
+                  )
+                );
+              const depthValue = readString(
+                literatureController?.depth ??
+                  literatureController?.searchDepth ??
+                  literatureController?.search_depth
+              );
+              const depth =
+                depthValue === "quick" ||
+                depthValue === "default" ||
+                depthValue === "deep"
+                  ? depthValue
+                  : "default";
+              const providerOverride = normalizeBroadPaperSearchProviderNames(
+                Array.isArray(literatureController?.providers)
+                  ? literatureController.providers
+                  : literatureController?.provider_names
+              );
+              const shouldExecuteProviderDiscovery =
+                literatureController?.executeProviderDiscovery !== false &&
+                literatureController?.execute_provider_discovery !== false &&
+                (controllerBefore.decision === "continue_research" ||
+                  literatureController?.force === true);
+              if (
+                !shouldExecuteProviderDiscovery ||
+                controllerSearchPlan.queries.length === 0
+              ) {
+                const receipt =
+                  await writeLiteratureResearchControllerRunReceipt({
+                    projectRoot: resolvedProjectRoot,
+                    generatedAt,
+                    trigger: "run_literature_research_controller",
+                    controllerBefore,
+                    controllerAfter: controllerBefore,
+                    executed: false,
+                    skipReason: !shouldExecuteProviderDiscovery
+                      ? "controller_decision_did_not_require_provider_discovery"
+                      : "controller_query_plan_empty",
+                    nextRoute: controllerBefore.status === "blocked"
+                      ? "manual_repair"
+                      : "none",
+                  });
+                return textResponse(
+                  JSON.stringify(
+                    {
+                      controller: controllerBefore,
+                      receipt,
+                    },
+                    null,
+                    2
+                  )
+                );
+              }
+
+              const searchResult = await runBroadPaperSearchForWorkflow({
+                projectRoot: resolvedProjectRoot,
+                topic:
+                  readString(literatureController?.topic) ??
+                  controllerBefore.topic ??
+                  readString(params.topic) ??
+                  "current project related work evidence",
+                depth,
+                maxQueries: readNumber(
+                  literatureController?.maxQueries ??
+                    literatureController?.max_queries
+                ),
+                maxResultsPerQuery: readNumber(
+                  literatureController?.maxResultsPerQuery ??
+                    literatureController?.max_results_per_query
+                ),
+                maxIndexEntries: readNumber(
+                  literatureController?.maxIndexEntries ??
+                    literatureController?.max_index_entries
+                ),
+                maxResolutionAttempts: readNumber(
+                  literatureController?.maxResolutionAttempts ??
+                    literatureController?.max_resolution_attempts
+                ),
+                providers:
+                  providerOverride.length > 0
+                    ? providerOverride
+                    : controllerSearchPlan.providerNames,
+                queryPlan: controllerSearchPlan.queries,
+                preferredVenuePacks: controllerSearchPlan.preferredVenuePacks,
+              });
+              const autoPaperIngestion =
+                literatureController?.autoScheduleImport === false ||
+                literatureController?.auto_schedule_import === false
+                  ? {
+                      queued: false,
+                      reason: "auto_schedule_import_disabled",
+                    }
+                  : await maybeQueueBroadPaperSearchAutoImport({
+                      projectRoot: resolvedProjectRoot,
+                      projectId: snapshot.projectId ?? null,
+                      sourceIndexPath: searchResult.sourceIndexUpdate.sourceIndexPath,
+                      generatedAt: searchResult.generatedAt,
+                      workflowPolicy,
+                    });
+              const autoCitationVerification =
+                await maybeAutoRefreshCitationVerification({
+                  projectRoot: resolvedProjectRoot,
+                  triggerAction: "run_literature_research_controller",
+                });
+              const controllerAfter =
+                await materializeLiteratureResearchControllerArtifacts({
+                  projectRoot: resolvedProjectRoot,
+                  trigger: "run_literature_research_controller_after_search",
+                  minCorePapers: readNumber(
+                    literatureController?.minCorePapers ??
+                      literatureController?.min_core_papers
+                  ),
+                  minRecentPapers: readNumber(
+                    literatureController?.minRecentPapers ??
+                      literatureController?.min_recent_papers
+                  ),
+                  maxCandidateRecords: readNumber(
+                    literatureController?.maxCandidateRecords ??
+                      literatureController?.max_candidate_records
+                  ),
+                });
+              const resolvedSourceCount = searchResult.mergedCandidates.filter(
+                (candidate) =>
+                  candidate.resolutionStatus === "resolved_markdown" ||
+                  candidate.resolutionStatus === "resolved_pdf"
+              ).length;
+              const metadataOnlyCount = searchResult.mergedCandidates.filter(
+                (candidate) =>
+                  candidate.resolutionStatus === "metadata_only_unresolved"
+              ).length;
+              const receipt =
+                await writeLiteratureResearchControllerRunReceipt({
+                  projectRoot: resolvedProjectRoot,
+                  generatedAt,
+                  trigger: "run_literature_research_controller",
+                  controllerBefore,
+                  controllerAfter,
+                  executed: true,
+                  searchExecution: {
+                    topic: searchResult.topic,
+                    depth,
+                    provider_names:
+                      providerOverride.length > 0
+                        ? providerOverride
+                        : controllerSearchPlan.providerNames,
+                    query_count: searchResult.queryPlan.length,
+                    queries: searchResult.queryPlan,
+                    candidate_count: searchResult.mergedCandidates.length,
+                    resolved_source_count: resolvedSourceCount,
+                    metadata_only_count: metadataOnlyCount,
+                    source_index_update: searchResult.sourceIndexUpdate,
+                    artifacts: searchResult.artifacts,
+                  },
+                  papernexusImport: autoPaperIngestion,
+                  nextRoute:
+                    autoPaperIngestion.queued === true
+                      ? "graph_build"
+                      : "rerun_failed_gate",
+                });
+              return textResponse(
+                JSON.stringify(
+                  {
+                    controllerBefore,
+                    search: searchResult,
+                    autoPaperIngestion,
+                    autoCitationVerification,
+                    controllerAfter,
+                    receipt,
+                  },
+                  null,
+                  2
+                )
+              );
+            }
             case "plan_citation_expansion": {
               const resolvedProjectRoot = requireWorkflowProjectRoot(state);
               const citationExpansion = asObject(params.citationExpansion);
@@ -3710,22 +3936,11 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               const depthValue = readString(
                 broadPaperSearch?.depth ?? broadPaperSearch?.searchDepth
               );
-              const providerValues = (Array.isArray(broadPaperSearch?.providers)
-                ? broadPaperSearch.providers
-                : Array.isArray(broadPaperSearch?.provider_names)
-                  ? broadPaperSearch.provider_names
-                  : []
-              )
-                .map((entry) => readString(entry)?.toLowerCase())
-                .filter(
-                  (entry): entry is
-                    | "openalex"
-                    | "semanticscholar"
-                    | "crossref"
-                    | "dblp"
-                    | "core" =>
-                    Boolean(entry && BROAD_PAPER_SEARCH_PROVIDER_NAMES.has(entry))
-                );
+              const providerValues = normalizeBroadPaperSearchProviderNames(
+                Array.isArray(broadPaperSearch?.providers)
+                  ? broadPaperSearch.providers
+                  : broadPaperSearch?.provider_names
+              );
               const result = await runBroadPaperSearchForWorkflow({
                 projectRoot: resolvedProjectRoot,
                 topic:

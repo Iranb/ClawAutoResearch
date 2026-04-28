@@ -65,7 +65,10 @@ import {
 import {
   runBroadPaperSearch,
 } from "./research30/workflow-bridge";
-import type { BroadPaperProviderName } from "./research30/provider-contract";
+import type {
+  BroadPaperProviderName,
+  BroadPaperSearchQuery,
+} from "./research30/provider-contract";
 import {
   applyPaperIngestionValidationToRequest,
   defaultPaperIngestionMaxAttempts,
@@ -8494,6 +8497,8 @@ export async function runBroadPaperSearchForWorkflow(params: {
   maxIndexEntries?: number | null;
   maxResolutionAttempts?: number | null;
   providers?: BroadPaperProviderName[] | null;
+  queryPlan?: BroadPaperSearchQuery[] | null;
+  preferredVenuePacks?: string[] | null;
 }): Promise<Awaited<ReturnType<typeof runBroadPaperSearch>>> {
   return runBroadPaperSearch({
     projectRoot: params.projectRoot,
@@ -8518,6 +8523,10 @@ export async function runBroadPaperSearchForWorkflow(params: {
         ? Math.floor(params.maxResolutionAttempts)
         : undefined,
     providers: params.providers?.length ? params.providers : undefined,
+    queryPlan: params.queryPlan?.length ? params.queryPlan : undefined,
+    preferredVenuePacks: params.preferredVenuePacks?.length
+      ? params.preferredVenuePacks
+      : undefined,
   });
 }
 

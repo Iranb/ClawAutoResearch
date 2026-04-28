@@ -162,6 +162,46 @@ function shouldPersistCandidate(candidate: MergedPaperCandidate): boolean {
   );
 }
 
+function normalizeCustomQueryPlan(params: {
+  queryPlan: BroadPaperSearchQuery[] | null | undefined;
+  maxQueries: number | null | undefined;
+}): BroadPaperSearchQuery[] {
+  if (!Array.isArray(params.queryPlan)) {
+    return [];
+  }
+  const maxQueries =
+    typeof params.maxQueries === "number" && Number.isFinite(params.maxQueries)
+      ? Math.max(1, Math.min(24, Math.floor(params.maxQueries)))
+      : 24;
+  const seen = new Set<string>();
+  const normalized: BroadPaperSearchQuery[] = [];
+  for (const query of params.queryPlan) {
+    const queryText = String(query?.query ?? "").trim().replace(/\s+/g, " ");
+    if (!queryText) {
+      continue;
+    }
+    const key = `${queryText.toLowerCase()}::${query.venuePack ?? ""}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    normalized.push({
+      id: String(query?.id ?? `q${normalized.length + 1}`).trim() || `q${normalized.length + 1}`,
+      query: queryText,
+      family: query?.family ?? "keyword_refresh",
+      rationale:
+        String(query?.rationale ?? "").trim() ||
+        "Execute a controller-derived literature query.",
+      domain: query?.domain ?? null,
+      venuePack: query?.venuePack ?? null,
+    });
+    if (normalized.length >= maxQueries) {
+      break;
+    }
+  }
+  return normalized;
+}
+
 export async function runBroadPaperSearch(params: {
   projectRoot: string;
   topic: string;
@@ -172,6 +212,8 @@ export async function runBroadPaperSearch(params: {
   maxResolutionAttempts?: number;
   fromYear?: number | null;
   providers?: BroadPaperProviderName[] | null;
+  queryPlan?: BroadPaperSearchQuery[] | null;
+  preferredVenuePacks?: string[] | null;
 }): Promise<{
   generatedAt: string;
   topic: string;
@@ -197,12 +239,24 @@ export async function runBroadPaperSearch(params: {
         ? 12
         : depth === "deep"
           ? 30
-          : 20;
-  const plan = buildBroadPaperSearchPlan({
-    topic: params.topic,
-    depth,
+        : 20;
+  const customQueryPlan = normalizeCustomQueryPlan({
+    queryPlan: params.queryPlan,
     maxQueries: params.maxQueries,
   });
+  const plan =
+    customQueryPlan.length > 0
+      ? {
+          topic: params.topic,
+          normalizedTopic: null,
+          preferredVenuePacks: params.preferredVenuePacks ?? [],
+          queries: customQueryPlan,
+        }
+      : buildBroadPaperSearchPlan({
+          topic: params.topic,
+          depth,
+          maxQueries: params.maxQueries,
+        });
   const providers = params.providers?.length ? params.providers : DEFAULT_PROVIDERS;
   const queryResults = (
     await executeProviderQueries({

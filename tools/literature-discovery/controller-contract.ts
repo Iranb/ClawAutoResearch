@@ -1,4 +1,5 @@
 import * as path from "node:path";
+import * as fs from "node:fs/promises";
 import {
   asRecord,
   asString,
@@ -25,6 +26,11 @@ import {
   type WorkflowPaperSourceEntry,
 } from "../paper-source-index";
 import { buildBroadPaperSearchPlan } from "../research30/query-planner";
+import type {
+  BroadPaperProviderName,
+  BroadPaperSearchDepth,
+  BroadPaperSearchQuery,
+} from "../research30/provider-contract";
 import { collectSurveyEntries } from "../survey-review-artifacts";
 
 export const DEFAULT_LITERATURE_RESEARCH_CONTROLLER_DIR =
@@ -101,6 +107,8 @@ export type LiteratureResearchControllerArtifacts = {
     candidate_screening_report_path: string;
     coverage_report_path: string;
     status_markdown_path: string;
+    run_receipt_path: string;
+    trace_path: string;
     coverage_audit_path: string;
     citation_expansion_packet_path: string | null;
   };
@@ -112,6 +120,8 @@ export type LiteratureResearchControllerArtifacts = {
     candidate_screening_report_path: string;
     coverage_report_path: string;
     status_markdown_path: string;
+    run_receipt_path: string;
+    trace_path: string;
   };
   need_assessment: Record<string, unknown>;
   keyword_bank: Record<string, unknown>;
@@ -120,6 +130,47 @@ export type LiteratureResearchControllerArtifacts = {
   coverage_report: Record<string, unknown>;
   coverage_audit: LiteratureCoverageAudit;
   citation_expansion_packet: CitationExpansionPacket | null;
+};
+
+export type LiteratureResearchControllerRunReceipt = {
+  schema_version: 1;
+  generated_at: string;
+  project_id: string | null;
+  project_root: string;
+  trigger: string;
+  executed: boolean;
+  skip_reason: string | null;
+  controller_before: {
+    status: LiteratureResearchControllerArtifacts["status"];
+    decision: LiteratureResearchControllerArtifacts["decision"];
+    coverage_score_100: number | null;
+    blocking_gap_count: number | null;
+  };
+  search_execution: {
+    topic: string | null;
+    depth: BroadPaperSearchDepth;
+    provider_names: BroadPaperProviderName[];
+    query_count: number;
+    queries: BroadPaperSearchQuery[];
+    candidate_count: number | null;
+    resolved_source_count: number | null;
+    metadata_only_count: number | null;
+    source_index_update: Record<string, unknown> | null;
+    artifacts: Record<string, unknown> | null;
+  } | null;
+  papernexus_import: Record<string, unknown> | null;
+  controller_after: {
+    status: LiteratureResearchControllerArtifacts["status"];
+    decision: LiteratureResearchControllerArtifacts["decision"];
+    coverage_score_100: number | null;
+    blocking_gap_count: number | null;
+    next_actions: string[];
+  } | null;
+  next_route: "graph_build" | "rerun_failed_gate" | "manual_repair" | "none";
+  artifact_paths: {
+    run_receipt_path: string;
+    trace_path: string;
+  };
 };
 
 const STOPWORDS = new Set([
@@ -178,6 +229,8 @@ function buildArtifactPaths(projectRoot: string) {
     candidateScreeningReportPath: path.join(baseDir, "candidate_screening_report.json"),
     coverageReportPath: path.join(baseDir, "literature_coverage_report.json"),
     statusMarkdownPath: path.join(baseDir, "LITERATURE_RESEARCH_CONTROLLER_STATUS.md"),
+    runReceiptPath: path.join(baseDir, "literature_controller_run_receipt.json"),
+    tracePath: path.join(baseDir, "literature_controller_trace.jsonl"),
   };
 }
 
@@ -548,6 +601,110 @@ function buildLiteratureQueryPlan(params: {
       paper_ingestion_followup:
         "stage selected source-backed candidates, import them through PaperNexus, then rerun graph_build",
     },
+  };
+}
+
+const CONTROLLER_PROVIDER_MAP: Record<string, BroadPaperProviderName | null> = {
+  research30_openalex: "openalex",
+  openalex: "openalex",
+  research30_semanticscholar: "semanticscholar",
+  semanticscholar: "semanticscholar",
+  "semantic-scholar": "semanticscholar",
+  research30_crossref: "crossref",
+  crossref: "crossref",
+  research30_dblp: "dblp",
+  dblp: "dblp",
+  research30_core: "core",
+  core: "core",
+  papernexus_corpus_lookup: null,
+  "papernexus-corpus": null,
+  citation_expansion: null,
+  "citation-expansion": null,
+};
+
+function normalizeControllerProviderName(value: string): BroadPaperProviderName | null {
+  const key = value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_");
+  return CONTROLLER_PROVIDER_MAP[key] ?? null;
+}
+
+function normalizeControllerQueryFamily(intent: string | null): BroadPaperSearchQuery["family"] {
+  const normalized = String(intent ?? "").toLowerCase();
+  if (normalized.includes("venue")) {
+    return "venue_pack";
+  }
+  if (normalized.includes("baseline") || normalized.includes("benchmark")) {
+    return "task_method";
+  }
+  if (normalized.includes("semantic") || normalized.includes("story")) {
+    return "paragraph_semantic";
+  }
+  if (normalized.includes("synonym") || normalized.includes("citation")) {
+    return "synonym";
+  }
+  return "keyword_refresh";
+}
+
+export function buildBroadPaperSearchQueriesFromControllerPlan(
+  queryPlan: Record<string, unknown>,
+  maxQueries?: number | null
+): {
+  queries: BroadPaperSearchQuery[];
+  providerNames: BroadPaperProviderName[];
+  preferredVenuePacks: string[];
+} {
+  const rawQueries = Array.isArray(queryPlan.queries) ? queryPlan.queries : [];
+  const queryLimit =
+    typeof maxQueries === "number" && Number.isFinite(maxQueries)
+      ? Math.max(1, Math.min(24, Math.floor(maxQueries)))
+      : 12;
+  const seenQueries = new Set<string>();
+  const seenProviders = new Set<BroadPaperProviderName>();
+  const queries: BroadPaperSearchQuery[] = [];
+  for (const rawQuery of rawQueries) {
+    const record = asRecord(rawQuery);
+    if (!record) {
+      continue;
+    }
+    const query = asString(record.query)?.trim().replace(/\s+/g, " ");
+    if (!query) {
+      continue;
+    }
+    const key = query.toLowerCase();
+    if (seenQueries.has(key)) {
+      continue;
+    }
+    seenQueries.add(key);
+    const providers = asStringArray(record.providers)
+      .map((provider) => normalizeControllerProviderName(provider))
+      .filter((provider): provider is BroadPaperProviderName => Boolean(provider));
+    for (const provider of providers) {
+      seenProviders.add(provider);
+    }
+    queries.push({
+      id: asString(record.id) ?? `lrq-${queries.length + 1}`,
+      query,
+      family: normalizeControllerQueryFamily(asString(record.intent)),
+      rationale:
+        asString(record.rationale) ??
+        "Execute a controller-derived literature query.",
+      domain: asString(record.domain) ?? null,
+      venuePack: asString(record.venue_pack ?? record.venuePack) ?? null,
+    });
+    if (queries.length >= queryLimit) {
+      break;
+    }
+  }
+  const preferredVenuePacks = asStringArray(queryPlan.preferred_venue_packs);
+  return {
+    queries,
+    providerNames:
+      seenProviders.size > 0
+        ? [...seenProviders]
+        : ["openalex", "semanticscholar", "crossref", "dblp", "core"],
+    preferredVenuePacks,
   };
 }
 
@@ -944,7 +1101,94 @@ ${bullet(params.nextActions)}
 - query_plan: ${relativePathFromProject(params.projectRoot, params.paths.queryPlanPath)}
 - candidate_screening_report: ${relativePathFromProject(params.projectRoot, params.paths.candidateScreeningReportPath)}
 - coverage_report: ${relativePathFromProject(params.projectRoot, params.paths.coverageReportPath)}
+- run_receipt: ${relativePathFromProject(params.projectRoot, params.paths.runReceiptPath)}
+- trace: ${relativePathFromProject(params.projectRoot, params.paths.tracePath)}
 `;
+}
+
+function coverageScoreFromController(
+  controller: LiteratureResearchControllerArtifacts
+): number | null {
+  const score = asRecord(controller.coverage_report)?.coverage_score_100;
+  return typeof score === "number" && Number.isFinite(score)
+    ? Math.round(score)
+    : null;
+}
+
+function blockingGapCountFromController(
+  controller: LiteratureResearchControllerArtifacts
+): number | null {
+  const report = asRecord(controller.coverage_report);
+  const reasons = Array.isArray(report?.need_reasons) ? report.need_reasons : [];
+  return reasons.filter((entry) => {
+    const record = asRecord(entry);
+    return record?.severity === "critical" || record?.severity === "high";
+  }).length;
+}
+
+function nextActionsFromController(
+  controller: LiteratureResearchControllerArtifacts
+): string[] {
+  return asStringArray(asRecord(controller.coverage_report)?.next_actions);
+}
+
+export async function writeLiteratureResearchControllerRunReceipt(params: {
+  projectRoot: string;
+  generatedAt?: string | null;
+  trigger?: string | null;
+  controllerBefore: LiteratureResearchControllerArtifacts;
+  controllerAfter?: LiteratureResearchControllerArtifacts | null;
+  searchExecution?: LiteratureResearchControllerRunReceipt["search_execution"];
+  papernexusImport?: Record<string, unknown> | null;
+  executed: boolean;
+  skipReason?: string | null;
+  nextRoute?: LiteratureResearchControllerRunReceipt["next_route"] | null;
+}): Promise<LiteratureResearchControllerRunReceipt> {
+  const projectRoot = path.resolve(params.projectRoot);
+  const generatedAt = params.generatedAt ?? new Date().toISOString();
+  const paths = buildArtifactPaths(projectRoot);
+  const receipt: LiteratureResearchControllerRunReceipt = {
+    schema_version: 1,
+    generated_at: generatedAt,
+    project_id: params.controllerBefore.project_id,
+    project_root: projectRoot,
+    trigger: params.trigger ?? "literature_research_controller_run",
+    executed: params.executed,
+    skip_reason: params.skipReason ?? null,
+    controller_before: {
+      status: params.controllerBefore.status,
+      decision: params.controllerBefore.decision,
+      coverage_score_100: coverageScoreFromController(params.controllerBefore),
+      blocking_gap_count: blockingGapCountFromController(params.controllerBefore),
+    },
+    search_execution: params.searchExecution ?? null,
+    papernexus_import: params.papernexusImport ?? null,
+    controller_after: params.controllerAfter
+      ? {
+          status: params.controllerAfter.status,
+          decision: params.controllerAfter.decision,
+          coverage_score_100: coverageScoreFromController(params.controllerAfter),
+          blocking_gap_count: blockingGapCountFromController(params.controllerAfter),
+          next_actions: nextActionsFromController(params.controllerAfter),
+        }
+      : null,
+    next_route:
+      params.nextRoute ??
+      (params.papernexusImport?.queued === true
+        ? "graph_build"
+        : params.controllerAfter &&
+            ["needs_research", "guardrailed"].includes(params.controllerAfter.status)
+          ? "rerun_failed_gate"
+          : "none"),
+    artifact_paths: {
+      run_receipt_path: paths.runReceiptPath,
+      trace_path: paths.tracePath,
+    },
+  };
+  await writeJsonEnsured(paths.runReceiptPath, receipt);
+  await fs.mkdir(path.dirname(paths.tracePath), { recursive: true });
+  await fs.appendFile(paths.tracePath, `${JSON.stringify(receipt)}\n`, "utf8");
+  return receipt;
 }
 
 export async function materializeLiteratureResearchControllerArtifacts(params: {
@@ -1119,6 +1363,11 @@ export async function materializeLiteratureResearchControllerArtifacts(params: {
         projectRoot,
         paths.coverageReportPath
       ),
+      controller_run_receipt_path: relativePathFromProject(
+        projectRoot,
+        paths.runReceiptPath
+      ),
+      controller_trace_path: relativePathFromProject(projectRoot, paths.tracePath),
       paper_ingestion_required: reasons.some((reason) =>
         ["thin_core_literature", "metadata_only_or_unindexed_sources", "graph_not_source_backed"].includes(
           reason.code
@@ -1143,6 +1392,8 @@ export async function materializeLiteratureResearchControllerArtifacts(params: {
     ),
     coverage_report_path: relativePathFromProject(projectRoot, paths.coverageReportPath),
     status_markdown_path: relativePathFromProject(projectRoot, paths.statusMarkdownPath),
+    run_receipt_path: relativePathFromProject(projectRoot, paths.runReceiptPath),
+    trace_path: relativePathFromProject(projectRoot, paths.tracePath),
   };
   const artifacts: LiteratureResearchControllerArtifacts = {
     schema_version: 1,
@@ -1160,6 +1411,8 @@ export async function materializeLiteratureResearchControllerArtifacts(params: {
       candidate_screening_report_path: paths.candidateScreeningReportPath,
       coverage_report_path: paths.coverageReportPath,
       status_markdown_path: paths.statusMarkdownPath,
+      run_receipt_path: paths.runReceiptPath,
+      trace_path: paths.tracePath,
       coverage_audit_path: coverageAudit.auditPath,
       citation_expansion_packet_path: citationExpansionPacket?.packetPath ?? null,
     },

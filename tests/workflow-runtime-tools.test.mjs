@@ -1527,6 +1527,132 @@ test("research_workflow run_broad_paper_search queues staged PDFs for PaperNexus
   assert.equal(projectManifest.paper_ingestion.queued_requests[0].status, "queued");
 });
 
+test("research_workflow run_literature_research_controller executes controller query plan and writes a receipt", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  const previousProjectRoot = process.env.OPENCLAW_PROJECT;
+  const originalFetch = globalThis.fetch;
+
+  t.after(async () => {
+    globalThis.fetch = originalFetch;
+    if (previousProjectRoot === undefined) {
+      delete process.env.OPENCLAW_PROJECT;
+    } else {
+      process.env.OPENCLAW_PROJECT = previousProjectRoot;
+    }
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await fs.writeFile(
+    path.join(projectRoot, "PROJECT_MANIFEST.json"),
+    `${JSON.stringify(
+      {
+        project_id: "literature-controller-run",
+        current_stage: "review",
+        owner_agent: "researcher",
+        research_program: {
+          topic: "Generalized Category Discovery with FixMatch consistency regularization",
+          baseline_reference: "FixMatch",
+          primary_metric: "H-score",
+        },
+      },
+      null,
+      2
+    )}\n`,
+    "utf8"
+  );
+
+  globalThis.fetch = async (url) => {
+    const target = String(url);
+    if (target.startsWith("https://api.openalex.org/works")) {
+      return new Response(
+        JSON.stringify({
+          results: [
+            {
+              id: "https://openalex.org/WGCD",
+              display_name: "Generalized Category Discovery with Semi-Supervised Consistency",
+              publication_year: 2024,
+              publication_date: "2024-02-01",
+              doi: "https://doi.org/10.1234/gcd.fixmatch",
+              primary_location: {
+                landing_page_url: "https://example.org/gcd-fixmatch",
+                pdf_url: "https://example.org/gcd-fixmatch.pdf",
+                source: {
+                  display_name: "International Conference on Learning Representations",
+                  type: "conference",
+                },
+              },
+              authorships: [{ author: { display_name: "Example Researcher" } }],
+              cited_by_count: 44,
+              type_crossref: "proceedings-article",
+            },
+          ],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } }
+      );
+    }
+    if (target === "https://example.org/gcd-fixmatch.pdf") {
+      return new Response(
+        Buffer.concat([Buffer.from("%PDF-1.4\n"), Buffer.alloc(2048, "L")]),
+        { status: 200, headers: { "content-type": "application/pdf" } }
+      );
+    }
+    throw new Error(`Unhandled fetch URL in test: ${target}`);
+  };
+
+  process.env.OPENCLAW_PROJECT = projectRoot;
+  const tool = createResearchWorkflowTool({
+    workspaceDir: projectRoot,
+    channelKey: "local:conversation:e2e",
+    messageChannel: "local",
+  });
+
+  const result = await executeWorkflowTool(tool, {
+    action: "run_literature_research_controller",
+    literatureController: {
+      providers: ["openalex"],
+      maxQueries: 1,
+      maxResultsPerQuery: 5,
+      maxResolutionAttempts: 1,
+      maxIndexEntries: 5,
+    },
+  });
+
+  assert.equal(result.receipt.executed, true);
+  assert.equal(result.receipt.search_execution.query_count, 1);
+  assert.equal(result.receipt.search_execution.provider_names[0], "openalex");
+  assert.equal(result.autoPaperIngestion.queued, true);
+  assert.equal(result.receipt.papernexus_import.queued, true);
+  assert.equal(result.receipt.next_route, "graph_build");
+  assert.match(
+    result.receipt.artifact_paths.run_receipt_path,
+    /literature_controller_run_receipt\.json$/
+  );
+
+  const receipt = JSON.parse(
+    await fs.readFile(
+      path.join(
+        projectRoot,
+        "researcher",
+        "literature-research-controller",
+        "literature_controller_run_receipt.json"
+      ),
+      "utf8"
+    )
+  );
+  assert.equal(receipt.executed, true);
+
+  const trace = await fs.readFile(
+    path.join(
+      projectRoot,
+      "researcher",
+      "literature-research-controller",
+      "literature_controller_trace.jsonl"
+    ),
+    "utf8"
+  );
+  assert.equal(trace.trim().split(/\r?\n/).length, 1);
+});
+
 test("research_workflow queue_paper_ingestion discovers paper-staging source index by default", async (t) => {
   const projectRoot = await makeProjectRoot();
   const previousProjectRoot = process.env.OPENCLAW_PROJECT;
