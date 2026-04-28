@@ -23,8 +23,10 @@ import {
   buildLiveHandoffWorkflowTaskParams,
   buildLiveAutoIteratorParams,
   deriveStageCommand,
+  detectLivePaperArtifactTerminal,
   detectLiveSubstantiveRevisionTerminal,
   readLiveWorkflowActivation,
+  resolveLiveStageHandoffRevision,
   waitForProgress,
   workflowRuntimeProgressFingerprint,
 } from "../scripts/auto_command_live_orchestrator.mjs";
@@ -470,6 +472,99 @@ test("live E2E progress waits treat runtime queue changes as observable progress
   assert.notEqual(after, before);
   assert.equal(progress.progressed, true);
   assert.equal(progress.reason, "runtime_state_changed");
+});
+
+test("live E2E detects paper artifact readiness after downstream graph rebound", async (t) => {
+  const projectRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "openclaw-research-live-paper-ready-")
+  );
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await fs.mkdir(path.join(projectRoot, "academic_writer", "paper"), { recursive: true });
+  await fs.writeFile(path.join(projectRoot, "academic_writer", "paper", "main.pdf"), "pdf");
+  await fs.writeFile(path.join(projectRoot, "academic_writer", "paper", "main.tex"), "\\section{Done}");
+
+  const manifest = {
+    project_id: "paper-ready-project",
+    current_stage: "idea",
+    owner_agent: "researcher",
+    experiment_search: { status: "ready_for_analysis" },
+    write_package: { status: "ready" },
+    paper_qc: { status: "ready" },
+  };
+
+  const terminal = await detectLivePaperArtifactTerminal({
+    projectRoot,
+    manifest,
+    lane: "experiment",
+  });
+
+  assert.equal(terminal.terminal, true);
+  assert.equal(terminal.reason, "live_paper_artifact_ready");
+  assert.equal(terminal.details.stage, "idea");
+  assert.equal(terminal.details.writeReady, true);
+  assert.equal(terminal.details.paperQcReady, true);
+  assert.equal(terminal.details.experimentReady, true);
+});
+
+test("live E2E progress waits stop on paper artifact readiness outside submit stage", async (t) => {
+  const projectRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "openclaw-research-live-paper-terminal-progress-")
+  );
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await fs.mkdir(path.join(projectRoot, "academic_writer", "paper"), { recursive: true });
+  await fs.writeFile(path.join(projectRoot, "academic_writer", "paper", "main.pdf"), "pdf");
+  await fs.writeFile(path.join(projectRoot, "academic_writer", "paper", "main.tex"), "\\section{Done}");
+
+  const manifest = {
+    project_id: "paper-terminal-progress-project",
+    current_stage: "idea",
+    owner_agent: "researcher",
+    experiment_search: { status: "ready_for_analysis" },
+    write_package: { status: "ready" },
+    paper_qc: { status: "ready" },
+  };
+  await fs.writeFile(
+    path.join(projectRoot, "PROJECT_MANIFEST.json"),
+    `${JSON.stringify(manifest, null, 2)}\n`,
+    "utf8"
+  );
+
+  const progress = await waitForProgress({
+    projectRoot,
+    baselineManifest: manifest,
+    lane: "experiment",
+    timeoutMs: 2_000,
+    pollMs: 50,
+  });
+
+  assert.equal(progress.progressed, true);
+  assert.equal(progress.reason, "live_paper_artifact_ready");
+  assert.equal(progress.terminal.terminal, true);
+});
+
+test("live E2E reuses auto-iterator prepared handoff revision", () => {
+  assert.equal(
+    resolveLiveStageHandoffRevision({
+      pendingHandoff: true,
+      pendingHandoffPhase: "prepared",
+      pendingHandoffExecutionId: " execution-1 ",
+    }),
+    "execution-1"
+  );
+  assert.equal(
+    resolveLiveStageHandoffRevision({
+      pendingHandoff: true,
+      pendingHandoffPhase: "dispatched",
+      pendingHandoffExecutionId: "execution-2",
+    }),
+    null
+  );
 });
 
 test("live E2E harness treats durable reviewer revision as a terminal real-run outcome", async (t) => {

@@ -412,14 +412,18 @@ function projectIdsCompatible(
 
 function isLocalWorkflowTransport(
   messageChannel: string | null | undefined,
-  channelKey: string | null | undefined
+  channelKey: string | null | undefined,
+  sessionKey?: string | null | undefined
 ): boolean {
   const normalizedChannel = readString(messageChannel)?.toLowerCase() ?? null;
   const normalizedKey = readString(channelKey)?.toLowerCase() ?? null;
+  const normalizedSessionKey = readString(sessionKey)?.toLowerCase() ?? null;
   return (
     normalizedChannel === "local" ||
     normalizedKey?.startsWith("local:") === true ||
-    normalizedKey?.startsWith("binding:local:") === true
+    normalizedKey?.startsWith("binding:local:") === true ||
+    normalizedSessionKey?.startsWith("local:") === true ||
+    normalizedSessionKey?.includes(":local:") === true
   );
 }
 
@@ -433,9 +437,11 @@ function maybeResolveLocalWorkflowProjectContext(params: {
 }) {
   const channelKey =
     readString(params.channelBinding?.channelKey) ?? readString(params.ctx.channelKey);
-  if (!isLocalWorkflowTransport(params.ctx.messageChannel, channelKey)) {
-    return null;
-  }
+  const localTransport = isLocalWorkflowTransport(
+    params.ctx.messageChannel,
+    channelKey,
+    params.ctx.sessionKey
+  );
 
   const existing = getChannelProjectBindingForWorkflow({
     policy: params.workflowPolicy,
@@ -463,7 +469,20 @@ function maybeResolveLocalWorkflowProjectContext(params: {
     params.snapshot.projectRoot &&
     projectRootsMatch(params.snapshot.projectRoot, requestedProjectRoot) &&
     projectIdsCompatible(params.snapshot.projectId, requestedProjectId);
-  if (!requestedProjectRoot || (!existingMatches && !snapshotMatches)) {
+  const workspaceMatches =
+    params.ctx.workspaceDir &&
+    projectRootsMatch(params.ctx.workspaceDir, requestedProjectRoot) &&
+    projectIdsCompatible(params.snapshot.projectId, requestedProjectId);
+  if (!requestedProjectRoot) {
+    return null;
+  }
+  const explicitProjectContext = Boolean(params.requestedProjectRoot);
+  if (
+    !existingMatches &&
+    !snapshotMatches &&
+    !workspaceMatches &&
+    !explicitProjectContext
+  ) {
     return null;
   }
 
@@ -471,8 +490,16 @@ function maybeResolveLocalWorkflowProjectContext(params: {
     ...existing,
     resolvedOnly: true,
     reason: existingMatches
-      ? "existing_local_workflow_context"
-      : "snapshot_local_workflow_context",
+      ? localTransport
+        ? "existing_local_workflow_context"
+        : "existing_channel_workflow_context"
+      : localTransport
+        ? "snapshot_local_workflow_context"
+        : snapshotMatches
+          ? "snapshot_workflow_context"
+          : workspaceMatches
+            ? "workspace_project_context"
+            : "explicit_project_context",
     projectRoot: path.resolve(requestedProjectRoot),
     projectId: readString(requestedProjectId) ?? path.basename(requestedProjectRoot),
     binding:
@@ -1045,6 +1072,7 @@ async function maybeMaterializeTypedPaperIngestionRequest(params: {
     wrapperArgs.push("--corpus", sharedCorpus);
   }
   wrapperArgs.push("--manifest", batchManifestPath, "submit");
+  appendBatchImportSubmitRemoteStagingArgs(wrapperArgs, params.workflowPolicy);
   const wrapperRun = buildPapernexusWrapperBackgroundRunRequest({
     wrapper: "pn_batch_import.py",
     args: wrapperArgs,
@@ -1276,7 +1304,25 @@ function buildBatchImportArgsForPaperIngestionRequest(params: {
       ? requestedSubcommand
       : "submit"
   );
+  appendBatchImportSubmitRemoteStagingArgs(args, params.workflowPolicy);
   return args;
+}
+
+function appendBatchImportSubmitRemoteStagingArgs(
+  args: string[],
+  workflowPolicy: ReturnType<PluginRegistrationContext["getWorkflowPolicy"]>
+) {
+  if (!args.includes("submit")) {
+    return;
+  }
+  const sshTarget = readString(workflowPolicy.papernexusSshTarget);
+  if (sshTarget && !args.includes("--ssh-target")) {
+    args.push("--ssh-target", sshTarget);
+  }
+  const remoteStagingRoot = readString(workflowPolicy.papernexusRemoteStagingRoot);
+  if (remoteStagingRoot && !args.includes("--remote-staging-root")) {
+    args.push("--remote-staging-root", remoteStagingRoot);
+  }
 }
 
 function normalizePaperIngestionQueuePayloadForWrapper(params: {
@@ -3721,11 +3767,15 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               const requestedProjectRoot =
                 readString(channelBinding?.projectRoot) ??
                 readString(channelBinding?.project_path) ??
+                readString(params.projectRoot) ??
+                readString(params.project_root) ??
                 process.env.OPENCLAW_PROJECT ??
                 snapshot.projectRoot;
               const requestedProjectId =
                 readString(channelBinding?.projectId) ??
                 readString(channelBinding?.project_id) ??
+                readString(params.projectId) ??
+                readString(params.project_id) ??
                 snapshot.projectId;
               if (bindingRole && bindingRole !== "researcher") {
                 const localContext = maybeResolveLocalWorkflowProjectContext({
@@ -3740,7 +3790,7 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                   return textResponse(JSON.stringify(localContext, null, 2));
                 }
                 throw new Error(
-                  "Only Researcher may create or rebind a Discord/channel session project binding in this workflow. Non-Researcher local workflow sessions may only resolve an existing matching project context."
+                  "Only Researcher may create or rebind a channel session project binding in this workflow. Non-Researcher workflow sessions may only resolve an existing or snapshot-matched project context."
                 );
               }
               const bound = await bindChannelProjectForWorkflow({

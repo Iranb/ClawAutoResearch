@@ -13,6 +13,40 @@ import {
   canTransitionWorkflowHandoffStatus,
   isWorkflowHandoffTerminalStatus,
 } from "../tools/workflow-handoff/handoff-types.ts";
+import { buildStageOwnerHandoffIdempotencyKey } from "../tools/workflow-handoff/handoff-router.ts";
+
+test("stage owner handoff idempotency is stable across command text when manifest revision is bound", () => {
+  const base = {
+    projectId: "demo",
+    workflowLine: "experiment",
+    stageAfter: "plan",
+    ownerAfter: "orchestrator",
+    manifestRevision: "execution-1",
+  };
+
+  assert.equal(
+    buildStageOwnerHandoffIdempotencyKey({
+      ...base,
+      nextAction: "Run /plan-research using IDEA_REPORT.md.",
+    }),
+    buildStageOwnerHandoffIdempotencyKey({
+      ...base,
+      nextAction: "/plan-research",
+    })
+  );
+  assert.notEqual(
+    buildStageOwnerHandoffIdempotencyKey({
+      ...base,
+      routeRevision: "route-a",
+      nextAction: "Run /plan-research using IDEA_REPORT.md.",
+    }),
+    buildStageOwnerHandoffIdempotencyKey({
+      ...base,
+      routeRevision: "route-b",
+      nextAction: "Run /plan-research using IDEA_REPORT.md.",
+    })
+  );
+});
 
 test("handoff intent store dedupes active intents by idempotency key", async (t) => {
   const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-handoff-"));
@@ -40,6 +74,47 @@ test("handoff intent store dedupes active intents by idempotency key", async (t)
   assert.equal(first.created, true);
   assert.equal(second.created, false);
   assert.equal(first.intent.intentId, second.intent.intentId);
+  const store = await readWorkflowHandoffIntentStore(projectRoot);
+  assert.equal(store.intents.length, 1);
+});
+
+test("handoff intent store reuses terminal intents by idempotency key", async (t) => {
+  const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-handoff-"));
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  const created = await upsertWorkflowHandoffIntent({
+    projectRoot,
+    projectId: "demo",
+    idempotencyKey: "stage:demo:write:academic_writer:revision-1",
+    toRole: "academic_writer",
+    reason: "stage_owner_change",
+    stage: "write",
+  });
+  await transitionWorkflowHandoffIntent({
+    projectRoot,
+    intentId: created.intent.intentId,
+    toStatus: "claimed",
+  });
+  const completed = await transitionWorkflowHandoffIntent({
+    projectRoot,
+    intentId: created.intent.intentId,
+    toStatus: "completed",
+    terminalReason: "writer finished",
+  });
+  const repeated = await upsertWorkflowHandoffIntent({
+    projectRoot,
+    projectId: "demo",
+    idempotencyKey: "stage:demo:write:academic_writer:revision-1",
+    toRole: "academic_writer",
+    reason: "stage_owner_change",
+    stage: "write",
+  });
+
+  assert.equal(repeated.created, false);
+  assert.equal(repeated.intent.intentId, completed.intentId);
+  assert.equal(repeated.intent.status, "completed");
   const store = await readWorkflowHandoffIntentStore(projectRoot);
   assert.equal(store.intents.length, 1);
 });

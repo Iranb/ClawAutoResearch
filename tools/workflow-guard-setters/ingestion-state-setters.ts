@@ -87,6 +87,13 @@ function hasAnyOwnProperty(
   return keys.some((key) => Object.prototype.hasOwnProperty.call(record, key));
 }
 
+function readExplicitReplaceFlag(
+  record: Record<string, unknown>,
+  keys: readonly string[]
+): boolean {
+  return keys.some((key) => record[key] === true);
+}
+
 async function upsertJsonArtifact(
   targetPath: string | null,
   patch: Record<string, unknown>
@@ -682,6 +689,24 @@ export async function setPaperIngestionState(params: {
   const activeBatchesRaw = patch.active_batches ?? patch.activeBatches;
   const batchItemsRaw = patch.batch_items ?? patch.batchItems;
   const queuedRequestsRaw = patch.queued_requests ?? patch.queuedRequests;
+  const replacePaperOperations = readExplicitReplaceFlag(patch, [
+    "replacePaperOperations",
+    "replace_paper_operations",
+    "paperOperationsReplace",
+    "paper_operations_replace",
+  ]);
+  const replaceActiveBatches = readExplicitReplaceFlag(patch, [
+    "replaceActiveBatches",
+    "replace_active_batches",
+    "activeBatchesReplace",
+    "active_batches_replace",
+  ]);
+  const replaceBatchItems = readExplicitReplaceFlag(patch, [
+    "replaceBatchItems",
+    "replace_batch_items",
+    "batchItemsReplace",
+    "batch_items_replace",
+  ]);
   const hasRepairTargetCorpusPatch = hasAnyOwnProperty(patch, [
     "repairTargetCorpus",
     "repair_target_corpus",
@@ -700,18 +725,32 @@ export async function setPaperIngestionState(params: {
     current: current.completedPapers,
     patch: completedPapersRaw,
   });
-  const paperOperationUpdate = mergePaperIngestionOperations({
-    current: current.paperOperations,
-    patch: paperOperationsRaw,
-  });
-  const batchRunUpdate = mergePaperIngestionBatchRuns({
-    current: current.activeBatches,
-    patch: activeBatchesRaw,
-  });
-  const batchItemUpdate = mergePaperIngestionBatchItems({
-    current: current.batchItems,
-    patch: batchItemsRaw,
-  });
+  const paperOperationUpdate = replacePaperOperations
+    ? {
+        paperOperations: patchState.paperOperations,
+        newlyTerminalPaperOperations: [],
+      }
+    : mergePaperIngestionOperations({
+        current: current.paperOperations,
+        patch: paperOperationsRaw,
+      });
+  const batchRunUpdate = replaceActiveBatches
+    ? {
+        activeBatches: patchState.activeBatches,
+        newlyTerminalBatches: [],
+      }
+    : mergePaperIngestionBatchRuns({
+        current: current.activeBatches,
+        patch: activeBatchesRaw,
+      });
+  const batchItemUpdate = replaceBatchItems
+    ? {
+        batchItems: patchState.batchItems,
+      }
+    : mergePaperIngestionBatchItems({
+        current: current.batchItems,
+        patch: batchItemsRaw,
+      });
   const queuedRequestUpdate = mergePaperIngestionQueuedRequests({
     current: current.queuedRequests,
     patch: queuedRequestsRaw,
@@ -725,8 +764,9 @@ export async function setPaperIngestionState(params: {
     runtimeStatus: normalizePaperIngestionRuntimeStatus(
       patch.runtimeStatus ?? patch.runtime_status ?? current.runtimeStatus
     ),
-    waitingReason:
-      pickString(patch, ["waitingReason", "waiting_reason"]) ?? current.waitingReason,
+    waitingReason: hasAnyOwnProperty(patch, ["waitingReason", "waiting_reason"])
+      ? pickString(patch, ["waitingReason", "waiting_reason"])
+      : current.waitingReason,
     importTaskIds: Array.isArray(importTaskIdsRaw)
       ? importTaskIdsRaw
           .map((entry: unknown) => asString(entry))

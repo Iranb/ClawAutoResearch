@@ -215,6 +215,20 @@ npm run test:autoresearch:real -- \
 
 这个开关读取 `~/.papernexus/config.json`，把当前测试的 PaperNexus access 临时覆盖到本地 HTTP MCP，并只通过进程环境注入 token；summary 不落明文 token。因为 PaperNexus wrapper 默认拒绝 loopback MCP URL，runner 只在显式本地测试时额外注入 `PAPERNEXUS_ALLOW_LOCAL_MCP=1` / `papernexusAllowLocalMcp=true`。如果本机 PaperNexus 有多个 corpus，必须同时传 `--papernexus-shared-corpus <name>`；runner 会把它写入插件策略并导出 `PAPERNEXUS_CORPUS`，避免旧 wrapper 或直接 batch worker 因缺少 corpus 停在 graph build。
 
+使用远端 PaperNexus HTTP MCP 做真实 no-Discord autoresearch 测试：
+
+```bash
+npm run test:autoresearch:real -- \
+  --topic "GCD" \
+  --papernexus-mcp-url http://10.126.56.30:4821/mcp \
+  --papernexus-access-mode remote_mcp \
+  --papernexus-shared-corpus GCD \
+  --papernexus-ssh-target user@10.126.56.30 \
+  --papernexus-remote-staging-root /tmp/papernexus-import-staging
+```
+
+远端 HTTP MCP 的认证优先走 `papernexusApiTokenSource`，推荐用 OS keychain 或环境变量，不要把明文 token 写进项目或测试命令。`--papernexus-ssh-target` 和 `--papernexus-remote-staging-root` 会写入本次 isolated plugin config，并传给 `pn_batch_import.py submit`、source catch-up 和直接 batch worker；这样本地 staged PDF/Markdown 可以先复制到远端 PaperNexus 主机，再由远端图谱导入。非 loopback 远端 MCP 不会复用 `~/.papernexus/config.json` 里的本机 serve token，避免把本机开发 token 错用到服务器导致 401。
+
 no-Discord live E2E 会在子进程里把 code review 和 auto-mode discussion 的本地 fallback 默认缩短到 30 秒，避免测试每个讨论节点都等待生产默认的 180 秒。需要复现生产等待时，显式传 `--workflow-local-fallback-after-ms 180000`；也可以用 `--code-review-local-fallback-after-ms` 和 `--auto-mode-discussion-local-fallback-after-ms` 分开覆盖。这个设置只影响 E2E runner 启动的子进程，不改变 gateway/插件的生产默认值。
 
 topic-only 的 no-Discord 项目不会再等待 Discord 研究员消息先补 `PAPER_SOURCE_INDEX.json`。`graph_build` 会从 `PROJECT_MANIFEST.json` / `research_program.goal` 中提取 arXiv ID 或论文题名，解析成 workflow-owned source seed，抓取 Markdown/PDF 后继续排 PaperNexus batch import。

@@ -1379,6 +1379,10 @@ test("research_workflow queue_paper_ingestion materializes typed staged-paper re
   const tool = createResearchWorkflowTool({
     workspaceDir: projectRoot,
     channelKey: "discord:channel:paper-lab",
+    pluginConfig: {
+      papernexusSshTarget: "hyq@10.126.56.30",
+      papernexusRemoteStagingRoot: "/tmp/papernexus-import-staging",
+    },
   });
 
   const result = await executeWorkflowTool(tool, {
@@ -1406,6 +1410,14 @@ test("research_workflow queue_paper_ingestion materializes typed staged-paper re
   assert.equal(result.request.paperCount, 2);
   assert.match(result.commandText ?? "", /python3 skills\/researcher\/papernexus\/scripts\/pn_batch_import\.py/);
   assert.match(result.commandText ?? "", /--manifest/);
+  assert.match(result.commandText ?? "", /--ssh-target '?hyq@10\.126\.56\.30'?/);
+  assert.match(result.commandText ?? "", /--remote-staging-root '?\/tmp\/papernexus-import-staging'?/);
+  assert.deepEqual(result.request.args.slice(-4), [
+    "--ssh-target",
+    "hyq@10.126.56.30",
+    "--remote-staging-root",
+    "/tmp/papernexus-import-staging",
+  ]);
   assert.ok(result.request.manifestPath);
 
   const batchManifest = JSON.parse(
@@ -4969,7 +4981,7 @@ test("research_workflow bind_channel_project resolves local non-Researcher conte
   assert.equal(lookup.binding?.sessionKeySample, researcherSessionKey);
 });
 
-test("research_workflow bind_channel_project rejects non-Researcher Discord rebinding", async (t) => {
+test("research_workflow bind_channel_project resolves non-Researcher snapshot context without Discord rebinding", async (t) => {
   const workspaceRoot = await fs.mkdtemp(
     path.join(os.tmpdir(), "openclaw-research-discord-bind-guard-")
   );
@@ -5005,15 +5017,31 @@ test("research_workflow bind_channel_project rejects non-Researcher Discord rebi
     },
   });
 
-  await assert.rejects(
-    () =>
-      executeWorkflowTool(tool, {
-        action: "bind_channel_project",
-        projectRoot,
-        projectId: "gcd-discord-bind-guard",
-      }),
-    /Only Researcher may create or rebind/
+  const result = await executeWorkflowTool(tool, {
+    action: "bind_channel_project",
+    projectRoot,
+    projectId: "gcd-discord-bind-guard",
+  });
+
+  assert.equal(result.resolvedOnly, true);
+  assert.ok(
+    ["workspace_project_context", "explicit_project_context"].includes(result.reason)
   );
+  assert.equal(result.projectRoot, projectRoot);
+  assert.equal(result.projectId, "gcd-discord-bind-guard");
+  assert.equal(result.binding.workflowRole, "orchestrator");
+
+  const lookup = getChannelProjectBindingForWorkflow({
+    policy: {
+      enableChannelProjectBindings: true,
+      projectsRoot,
+    },
+    workspaceDir: workspaceRoot,
+    sessionKey: "agent:orchestrator:discord:group:paper-lab",
+    messageChannel: "discord",
+    channelKey: "discord:group:paper-lab",
+  });
+  assert.equal(lookup.binding, null);
 });
 
 test("research_workflow auto_iterator_tick follows an explicit dashboard channel binding even when the session key is generic", async (t) => {

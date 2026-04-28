@@ -17,6 +17,7 @@ import { handoffWorkflowTaskToAgent } from "../tools/workflow-execution/delivery
 import { createStageOwnerHandoffIntent } from "../tools/workflow-handoff/handoff-router.ts";
 import { deliverWorkflowHandoffIntent } from "../tools/workflow-handoff/handoff-delivery.ts";
 import { transitionWorkflowHandoffIntent } from "../tools/workflow-handoff/handoff-store.ts";
+import { detectWorkflowPaperArtifactTerminal } from "../tools/workflow-paper-terminal.ts";
 
 const ACTIVE_LOCAL_HANDOFF_STATUSES = new Set([
   "prepared",
@@ -211,6 +212,8 @@ export async function detectLiveSubstantiveRevisionTerminal(params) {
 function readString(value) {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
+
+export const detectLivePaperArtifactTerminal = detectWorkflowPaperArtifactTerminal;
 
 function sameProjectRoot(left, right) {
   const normalizedLeft = readString(left);
@@ -694,6 +697,18 @@ export function deriveStageCommand(params) {
   return defaultStageCommand({ lane: params.lane, stage, topic: params.topic });
 }
 
+export function resolveLiveStageHandoffRevision(iterator) {
+  const pending =
+    iterator?.pendingHandoff === true &&
+    iterator?.pendingHandoffPhase === "prepared";
+  const executionId =
+    typeof iterator?.pendingHandoffExecutionId === "string" &&
+    iterator.pendingHandoffExecutionId.trim()
+      ? iterator.pendingHandoffExecutionId.trim()
+      : null;
+  return pending ? executionId : null;
+}
+
 function buildStageExtraBody(params) {
   const lines = [
     `You are the current workflow owner for stage ${params.stage}.`,
@@ -849,6 +864,19 @@ export async function waitForProgress(params) {
     if (pdfExists && (currentStage === "submit" || currentStage === "done")) {
       return { progressed: true, manifest: latestManifest, reason: "terminal" };
     }
+    const artifactTerminal = await detectLivePaperArtifactTerminal({
+      projectRoot: params.projectRoot,
+      manifest: latestManifest,
+      lane: params.lane,
+    });
+    if (artifactTerminal.terminal) {
+      return {
+        progressed: true,
+        manifest: latestManifest,
+        reason: artifactTerminal.reason,
+        terminal: artifactTerminal,
+      };
+    }
     if (
       currentStage !== String(params.baselineManifest.current_stage ?? "") ||
       currentOwner !== String(params.baselineManifest.owner_agent ?? "")
@@ -893,6 +921,7 @@ async function runLiveStageTurn(params) {
   const fromRole = previousRole ?? "researcher";
   const fromSessionKey = transportContext.sessionKeyFor(fromRole);
   const sameOwner = owner === fromRole;
+  const pendingHandoffExecutionId = resolveLiveStageHandoffRevision(iterator);
 
   if (sameOwner) {
     const started = await runtimeSubagent.run({
@@ -926,6 +955,7 @@ async function runLiveStageTurn(params) {
     const progressPromise = waitForProgress({
       projectRoot,
       baselineManifest: manifest,
+      lane,
       timeoutMs: stageTimeoutMs ?? 180_000,
       pollMs: progressPollMs ?? 5_000,
     });
@@ -966,6 +996,8 @@ async function runLiveStageTurn(params) {
     ownerBefore: fromRole,
     ownerAfter: owner,
     fromSessionKey,
+    executionId: pendingHandoffExecutionId,
+    manifestRevision: pendingHandoffExecutionId,
     nextAction: command,
     deliveryPlan: {
       channels: ["native_runtime"],
@@ -1024,6 +1056,7 @@ async function runLiveStageTurn(params) {
     const progress = await waitForProgress({
       projectRoot,
       baselineManifest: manifest,
+      lane,
       timeoutMs: stageTimeoutMs ?? 180_000,
       pollMs: progressPollMs ?? 5_000,
     });
@@ -1071,6 +1104,7 @@ async function runLiveStageTurn(params) {
   const progress = await waitForProgress({
     projectRoot,
     baselineManifest: manifest,
+    lane,
     timeoutMs: stageTimeoutMs ?? 180_000,
     pollMs: progressPollMs ?? 5_000,
   });
@@ -1385,6 +1419,28 @@ export async function runAutoCommandEndToEndLive(params) {
       );
       if (pdfExists && ["submit", "done"].includes(String(manifest.current_stage ?? ""))) {
         break;
+      }
+      const artifactTerminal = await detectLivePaperArtifactTerminal({
+        projectRoot,
+        manifest,
+        lane,
+      });
+      if (artifactTerminal.terminal) {
+        const harness = await runHarnessOrFailure(projectRoot, lane, { strictContent: true });
+        return {
+          transport: bootstrapTransport,
+          conversationId,
+          bootstrap,
+          projectId: actualProjectId,
+          projectRoot,
+          turns,
+          harness,
+          failureReason:
+            harness.finalVerdict === "pass"
+              ? null
+              : "live_paper_artifact_ready_but_harness_failed",
+          terminal: artifactTerminal,
+        };
       }
       const revisionTerminal = await detectLiveSubstantiveRevisionTerminal({
         projectRoot,

@@ -4,6 +4,7 @@ import {
 } from "../workflow-guard-state/ideation-contract";
 import { normalizeResearchProgramState } from "../workflow-guard-state/research-program";
 import {
+  isPaperIngestionExecutableUploadRequest,
   normalizePaperIngestionState,
   serializePaperIngestionState,
 } from "../workflow-guard-state/paper-ingestion";
@@ -50,6 +51,10 @@ import {
 import { materializeLocalCodeReviewFallback } from "../workflow-guard-materializers/code-review-local-materializer";
 import { materializeLocalExperimentExecutionImpl } from "../workflow-guard-materializers/experiment-execution-materializer";
 import { materializeAnalysisArtifactsImpl } from "../workflow-guard-materializers/analysis-artifacts-materializer";
+import {
+  materializeInnovationReflection,
+  shouldMaterializeInnovationReflection,
+} from "../workflow-guard-materializers/innovation-reflection-materializer";
 import { materializePlanStateImpl } from "../workflow-guard-materializers/plan-state-materializer";
 import type { WorkflowAutoGateConfig } from "../workflow-auto-mode";
 import { materializeRevisionControlState } from "../research-writing/revision-control";
@@ -188,6 +193,11 @@ type StagePreflightDeps = {
     agentId?: string | null;
   }) => Promise<unknown>;
   materializeAnalysisArtifacts?: (params: {
+    projectRoot: string;
+    trigger?: string | null;
+    agentId?: string | null;
+  }) => Promise<unknown>;
+  materializeInnovationReflection?: (params: {
     projectRoot: string;
     trigger?: string | null;
     agentId?: string | null;
@@ -1322,7 +1332,7 @@ function isStaleUnresolvedLiteratureDiscoveryRequisition(
     return false;
   }
   const reference =
-    request.startedAt ?? request.lastAttemptAt ?? request.updatedAt ?? request.createdAt;
+    request.createdAt ?? request.startedAt ?? request.lastAttemptAt ?? request.updatedAt;
   const referenceMs = parseTimestampMs(reference);
   return (
     referenceMs !== null &&
@@ -1444,6 +1454,208 @@ async function reconcileStaleLiteratureDiscoveryRequisition(params: {
         queuedRequests,
         lastUpdatedAt: now,
       }),
+    },
+  };
+  await writeJsonEnsured(
+    resolveProjectArtifactPath(params.projectRoot, "PROJECT_MANIFEST.json") ??
+      `${params.projectRoot}/PROJECT_MANIFEST.json`,
+    manifest
+  );
+  return { manifest, updated: true };
+}
+
+function sanitizeArtifactPathFragment(value: string): string {
+  return (
+    value
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9._-]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 96) || "request"
+  );
+}
+
+function isTerminalGraphReadyUploadFailureRequest(
+  request: ReturnType<typeof normalizePaperIngestionState>["queuedRequests"][number]
+): boolean {
+  if (!isPaperIngestionExecutableUploadRequest(request)) {
+    return false;
+  }
+  if (request.status !== "needs_repair" && request.status !== "failed") {
+    return false;
+  }
+  return request.validationStatus === "valid" || request.validationStatus === "warning";
+}
+
+function deriveGraphReadyUploadFailureReportPath(request: {
+  requestId: string;
+}): string {
+  return `graph/paper-ingestion-validation/${sanitizeArtifactPathFragment(
+    request.requestId
+  )}-graph-ready-degraded.json`;
+}
+
+function readGraphPresenceSnapshot(manifest: ManifestLike): Record<string, unknown> {
+  return {
+    status: readManifestStatus(manifest.paper_ingestion, [
+      "graph_presence_status",
+      "graphPresenceStatus",
+    ]),
+    report_path:
+      readManifestString(manifest.paper_ingestion, [
+        "graph_presence_report_path",
+        "graphPresenceReportPath",
+      ]) ?? "graph/GRAPH_PRESENCE_CHECK.json",
+    expected_paper_count: readManifestNumber(manifest.paper_ingestion, [
+      "graph_presence_expected_papers",
+      "graphPresenceExpectedPapers",
+      "graph_presence_expected_paper_count",
+      "graphPresenceExpectedPaperCount",
+    ]),
+    present_paper_count: readManifestNumber(manifest.paper_ingestion, [
+      "graph_presence_present_papers",
+      "graphPresencePresentPapers",
+      "graph_presence_present_paper_count",
+      "graphPresencePresentPaperCount",
+    ]),
+    missing_paper_count: readManifestNumber(manifest.paper_ingestion, [
+      "graph_presence_missing_paper_count",
+      "graphPresenceMissingPaperCount",
+      "graph_presence_missing_count",
+      "graphPresenceMissingCount",
+    ]),
+  };
+}
+
+function isTerminalBatchStatus(value: unknown): boolean {
+  const status = normalizeStageValue(value);
+  return status === "failed" || status === "timed_out";
+}
+
+function isTerminalBatchItemStatus(value: unknown): boolean {
+  const status = normalizeStageValue(value);
+  return status === "failed" || status === "submit_failed" || status === "timed_out";
+}
+
+async function reconcileTerminalPaperIngestionUploadFailuresWhenGraphReady(params: {
+  projectRoot: string;
+  manifest: ManifestLike;
+  stage: string | null;
+}): Promise<{ manifest: ManifestLike; updated: boolean }> {
+  if (params.stage !== "graph_build" || !isGraphPresenceReady(params.manifest)) {
+    return { manifest: params.manifest, updated: false };
+  }
+
+  const state = normalizePaperIngestionState(params.manifest.paper_ingestion);
+  const terminalRequests = state.queuedRequests.filter(
+    isTerminalGraphReadyUploadFailureRequest
+  );
+  if (terminalRequests.length === 0) {
+    return { manifest: params.manifest, updated: false };
+  }
+
+  const now = new Date().toISOString();
+  const terminalRequestIds = new Set(
+    terminalRequests.map((request) => request.requestId)
+  );
+  const terminalManifestPaths = new Set(
+    terminalRequests
+      .map((request) => request.manifestPath)
+      .filter((entry): entry is string => Boolean(entry))
+  );
+  const graphPresence = readGraphPresenceSnapshot(params.manifest);
+
+  for (const request of terminalRequests) {
+    const reportPath = deriveGraphReadyUploadFailureReportPath(request);
+    const resolvedReportPath = resolveProjectArtifactPath(params.projectRoot, reportPath);
+    if (!resolvedReportPath) {
+      continue;
+    }
+    await writeJsonEnsured(resolvedReportPath, {
+      schema_version: 1,
+      status: "warning",
+      decision: "degraded_satisfied_current_graph",
+      request_id: request.requestId,
+      request_kind: request.requestKind,
+      trigger_kind: request.triggerKind,
+      manifest_path: request.manifestPath,
+      previous_status: request.status,
+      previous_last_error: request.lastError,
+      previous_dead_letter_at: request.deadLetterAt,
+      previous_dead_letter_reason: request.deadLetterReason,
+      previous_validation_status: request.validationStatus,
+      previous_validation_report_path: request.validationReportPath,
+      graph_presence: graphPresence,
+      reason:
+        "PaperNexus upload reached a terminal failure after graph presence was already ready; the current graph is authoritative for stage advancement.",
+      limitations: [
+        "No additional PaperNexus import completion is credited to this request.",
+        "The terminal upload failure is preserved in this report instead of keeping workflow runtime blocked.",
+      ],
+      created_at: now,
+      updated_at: now,
+    });
+  }
+
+  const queuedRequests = state.queuedRequests.map((request) => {
+    if (!terminalRequestIds.has(request.requestId)) {
+      return request;
+    }
+    const reportPath = deriveGraphReadyUploadFailureReportPath(request);
+    return {
+      ...request,
+      status: "completed" as const,
+      updatedAt: now,
+      finishedAt: request.finishedAt ?? now,
+      lastError: null,
+      detail:
+        "Terminal PaperNexus upload failure was degradably satisfied because graph presence is already ready.",
+      validationStatus: "warning" as const,
+      validationSummary:
+        "PaperNexus upload reached a terminal failure after graph presence was ready; current graph accepted with a durable warning report.",
+      validationReportPath: reportPath,
+      nextRetryAt: null,
+      deadLetterAt: null,
+      deadLetterReason: null,
+    };
+  });
+
+  const activeBatches = state.activeBatches.filter((batch) => {
+    if (!isTerminalBatchStatus(batch.status)) {
+      return true;
+    }
+    return batch.manifestPath ? !terminalManifestPaths.has(batch.manifestPath) : false;
+  });
+  const batchItems = state.batchItems.filter((item) => {
+    if (!isTerminalBatchItemStatus(item.status)) {
+      return true;
+    }
+    return item.manifestPath ? !terminalManifestPaths.has(item.manifestPath) : false;
+  });
+
+  const paperIngestionRecord =
+    params.manifest.paper_ingestion &&
+    typeof params.manifest.paper_ingestion === "object" &&
+    !Array.isArray(params.manifest.paper_ingestion)
+      ? (params.manifest.paper_ingestion as Record<string, unknown>)
+      : {};
+  const manifest = {
+    ...params.manifest,
+    paper_ingestion: {
+      ...paperIngestionRecord,
+      ...serializePaperIngestionState({
+        ...state,
+        runtimeStatus: "ready",
+        waitingReason: null,
+        activeBatches,
+        batchItems,
+        queuedRequests,
+        repairRequired: false,
+        repairReason: null,
+        reconcileRequired: false,
+        lastUpdatedAt: now,
+      }),
+      refresh_required: false,
     },
   };
   await writeJsonEnsured(
@@ -2034,6 +2246,27 @@ export async function maybePrepareWorkflowStageContracts(params: {
       artifactPath: null,
     });
   }
+  const graphReadyUploadFailureReconciliation =
+    await reconcileTerminalPaperIngestionUploadFailuresWhenGraphReady({
+      projectRoot,
+      manifest,
+      stage: params.stage,
+    });
+  if (graphReadyUploadFailureReconciliation.updated) {
+    manifest = graphReadyUploadFailureReconciliation.manifest;
+    materializedContracts.push("paper_ingestion_terminal_upload_degraded");
+    materializedArtifacts.push({
+      contract: "paper_ingestion_terminal_upload_degraded",
+      artifactPath: null,
+      fingerprint: null,
+      action: "reconciled",
+    });
+    emittedHookEvents.push({
+      hookPoint: "artifact_materialized",
+      contract: "paper_ingestion_terminal_upload_degraded",
+      artifactPath: null,
+    });
+  }
 
   const runStep = async (
     contract: string,
@@ -2120,6 +2353,16 @@ export async function maybePrepareWorkflowStageContracts(params: {
       ideationMaterialization: {
         basis_stage: params.stage,
       },
+    })
+  );
+  await runStep("innovation_reflection", shouldMaterializeInnovationReflection, () =>
+    (
+      params.deps.materializeInnovationReflection ??
+      materializeInnovationReflection
+    )({
+      projectRoot,
+      trigger,
+      agentId: params.agentId ?? null,
     })
   );
   await runStep("idea_catalyst_requisition", shouldQueueIdeaCatalystRequisition, () =>

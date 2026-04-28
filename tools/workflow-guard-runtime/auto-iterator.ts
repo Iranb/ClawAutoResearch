@@ -8,6 +8,7 @@ import {
   pickString,
 } from "../workflow-guard-core/coercion";
 import { readJsonIfExists, writeJsonEnsured } from "../workflow-guard-core/fs";
+import { resolveProjectArtifactPath } from "../workflow-guard-core/paths";
 import {
   deriveGraphBuildMicroStage,
   normalizePaperIngestionState,
@@ -23,7 +24,10 @@ import {
   deriveIdeaCatalystMicroStage,
   shouldRouteIdeaCatalystToGraphBuild,
 } from "../idea-catalyst/workflow-bridge";
-import { shouldRouteLiteratureDiscoveryToGraphBuild } from "../literature-discovery/workflow-bridge";
+import {
+  isLiteratureDiscoveryTriggerKind,
+  shouldRouteLiteratureDiscoveryToGraphBuild,
+} from "../literature-discovery/workflow-bridge";
 import {
   deriveWorkflowGraphContext,
   shouldRefreshWorkflowGraphPresence,
@@ -142,6 +146,7 @@ type ProjectsStateLike = {
 };
 
 const AUTO_ITERATOR_GRAPH_REFRESH_MIN_INTERVAL_MS = 15_000;
+const LITERATURE_DISCOVERY_REENTRY_WINDOW_MS = 10 * 60 * 1000;
 const TRANSITION_BOOTSTRAP_PREP_STAGES = new Set([
   "code",
   "experiment",
@@ -274,6 +279,120 @@ function shouldBootstrapTransitionStage(params: {
       stageAfter !== stageBefore &&
       TRANSITION_BOOTSTRAP_PREP_STAGES.has(stageAfter)
   );
+}
+
+function parseTimestampMs(value: string | null | undefined): number | null {
+  if (!value) {
+    return null;
+  }
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function normalizeStagePath(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((entry) => normalizeStage(entry))
+    .filter((entry): entry is string => Boolean(entry));
+}
+
+function isLiteratureDiscoveryReentryTrigger(value: string | null | undefined): boolean {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  return (
+    normalized !== "idea_catalyst_requisition" &&
+    isLiteratureDiscoveryTriggerKind(normalized)
+  );
+}
+
+function filterProjectedOrchestrationSignals(params: {
+  signals: string[];
+  stageBefore: string | null;
+  stageAfter: string | null;
+}): string[] {
+  if (!params.stageAfter || params.stageAfter === params.stageBefore) {
+    return params.signals;
+  }
+  const projectedTransitionPattern = new RegExp(
+    `^orchestration_state\\.next_transition_candidate should .+ while current_stage=${params.stageAfter.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} \\(current: .+\\)$`
+  );
+  return params.signals.filter((signal) => !projectedTransitionPattern.test(signal));
+}
+
+async function resolveCompletedLiteratureDiscoveryReentryStage(params: {
+  projectRoot: string;
+  manifest: ManifestLike;
+  stage: string | null;
+  nowMs: number;
+  validStages: Set<string>;
+}): Promise<string | null> {
+  if (params.stage !== "graph_build") {
+    return null;
+  }
+  const state = normalizePaperIngestionState(params.manifest.paper_ingestion);
+  const hasActiveLiteratureRequest = state.queuedRequests.some(
+    (request) =>
+      isLiteratureDiscoveryReentryTrigger(request.triggerKind) &&
+      request.requestKind === "requisition" &&
+      ["queued", "launching", "running", "needs_repair"].includes(request.status)
+  );
+  if (hasActiveLiteratureRequest) {
+    return null;
+  }
+
+  const completedRequests = state.queuedRequests
+    .filter(
+      (request) =>
+        isLiteratureDiscoveryReentryTrigger(request.triggerKind) &&
+        request.requestKind === "requisition" &&
+        request.status === "completed" &&
+        request.manifestPath
+    )
+    .map((request) => ({
+      request,
+      finishedMs: parseTimestampMs(request.finishedAt ?? request.updatedAt),
+    }))
+    .filter(
+      (entry): entry is typeof entry & { finishedMs: number } =>
+        entry.finishedMs !== null &&
+        params.nowMs - entry.finishedMs >= 0 &&
+        params.nowMs - entry.finishedMs <= LITERATURE_DISCOVERY_REENTRY_WINDOW_MS
+    )
+    .sort((left, right) => right.finishedMs - left.finishedMs);
+
+  for (const { request } of completedRequests) {
+    const requisitionPath = resolveProjectArtifactPath(
+      params.projectRoot,
+      request.manifestPath ?? ""
+    );
+    const requisition = requisitionPath
+      ? await readJsonIfExists<Record<string, unknown>>(requisitionPath)
+      : null;
+    const literatureDiscovery = asRecord(requisition?.literature_discovery);
+    const catalystRequisition = asRecord(requisition?.catalyst_requisition);
+    const reentry = normalizeStagePath(
+      literatureDiscovery?.required_stage_reentry ??
+        literatureDiscovery?.requiredStageReentry ??
+        catalystRequisition?.required_stage_reentry ??
+        catalystRequisition?.requiredStageReentry ??
+        requisition?.required_stage_reentry ??
+        requisition?.requiredStageReentry
+    );
+    const targetStage =
+      [...reentry]
+        .reverse()
+        .find(
+          (stage) =>
+            stage !== "graph_build" &&
+            stage !== params.stage &&
+            params.validStages.has(stage)
+        ) ?? null;
+    if (targetStage) {
+      return targetStage;
+    }
+  }
+  return null;
 }
 
 function hasDurableCurrentStageEvidence(params: {
@@ -1501,10 +1620,39 @@ export async function runWorkflowAutoIteratorImpl(
     stageEffective !== "done" &&
     !experimentDecisionBlocksAdvance
   ) {
-    const nextStage = deps.resolveNextStageForWorkflow({
-      stage: stageEffective,
-      manifest,
-    });
+    const literatureDiscoveryReentryStage =
+      !surveyWorkflow && stageEffective === "graph_build"
+        ? await resolveCompletedLiteratureDiscoveryReentryStage({
+            projectRoot,
+            manifest,
+            stage: stageEffective,
+            nowMs: Date.parse(now),
+            validStages: new Set(Object.keys(deps.STAGE_REQUIREMENTS)),
+          })
+        : null;
+    if (literatureDiscoveryReentryStage) {
+      await appendWorkflowDiagnosticEvent({
+        projectRoot,
+        projectId,
+        component: "auto_iterator",
+        action: "literature_discovery_reentry_resolved",
+        status: "completed",
+        stage: stageEffective,
+        owner: asString(manifest.owner_agent),
+        summary: `Graph build will resume ${literatureDiscoveryReentryStage} after literature discovery reentry.`,
+        details: {
+          stageBefore,
+          stageEffective,
+          stageAfter: literatureDiscoveryReentryStage,
+        },
+      });
+    }
+    const nextStage =
+      literatureDiscoveryReentryStage ??
+      deps.resolveNextStageForWorkflow({
+        stage: stageEffective,
+        manifest,
+      });
     if (nextStage) {
       stageAfter = nextStage;
     }
@@ -1584,7 +1732,7 @@ export async function runWorkflowAutoIteratorImpl(
     });
   }
 
-  const activeStageSignals =
+  const rawActiveStageSignals =
     criticalAnalyzeRollbackStage
       ? effectiveMissingSignals
       : stageAfter !== stageEffective
@@ -1596,6 +1744,31 @@ export async function runWorkflowAutoIteratorImpl(
           currentStage: stageAfter,
         })
       : effectiveMissingSignals;
+  const activeStageSignals = filterProjectedOrchestrationSignals({
+    signals: rawActiveStageSignals,
+    stageBefore: stageEffective,
+    stageAfter,
+  });
+  if (activeStageSignals.length !== rawActiveStageSignals.length) {
+    await appendWorkflowDiagnosticEvent({
+      projectRoot,
+      projectId,
+      component: "auto_iterator",
+      action: "projected_orchestration_signal_filtered",
+      status: "completed",
+      stage: stageAfter,
+      owner: asString(manifest.owner_agent),
+      summary:
+        "Filtered orchestration next-transition validation that the auto iterator is about to rewrite for the projected target stage.",
+      details: {
+        stageEffective,
+        stageAfter,
+        removedSignals: rawActiveStageSignals.filter(
+          (signal) => !activeStageSignals.includes(signal)
+        ),
+      },
+    });
+  }
 
   const existingOrchestrationState = asRecord(manifest.orchestration_state) ?? {};
   const manifestOwner = asString(manifest.owner_agent);

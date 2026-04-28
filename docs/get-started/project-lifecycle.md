@@ -171,6 +171,20 @@ npm run test:autoreview:real -- --topic "GCD"
 
 `fixture` 模式用于回归测试；`real`/`live` 模式会让真实 workflow runtime 接手后续阶段。两者默认都用 local bootstrap 脱离 Discord 启动。每次 E2E 运行都会在 `.openclaw-research/e2e-runs/` 里保存摘要、payload、stdout/stderr 和项目路径，方便复盘失败现场。
 
+使用远端 PaperNexus HTTP MCP 时，把 graph 读写和本地 staged 文件上传参数一起传给 runner：
+
+```bash
+npm run test:autoresearch:real -- \
+  --topic "GCD" \
+  --papernexus-mcp-url http://10.126.56.30:4821/mcp \
+  --papernexus-access-mode remote_mcp \
+  --papernexus-shared-corpus GCD \
+  --papernexus-ssh-target user@10.126.56.30 \
+  --papernexus-remote-staging-root /tmp/papernexus-import-staging
+```
+
+`--papernexus-ssh-target` 和 `--papernexus-remote-staging-root` 会同步进入 isolated plugin config、wrapper 环境和 workflow-owned batch import 命令。远端非 loopback MCP 不会读取本机 `~/.papernexus/config.json` 的 serve token；token 仍按 `papernexusApiTokenSource` 从环境变量或系统 keychain 解析。
+
 ## 8.5 现有项目如何迁移到最新 workflow/runtime
 
 如果你手上已经有一批旧项目，需要补齐最新 runtime state、survey identity 和 experiment decision 字段，可以直接运行：

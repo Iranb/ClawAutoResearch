@@ -18,6 +18,8 @@ export type PapernexusRemoteAccessConfig = {
   tokenAccount?: string | null;
   mineruHttpUrl?: string | null;
   tokenLookupTimeoutMs?: number | null;
+  sshTarget?: string | null;
+  remoteStagingRoot?: string | null;
 };
 
 export type PapernexusRemoteAccessSummary = {
@@ -32,6 +34,8 @@ export type PapernexusRemoteAccessSummary = {
   tokenAccount: string | null;
   mineruHttpUrl: string | null;
   tokenLookupTimeoutMs: number;
+  sshTarget: string | null;
+  remoteStagingRoot: string | null;
 };
 
 export type PapernexusRemoteAccessInspection = {
@@ -134,6 +138,8 @@ export function summarizePapernexusRemoteAccessConfig(
     tokenAccount: asOptionalString(config?.tokenAccount) ?? DEFAULT_TOKEN_ACCOUNT,
     mineruHttpUrl: asOptionalString(config?.mineruHttpUrl) ?? null,
     tokenLookupTimeoutMs: asTimeoutMs(config?.tokenLookupTimeoutMs),
+    sshTarget: asOptionalString(config?.sshTarget) ?? null,
+    remoteStagingRoot: asOptionalString(config?.remoteStagingRoot) ?? null,
   };
 }
 

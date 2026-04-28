@@ -96,6 +96,24 @@ async function writeFakePapernexusBatchScript(scriptDir) {
   return scriptPath;
 }
 
+async function writeFailingPapernexusBatchScript(scriptDir) {
+  await fs.mkdir(scriptDir, { recursive: true });
+  const scriptPath = path.join(scriptDir, "pn_batch_import.py");
+  await fs.writeFile(
+    scriptPath,
+    [
+      "#!/usr/bin/env python3",
+      "import json, sys",
+      "print(json.dumps({'error': 'socket.timeout while waiting for PaperNexus batch'}))",
+      "sys.exit(2)",
+      "",
+    ].join("\n"),
+    "utf8"
+  );
+  await fs.chmod(scriptPath, 0o755);
+  return scriptPath;
+}
+
 async function writeTokenCheckingPapernexusBatchScript(scriptDir) {
   await fs.mkdir(scriptDir, { recursive: true });
   const scriptPath = path.join(scriptDir, "pn_batch_import.py");
@@ -1198,6 +1216,141 @@ test("startBackgroundWorkflowRun executes workflow-owned PaperNexus batch import
         event.kind === "paper_ingestion_direct_batch_import" &&
         event.details?.source === "start_background_run" &&
         event.details?.requestId === "req-batch-1"
+    )
+  );
+});
+
+test("startBackgroundWorkflowRun degrades direct PaperNexus failures when graph presence is already ready", async (t) => {
+  const workspaceRoot = await makeTempWorkspace();
+  const projectRoot = path.join(workspaceRoot, "project");
+  const fakeScriptDir = path.join(workspaceRoot, "fake-papernexus-scripts");
+  const previousScriptDir = process.env.OPENCLAW_PAPERNEXUS_SCRIPT_DIR;
+  const batchManifestPath =
+    "researcher/paper-staging/queued-imports/req-batch-ready/batch-import.json";
+  const runCalls = [];
+
+  t.after(async () => {
+    if (previousScriptDir === undefined) {
+      delete process.env.OPENCLAW_PAPERNEXUS_SCRIPT_DIR;
+    } else {
+      process.env.OPENCLAW_PAPERNEXUS_SCRIPT_DIR = previousScriptDir;
+    }
+    await clearBackgroundWorkflowRunRegistryForTests();
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  });
+
+  process.env.OPENCLAW_PAPERNEXUS_SCRIPT_DIR = fakeScriptDir;
+  await writeFailingPapernexusBatchScript(fakeScriptDir);
+  await writeJson(path.join(projectRoot, batchManifestPath), {
+    papers: [{ id: "paper-a" }],
+  });
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "direct-batch-ready-project",
+    title: "Direct batch ready project",
+    current_stage: "graph_build",
+    owner_agent: "researcher",
+    paper_ingestion: {
+      runtime_status: "waiting_import",
+      waiting_reason: "PaperNexus remote batch import is running.",
+      graph_presence_status: "ready",
+      graph_presence_report_path: "graph/GRAPH_PRESENCE_CHECK.json",
+      graph_presence_expected_papers: 1,
+      graph_presence_present_papers: 1,
+      repair_required: true,
+      repair_reason: "stale previous failure",
+      active_batches: [
+        {
+          manifest_path: batchManifestPath,
+          status: "running",
+          total: 1,
+          started_at: "2026-04-28T00:00:00.000Z",
+        },
+      ],
+      queued_requests: [
+        {
+          request_id: "req-batch-ready",
+          request_kind: "upload_manifest",
+          status: "queued",
+          wrapper: "pn_batch_import.py",
+          command_text:
+            `python3 skills/researcher/papernexus/scripts/pn_batch_import.py --mcp-url http://papernexus.test/mcp --corpus demo --manifest ${batchManifestPath} submit`,
+          manifest_path: batchManifestPath,
+          shared_corpus: "demo",
+          paper_count: 1,
+          summary: "Queue graph-ready batch import.",
+          validation_status: "valid",
+        },
+      ],
+    },
+  });
+
+  const result = await startBackgroundWorkflowRun({
+    workflowRuntime: {
+      async run(params) {
+        runCalls.push(params);
+        return { runId: "unexpected-subagent-run" };
+      },
+    },
+    workflowPolicy: {
+      projectsRoot: path.join(workspaceRoot, "projects"),
+      enableChannelProjectBindings: false,
+    },
+    agentCtx: {
+      agentId: "researcher",
+      workspaceDir: workspaceRoot,
+      sessionKey: "agent:researcher:local:conversation:direct-batch-ready",
+      messageChannel: "local",
+      channelKey: "local:direct-batch-ready",
+    },
+    snapshot: {
+      role: "researcher",
+      projectRoot,
+      projectId: "direct-batch-ready-project",
+      channelProjectBindingsEnabled: false,
+    },
+    backgroundRun: {
+      kind: "papernexus_wrapper",
+      projectId: "direct-batch-ready-project",
+      projectRoot,
+      ensureProjectBinding: false,
+      commandText:
+        `python3 skills/researcher/papernexus/scripts/pn_batch_import.py --mcp-url http://papernexus.test/mcp --corpus demo --manifest ${batchManifestPath} submit -- __BACKGROUND_CONTINUATION__: true`,
+      summary: "Queue graph-ready batch import.",
+      extraSystemPrompt:
+        "WORKFLOW_OWNED_PAPER_INGESTION_REQUEST_ID=req-batch-ready\nUse the locked shared corpus demo.",
+    },
+  });
+
+  assert.equal(result.started, true);
+  assert.equal(result.sessionKey, "local:papernexus:direct-batch-import");
+  assert.equal(runCalls.length, 0);
+
+  const manifest = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "PROJECT_MANIFEST.json"), "utf8")
+  );
+  const request = manifest.paper_ingestion.queued_requests[0];
+  assert.equal(manifest.paper_ingestion.runtime_status, "ready");
+  assert.equal(manifest.paper_ingestion.waiting_reason, null);
+  assert.equal(manifest.paper_ingestion.repair_required, false);
+  assert.equal(manifest.paper_ingestion.repair_reason, null);
+  assert.deepEqual(manifest.paper_ingestion.active_batches, []);
+  assert.deepEqual(manifest.paper_ingestion.batch_items, []);
+  assert.deepEqual(manifest.paper_ingestion.paper_operations, []);
+  assert.equal(request.status, "completed");
+  assert.equal(request.validation_status, "warning");
+  assert.match(
+    request.validation_report_path,
+    /direct-batch-graph-ready-warning\.json$/
+  );
+  await fs.access(path.join(projectRoot, request.validation_report_path));
+
+  const events = await readWorkflowRuntimeEvents(projectRoot);
+  assert.ok(
+    events.some(
+      (event) =>
+        event.kind === "paper_ingestion_direct_batch_import" &&
+        event.details?.degradedDueToGraphReady === true &&
+        event.details?.runtimeStatus === "ready"
     )
   );
 });

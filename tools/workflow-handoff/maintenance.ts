@@ -5,6 +5,10 @@ import {
   readWorkflowHandoffIntentStore,
   transitionWorkflowHandoffIntent,
 } from "./handoff-store";
+import {
+  isWorkflowHandoffActiveStatus,
+  isWorkflowHandoffTerminalStatus,
+} from "./handoff-types";
 
 export type WorkflowHandoffMaintenanceResult = {
   expiredIntentIds: string[];
@@ -50,6 +54,65 @@ export async function runWorkflowHandoffMaintenancePass(params: {
           typeof (manifest.orchestration_state as Record<string, unknown>).pendingHandoffId === "string"
         ? ((manifest.orchestration_state as Record<string, unknown>).pendingHandoffId as string)
         : null;
+
+  const intentsByIdempotencyKey = new Map<string, typeof store.intents>();
+  for (const intent of store.intents) {
+    const bucket = intentsByIdempotencyKey.get(intent.idempotencyKey) ?? [];
+    bucket.push(intent);
+    intentsByIdempotencyKey.set(intent.idempotencyKey, bucket);
+  }
+  for (const duplicateGroup of intentsByIdempotencyKey.values()) {
+    if (duplicateGroup.length < 2) {
+      continue;
+    }
+    const terminalIntent = duplicateGroup.find((intent) =>
+      isWorkflowHandoffTerminalStatus(intent.status)
+    );
+    const survivor =
+      terminalIntent ??
+      duplicateGroup.find((intent) => pendingHandoffId && intent.intentId === pendingHandoffId) ??
+      duplicateGroup
+        .slice()
+        .sort(
+          (a, b) =>
+            Date.parse(a.createdAt ?? "") - Date.parse(b.createdAt ?? "")
+        )[0];
+    for (const duplicate of duplicateGroup) {
+      if (
+        duplicate.intentId === survivor.intentId ||
+        !isWorkflowHandoffActiveStatus(duplicate.status)
+      ) {
+        continue;
+      }
+      await transitionWorkflowHandoffIntent({
+        projectRoot: params.projectRoot,
+        intentId: duplicate.intentId,
+        toStatus: "superseded",
+        terminalReason: terminalIntent
+          ? "duplicate_idempotency_key_already_terminal"
+          : "duplicate_idempotency_key_superseded",
+        summary: terminalIntent
+          ? "Superseded duplicate handoff because the same idempotency key already reached a terminal state."
+          : "Superseded duplicate handoff and kept the canonical active handoff for this idempotency key.",
+      });
+      await appendWorkflowHandoffEvent({
+        projectRoot: params.projectRoot,
+        projectId: duplicate.projectId,
+        intentId: duplicate.intentId,
+        idempotencyKey: duplicate.idempotencyKey,
+        kind: "duplicate_intent_superseded",
+        fromStatus: duplicate.status,
+        toStatus: "superseded",
+        summary:
+          "Handoff maintenance removed a duplicate active intent for the same idempotency key.",
+        details: {
+          survivorIntentId: survivor.intentId,
+          survivorStatus: survivor.status,
+        },
+      });
+      result.supersededIntentIds.push(duplicate.intentId);
+    }
+  }
 
   for (const intent of store.intents) {
     if (

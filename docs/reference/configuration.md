@@ -18,6 +18,8 @@
 - `papernexusApiTokenEnv`
 - `papernexusApiTokenSource`
 - `papernexusSharedCorpus`
+- `papernexusSshTarget`
+- `papernexusRemoteStagingRoot`
 
 ## 2. 这些配置分别影响什么
 
@@ -72,6 +74,10 @@
 
 控制 graph presence 和 auto iterator 应该对齐哪一个共享语料库。这个字段很关键，因为它避免系统在远程环境中错误使用内部默认 corpus。
 
+### `papernexusSshTarget` / `papernexusRemoteStagingRoot`
+
+远端 PaperNexus HTTP MCP 负责 graph 查询时，workflow 仍可能在本机生成 staged PDF/Markdown。`papernexusSshTarget` 指定远端主机，例如 `user@host`；`papernexusRemoteStagingRoot` 指定远端 staging 根目录，例如 `/tmp/papernexus-import-staging`。这两个字段会同时传给 batch import、graph-build source catch-up 和直接 batch worker，避免同一批论文在不同入口使用不同上传路径。
+
 ## 3. 推荐调参方向
 
 | 目标 | 主要调节项 |
@@ -82,3 +88,4 @@
 | 强化越界保护 | `enforceWorkflowBoundaries` |
 | 稳定多频道多项目 | `enableChannelProjectBindings` |
 | 改善远程图谱一致性 | `papernexusAccessMode` + `papernexusSharedCorpus` |
+| 远端 PaperNexus 导入本机 staged 文件 | `papernexusSshTarget` + `papernexusRemoteStagingRoot` |
