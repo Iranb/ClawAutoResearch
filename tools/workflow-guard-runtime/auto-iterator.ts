@@ -143,6 +143,7 @@ type ProjectsStateLike = {
 
 const AUTO_ITERATOR_GRAPH_REFRESH_MIN_INTERVAL_MS = 15_000;
 const TRANSITION_BOOTSTRAP_PREP_STAGES = new Set([
+  "code",
   "experiment",
   "analyze",
   "review",
@@ -150,6 +151,7 @@ const TRANSITION_BOOTSTRAP_PREP_STAGES = new Set([
   "submit",
 ]);
 const EXPERIMENT_LOCAL_TARGET_READY_COMMIT_STAGES = new Set([
+  "code",
   "experiment",
   "analyze",
   "review",

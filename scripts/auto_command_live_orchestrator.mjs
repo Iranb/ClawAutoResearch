@@ -452,6 +452,89 @@ function workflowProgressFingerprint(manifest) {
   });
 }
 
+function normalizedRuntimeEntries(store) {
+  return Array.isArray(store?.entries) ? store.entries : [];
+}
+
+function discussionRoundFingerprint(store) {
+  const round = store?.currentRound;
+  if (!round || typeof round !== "object") {
+    return null;
+  }
+  return {
+    roundId: round.roundId ?? null,
+    stage: round.stage ?? null,
+    status: round.status ?? null,
+    packetFingerprint: round.packetFingerprint ?? null,
+    aggregateStatus: round.aggregate?.status ?? null,
+    attempts: Array.isArray(round.attempts)
+      ? round.attempts.map((attempt) => ({
+          reviewerRole: attempt?.reviewerRole ?? null,
+          queueKey: attempt?.queueKey ?? null,
+          runId: attempt?.runId ?? null,
+          status: attempt?.status ?? null,
+          completedAt: attempt?.completedAt ?? null,
+          error: attempt?.error ?? null,
+        }))
+      : [],
+  };
+}
+
+export async function workflowRuntimeProgressFingerprint(projectRoot) {
+  const runtimeDir = path.join(projectRoot, ".openclaw-research");
+  const [queue, sessions, handoffs, autoDiscussion, codeReview] = await Promise.all([
+    readJsonIfExists(path.join(runtimeDir, "workflow-runtime-queue.json")),
+    readJsonIfExists(path.join(runtimeDir, "workflow-runtime-sessions.json")),
+    readJsonIfExists(path.join(runtimeDir, "workflow-handoff-intents.json")),
+    readJsonIfExists(path.join(runtimeDir, "auto-mode-discussion-state.json")),
+    readJsonIfExists(path.join(runtimeDir, "code-review-state.json")),
+  ]);
+  const queueEntries = normalizedRuntimeEntries(queue).map((entry) => ({
+    queueKey: entry?.queueKey ?? null,
+    kind: entry?.kind ?? null,
+    ownerAgent: entry?.ownerAgent ?? entry?.owner_agent ?? entry?.agent ?? null,
+    status: entry?.status ?? null,
+    runId: entry?.runId ?? entry?.run_id ?? null,
+    attemptCount: entry?.attemptCount ?? entry?.attempt_count ?? null,
+    nextRetryAt: entry?.nextRetryAt ?? entry?.next_retry_at ?? null,
+    lastError: entry?.lastError ?? entry?.last_error ?? entry?.error ?? null,
+  }));
+  const sessionEntries = normalizedRuntimeEntries(sessions).map((entry) => ({
+    sessionKey: entry?.sessionKey ?? entry?.session_key ?? null,
+    queueKey: entry?.queueKey ?? entry?.queue_key ?? null,
+    kind: entry?.kind ?? null,
+    ownerAgent: entry?.ownerAgent ?? entry?.owner_agent ?? entry?.agentId ?? null,
+    status: entry?.status ?? null,
+    runId: entry?.runId ?? entry?.run_id ?? null,
+    lastFinishedAt: entry?.lastFinishedAt ?? entry?.last_finished_at ?? null,
+    lastError: entry?.lastError ?? entry?.last_error ?? null,
+  }));
+  const handoffEntries = (Array.isArray(handoffs?.intents) ? handoffs.intents : []).map(
+    (entry) => ({
+      intentId: entry?.intentId ?? entry?.intent_id ?? entry?.id ?? null,
+      stage: entry?.stageAfter ?? entry?.stage_after ?? entry?.stage ?? null,
+      ownerAfter: entry?.ownerAfter ?? entry?.owner_after ?? entry?.toRole ?? null,
+      status: entry?.status ?? null,
+      queueKey: entry?.queueKey ?? entry?.queue_key ?? null,
+      updatedAt: entry?.updatedAt ?? entry?.updated_at ?? null,
+    })
+  );
+  return JSON.stringify({
+    queueEntries,
+    sessionEntries,
+    handoffEntries,
+    autoDiscussion: {
+      updatedAt: autoDiscussion?.updatedAt ?? null,
+      roundsStartedByFingerprint: autoDiscussion?.roundsStartedByFingerprint ?? null,
+      currentRound: discussionRoundFingerprint(autoDiscussion),
+    },
+    codeReview: {
+      updatedAt: codeReview?.updatedAt ?? null,
+      currentRound: discussionRoundFingerprint(codeReview),
+    },
+  });
+}
+
 export function buildLiveConversationId(lane, date = new Date()) {
   const prefix = lane === "survey" ? "gcd-survey-live" : "gcd-research-live";
   const timestamp = date.toISOString().replaceAll(":", "").replace(/\.\d+Z$/, "Z");
@@ -749,10 +832,13 @@ async function withTimeout(promise, timeoutMs, label) {
   }
 }
 
-async function waitForProgress(params) {
+export async function waitForProgress(params) {
   const startedAt = Date.now();
   let latestManifest = params.baselineManifest;
   const baselineFingerprint = workflowProgressFingerprint(params.baselineManifest);
+  const baselineRuntimeFingerprint = await workflowRuntimeProgressFingerprint(
+    params.projectRoot
+  );
   while (Date.now() - startedAt < params.timeoutMs) {
     latestManifest = await readManifest(params.projectRoot);
     const currentStage = String(latestManifest.current_stage ?? "");
@@ -771,6 +857,12 @@ async function waitForProgress(params) {
     }
     if (workflowProgressFingerprint(latestManifest) !== baselineFingerprint) {
       return { progressed: true, manifest: latestManifest, reason: "workflow_state_changed" };
+    }
+    const latestRuntimeFingerprint = await workflowRuntimeProgressFingerprint(
+      params.projectRoot
+    );
+    if (latestRuntimeFingerprint !== baselineRuntimeFingerprint) {
+      return { progressed: true, manifest: latestManifest, reason: "runtime_state_changed" };
     }
     await sleep(params.pollMs);
   }

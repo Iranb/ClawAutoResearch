@@ -6496,6 +6496,61 @@ test("auto iterator materializes a local coder experiment bundle when code stage
   await fs.access(path.join(bundleDir, "README.md"));
 });
 
+test("auto iterator bootstraps a local coder bundle while committing plan to code", async (t) => {
+  const projectRoot = await makeTempProject();
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  const { trackId } = await seedProjectReadyForCode(projectRoot);
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.current_stage = "plan";
+  manifest.current_micro_stage = "implementation_requested";
+  manifest.owner_agent = "orchestrator";
+  manifest.orchestration_state = {
+    status: "running",
+    current_owner: "orchestrator",
+    next_owner: "coder",
+    next_transition_candidate: "code",
+    retry_budget_remaining: 2,
+    last_contract_eval_result: "pass",
+  };
+  await writeJson(manifestPath, manifest);
+
+  const result = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+  });
+
+  const bundleDir = path.join(
+    projectRoot,
+    "coder",
+    "experiments",
+    trackId,
+    "exp-1__local_consistency_debiasing_probe"
+  );
+  const updatedManifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+
+  assert.equal(result.stageBefore, "plan");
+  assert.equal(result.stageAfter, "code");
+  assert.equal(result.ownerAfter, "coder");
+  assert.equal(result.pendingHandoff, false);
+  assert.ok(
+    result.materializedArtifacts.some(
+      (artifact) => artifact.contract === "code_experiment_bundle"
+    )
+  );
+  assert.equal(updatedManifest.current_stage, "code");
+  assert.equal(updatedManifest.owner_agent, "coder");
+  assert.equal(updatedManifest.orchestration_state?.handoff_phase, "idle");
+  await fs.access(path.join(projectRoot, "coder", "EXPERIMENT_INDEX.md"));
+  await fs.access(path.join(bundleDir, "train.py"));
+  await fs.access(path.join(bundleDir, "README.md"));
+  await fs.access(path.join(bundleDir, "EXPERIMENT_MANIFEST.json"));
+});
+
 test("auto iterator repairs coder experiment bundles that still carry the stale track registry contract", async (t) => {
   const projectRoot = await makeTempProject();
   t.after(async () => {

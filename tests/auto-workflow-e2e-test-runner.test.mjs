@@ -25,6 +25,8 @@ import {
   deriveStageCommand,
   detectLiveSubstantiveRevisionTerminal,
   readLiveWorkflowActivation,
+  waitForProgress,
+  workflowRuntimeProgressFingerprint,
 } from "../scripts/auto_command_live_orchestrator.mjs";
 
 const execFile = promisify(execFileCb);
@@ -405,6 +407,69 @@ test("live E2E harness detects local workflow activation without Discord acknowl
       reason: "agent_session_active",
     }
   );
+});
+
+test("live E2E progress waits treat runtime queue changes as observable progress", async (t) => {
+  const projectRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "openclaw-research-live-runtime-progress-")
+  );
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  const manifest = {
+    project_id: "runtime-progress-project",
+    current_stage: "code",
+    owner_agent: "coder",
+    next_action: "Wait for local code review fallback.",
+  };
+  await fs.mkdir(path.join(projectRoot, ".openclaw-research"), { recursive: true });
+  await fs.writeFile(
+    path.join(projectRoot, "PROJECT_MANIFEST.json"),
+    `${JSON.stringify(manifest, null, 2)}\n`,
+    "utf8"
+  );
+
+  const before = await workflowRuntimeProgressFingerprint(projectRoot);
+  const delayedRuntimeWrite = new Promise((resolve, reject) => {
+    setTimeout(() => {
+      fs.writeFile(
+        path.join(projectRoot, ".openclaw-research", "workflow-runtime-queue.json"),
+        `${JSON.stringify(
+          {
+            schemaVersion: 1,
+            entries: [
+              {
+                queueKey: "openclaw-research:auto-discussion:runtime-progress-project:reviewer:1",
+                kind: "workflow_auto_discussion",
+                ownerAgent: "reviewer",
+                projectId: "runtime-progress-project",
+                projectRoot,
+                status: "running",
+                runId: "review-run-1",
+              },
+            ],
+          },
+          null,
+          2
+        )}\n`,
+        "utf8"
+      ).then(resolve, reject);
+    }, 100);
+  });
+
+  const progress = await waitForProgress({
+    projectRoot,
+    baselineManifest: manifest,
+    timeoutMs: 2_000,
+    pollMs: 50,
+  });
+  await delayedRuntimeWrite;
+  const after = await workflowRuntimeProgressFingerprint(projectRoot);
+
+  assert.notEqual(after, before);
+  assert.equal(progress.progressed, true);
+  assert.equal(progress.reason, "runtime_state_changed");
 });
 
 test("live E2E harness treats durable reviewer revision as a terminal real-run outcome", async (t) => {
