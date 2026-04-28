@@ -18,6 +18,7 @@ import {
   sourceProviderRank as sourceProviderRankShared,
 } from "./paper-source-contract";
 import { writePapernexusProgressFromManifest } from "./papernexus-progress";
+import { certifyPapernexusTaskForProject } from "./papernexus-task-certification";
 import {
   DEFAULT_SHARED_PAPERNEXUS_CORPUS,
   resolvePapernexusSharedCorpusFallback,
@@ -1982,6 +1983,54 @@ function serializePresentPapers(presentPapers: GraphPresenceMatch[]) {
   }));
 }
 
+function normalizeGraphPresenceMatchMethod(
+  value: string | null
+): GraphPresenceMatch["matchedBy"] {
+  return value === "arxiv" ||
+    value === "doi" ||
+    value === "source_path" ||
+    value === "paper_source_index" ||
+    value === "title"
+    ? value
+    : "title";
+}
+
+function normalizeGraphPresenceSourceKind(
+  value: string | null
+): GraphPresenceMatch["sourceKind"] {
+  return value === "markdown" || value === "pdf" ? value : "unknown";
+}
+
+function deserializePresentPapers(value: unknown): GraphPresenceMatch[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((entry) => asRecord(entry))
+    .filter((entry): entry is Record<string, unknown> => Boolean(entry))
+    .map((entry) => ({
+      canonicalId: pickString(entry, ["canonical_id", "canonicalId"]) ?? "unknown",
+      title: pickString(entry, ["title"]),
+      sourceKind: normalizeGraphPresenceSourceKind(
+        pickString(entry, ["source_kind", "sourceKind"])
+      ),
+      sourceProvider: pickString(entry, ["source_provider", "sourceProvider"]),
+      retrievalProviders: asStringArray(entry.retrieval_providers ?? entry.retrievalProviders),
+      matchedBy: normalizeGraphPresenceMatchMethod(
+        pickString(entry, ["matched_by", "matchedBy"])
+      ),
+      corpusPaperId: pickString(entry, ["corpus_paper_id", "corpusPaperId"]),
+      corpusPaperTitle: pickString(entry, [
+        "corpus_paper_title",
+        "corpusPaperTitle",
+      ]),
+      corpusSourceKey: pickString(entry, [
+        "corpus_source_key",
+        "corpusSourceKey",
+      ]),
+    }));
+}
+
 function toMissingPaper(expected: ExpectedPaper): GraphPresenceMissingPaper {
   return {
     canonicalId: expected.canonicalId,
@@ -2653,6 +2702,7 @@ async function checkGraphPresenceViaRemoteStatus(params: {
         refreshReason,
       })
     : null;
+  const presentPapers = deserializePresentPapers(statusRecord?.present_papers);
 
   const result: GraphPresenceCheckResult = {
     projectRoot: params.projectRoot,
@@ -2697,7 +2747,7 @@ async function checkGraphPresenceViaRemoteStatus(params: {
     repairRequired,
     repairReason,
     repairTargetCorpus: repairRequired ? repairTargetCorpus : null,
-    presentPapers: [],
+    presentPapers,
     missingPapers: status === "ready" ? [] : missingPapers,
     manifestUpdated: false,
   };
@@ -2782,6 +2832,11 @@ export async function checkGraphPresenceForWorkflow(params: {
       sharedCorpus,
       remoteAccess: params.remoteAccess ?? {},
     });
+    const certification = await certifyPapernexusTaskForProject({
+      projectRoot,
+      checkedAt,
+      graphPresenceResult: result,
+    });
 
     if (params.updateManifest !== false) {
       const paperIngestion = asRecord(manifest.paper_ingestion) ?? {};
@@ -2798,6 +2853,12 @@ export async function checkGraphPresenceForWorkflow(params: {
         repair_required: result.repairRequired ? true : false,
         repair_reason: result.repairRequired ? result.repairReason : null,
         repair_target_corpus: result.repairRequired ? result.repairTargetCorpus : null,
+        papernexus_certification_status: certification.status,
+        papernexus_claim_level: certification.claim_level,
+        papernexus_source_backed_graph_claim:
+          certification.source_backed_graph_claim,
+        papernexus_certification_path: certification.report_path,
+        papernexus_certification_limitations: certification.limitations,
       };
       await saveManifest(projectRoot, manifest);
       await writePapernexusProgressFromManifest({
@@ -2999,6 +3060,11 @@ export async function checkGraphPresenceForWorkflow(params: {
       meta: corpusMeta ?? null,
     },
   });
+  const certification = await certifyPapernexusTaskForProject({
+    projectRoot,
+    checkedAt,
+    graphPresenceResult: finalizedResult,
+  });
 
   if (params.updateManifest !== false) {
     const paperIngestion = asRecord(manifest.paper_ingestion) ?? {};
@@ -3015,6 +3081,12 @@ export async function checkGraphPresenceForWorkflow(params: {
       repair_required: finalizedResult.repairRequired ? true : false,
       repair_reason: finalizedResult.repairRequired ? finalizedResult.repairReason : null,
       repair_target_corpus: finalizedResult.repairRequired ? finalizedResult.repairTargetCorpus : null,
+      papernexus_certification_status: certification.status,
+      papernexus_claim_level: certification.claim_level,
+      papernexus_source_backed_graph_claim:
+        certification.source_backed_graph_claim,
+      papernexus_certification_path: certification.report_path,
+      papernexus_certification_limitations: certification.limitations,
     };
     await saveManifest(projectRoot, manifest);
     await writePapernexusProgressFromManifest({

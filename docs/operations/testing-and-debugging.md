@@ -505,6 +505,26 @@ node scripts/run_auto_command_end_to_end.mjs \
 
 如果最终 `E2E_RUN_REPORT.md` 不是 `final_verdict: pass`，runner 会以失败退出；这让它适合直接放进本地验证或 CI-like smoke check。
 
+每个被测项目的 `.openclaw-research/` 目录还会生成本地可审计产物：
+
+- `E2E_RUN_REPORT.md`：面向人的最终 verdict、artifact coverage、review closeout、runtime safety。
+- `E2E_RUN_SCORECARD.json`：面向测试/脚本的结构化 scorecard，包含 `quality_score_100`、`claim_strength_cap`、文献覆盖、实验结果图表来源、reviewer 分数、reproducibility 和 runtime safety。
+- `E2E_PROGRESS_NARRATIVE.md`：面向调试的短叙事，直接列出当前 stage/owner、证据快照、失败 required checks 和下一步动作。
+- `progress_chart.json` / `progress_chart.html`：从 scorecard、runtime timeline 和 handoff events 派生的进度图表；JSON 供自动测试消费，HTML 供人工快速查看质量组件、timeline 和 breakthrough annotations。
+- `E2E_RUN_LEDGER.jsonl`：每次 harness 运行追加一行 run summary，用来比较多次 no-Discord 测试的 verdict、claim cap、score、domain pack 和失败检查数量。
+- `E2E_DASHBOARD.html`：只读本地 dashboard，直接链接 scorecard、narrative、timeline、progress chart、ledger、PaperNexus certification 和平台画像，不需要 Discord thread 才能判断运行状态。
+- `E2E_BENCHMARK_ADAPTER_SCORECARD.json`：统一 benchmark adapter fixture 与本地实验结果，固定 `baseline_score`、`candidate_score`、`holdout_score`、`iterations`、`cost_usd` 和 guardrail，避免裸 benchmark 分数绕过 claim/evidence gate。
+- `E2E_DOMAIN_EVALUATOR_CONTRACT.json`：记录当前运行使用的 domain evaluator pack，例如 `gcd_ml_experiment`、`systematic_review`、`proof_checker` 或 `kernel_optimization`，并列出 metric、holdout、artifact expectations 和 failure semantics。
+- `PLATFORM_PROFILE.json`：记录本次 E2E 的 runtime/platform profile 和 CPU/MLX/CUDA/WebGPU capability matrix；未知硬件只标记为 `unknown_not_probed`，不会伪造可复现实验能力。
+- `E2E_ARTIFACT_CHECKLIST.json`：required artifact 的机器可读 presence gate。
+- `E2E_STATE_TIMELINE.jsonl`：runtime/handoff 事件时间线。
+
+Graph build 结束后还会写入 `graph/PAPERNEXUS_TASK_CERTIFICATION.json`，并在 scorecard、narrative 和 progress chart 中摘要展示。这个文件区分三类常见状态：
+
+- `remote_corpus_summary`：远端 corpus 计数健康，但缺少逐篇论文 source span；只能作为 partial claim。
+- `paper_index_confirmed`：逐篇 paper index 已确认，但 source span 不完整；不能声称 source-backed graph。
+- `source_backed_graph`：逐篇论文具备 source-backed graph evidence；这是 no-Discord E2E 里允许继续强化论文 claim 的 PaperNexus 状态。
+
 真实模式的前置条件：
 
 - 本机有 `openclaw` CLI

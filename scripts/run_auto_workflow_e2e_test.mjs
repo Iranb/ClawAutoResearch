@@ -1016,8 +1016,19 @@ function summarizeLane(name, value) {
     strictContent: value.harness?.strictContent ?? null,
     failureReason: value.failureReason ?? value.harness?.failureReason ?? value.harness?.error ?? null,
     reportPath: value.harness?.reportPath ?? null,
+    scorecardPath: value.harness?.scorecardPath ?? null,
+    progressNarrativePath: value.harness?.progressNarrativePath ?? null,
+    progressChartPath: value.harness?.progressChartPath ?? null,
+    progressChartHtmlPath: value.harness?.progressChartHtmlPath ?? null,
+    runLedgerPath: value.harness?.runLedgerPath ?? null,
+    dashboardPath: value.harness?.dashboardPath ?? null,
+    benchmarkAdapterScorecardPath: value.harness?.benchmarkAdapterScorecardPath ?? null,
+    domainEvaluatorContractPath: value.harness?.domainEvaluatorContractPath ?? null,
+    platformProfilePath: value.harness?.platformProfilePath ?? null,
     checklistPath: value.harness?.checklistPath ?? null,
     timelinePath: value.harness?.timelinePath ?? null,
+    qualityScore100: value.harness?.qualityScore100 ?? value.harness?.scorecard?.quality_score?.score_100 ?? null,
+    claimStrengthCap: value.harness?.claimStrengthCap ?? value.harness?.scorecard?.verdict?.claim_strength_cap ?? null,
     turnCount: Array.isArray(value.turns) ? value.turns.length : null,
     turns: Array.isArray(value.turns)
       ? value.turns.map((turn) => ({
@@ -1275,7 +1286,16 @@ function formatHumanSummary(summary) {
       "",
       `${lane.lane}: ${lane.finalVerdict ?? "missing"}`,
       `project: ${lane.projectRoot ?? "unknown"}`,
-      `report: ${lane.reportPath ?? "unknown"}`
+      `report: ${lane.reportPath ?? "unknown"}`,
+      `scorecard: ${lane.scorecardPath ?? "unknown"}`,
+      `progress chart: ${lane.progressChartHtmlPath ?? lane.progressChartPath ?? "unknown"}`,
+      `dashboard: ${lane.dashboardPath ?? "unknown"}`,
+      `run ledger: ${lane.runLedgerPath ?? "unknown"}`,
+      `benchmark adapter: ${lane.benchmarkAdapterScorecardPath ?? "unknown"}`,
+      `domain evaluator: ${lane.domainEvaluatorContractPath ?? "unknown"}`,
+      `platform profile: ${lane.platformProfilePath ?? "unknown"}`,
+      `claim cap: ${lane.claimStrengthCap ?? "unknown"}`,
+      `quality score: ${lane.qualityScore100 ?? "unknown"}`
     );
     if (lane.turnCount !== null) {
       lines.push(`turns: ${lane.turnCount}`);
