@@ -293,6 +293,7 @@ const LITERATURE_DISCOVERY_PREP_STAGES = new Set([
   "write",
   "submit",
 ]);
+const LITERATURE_DISCOVERY_REQUISITION_GRACE_MS = 90_000;
 const WRITING_SUPPORT_PREP_STAGES = new Set(["plan", "write", "review", "submit"]);
 const INNOVATION_SYNTHESIS_PREP_STAGES = new Set(["write", "review", "submit"]);
 const RESULTS_STORYLINE_PREP_STAGES = new Set(["write", "review", "submit"]);
@@ -1300,6 +1301,158 @@ async function reconcileSatisfiedLiteratureDiscoveryRequisition(params: {
   return { manifest, updated: true };
 }
 
+function isGraphPresenceReady(manifest: ManifestLike): boolean {
+  return readManifestStatus(manifest.paper_ingestion, [
+    "graph_presence_status",
+    "graphPresenceStatus",
+  ]) === "ready";
+}
+
+function isStaleRunningLiteratureDiscoveryRequisition(
+  request: ReturnType<typeof normalizePaperIngestionState>["queuedRequests"][number],
+  nowMs: number
+): boolean {
+  if (!isLiteratureDiscoveryTriggerKind(request.triggerKind)) {
+    return false;
+  }
+  if (request.requestKind !== "requisition") {
+    return false;
+  }
+  if (!["launching", "running"].includes(request.status)) {
+    return false;
+  }
+  const reference = request.startedAt ?? request.lastAttemptAt ?? request.updatedAt;
+  const referenceMs = parseTimestampMs(reference);
+  return (
+    referenceMs !== null &&
+    nowMs - referenceMs >= LITERATURE_DISCOVERY_REQUISITION_GRACE_MS
+  );
+}
+
+function deriveLiteratureDiscoverySatisfactionReportPath(request: {
+  requestId: string;
+  manifestPath: string | null;
+}): string {
+  if (request.manifestPath?.includes("/")) {
+    return `${request.manifestPath.split("/").slice(0, -1).join("/")}/REQUISITION_SATISFACTION_REPORT.json`;
+  }
+  return `researcher/literature-discovery/requisition/${request.requestId}/REQUISITION_SATISFACTION_REPORT.json`;
+}
+
+async function reconcileStaleLiteratureDiscoveryRequisition(params: {
+  projectRoot: string;
+  manifest: ManifestLike;
+  stage: string | null;
+}): Promise<{ manifest: ManifestLike; updated: boolean }> {
+  if (params.stage !== "graph_build" || !isGraphPresenceReady(params.manifest)) {
+    return { manifest: params.manifest, updated: false };
+  }
+
+  const state = normalizePaperIngestionState(params.manifest.paper_ingestion);
+  const now = new Date().toISOString();
+  const nowMs = Date.parse(now);
+  const staleRequests = state.queuedRequests.filter((request) =>
+    isStaleRunningLiteratureDiscoveryRequisition(request, nowMs)
+  );
+  if (staleRequests.length === 0) {
+    return { manifest: params.manifest, updated: false };
+  }
+
+  const packetPath = resolveProjectArtifactPath(
+    params.projectRoot,
+    DEFAULT_LITERATURE_DISCOVERY_PACKET_PATH
+  );
+  const packet =
+    (await readJsonIfExists<Record<string, unknown>>(packetPath ?? "")) ?? {};
+  const selectedPapers = Array.isArray(packet.selected_papers)
+    ? packet.selected_papers
+    : [];
+  const candidatePapers = Array.isArray(packet.candidate_papers)
+    ? packet.candidate_papers
+    : [];
+  const graphPresencePath =
+    readManifestString(params.manifest.paper_ingestion, [
+      "graph_presence_report_path",
+      "graphPresenceReportPath",
+    ]) ?? "graph/GRAPH_PRESENCE_CHECK.json";
+
+  const updatedRequestIds = new Set(staleRequests.map((request) => request.requestId));
+  for (const request of staleRequests) {
+    const reportPath = deriveLiteratureDiscoverySatisfactionReportPath(request);
+    const resolvedReportPath = resolveProjectArtifactPath(params.projectRoot, reportPath);
+    if (resolvedReportPath) {
+      await writeJsonEnsured(resolvedReportPath, {
+        schema_version: 1,
+        status: "warning",
+        decision: "degraded_satisfied_current_graph",
+        request_id: request.requestId,
+        trigger_kind: request.triggerKind,
+        graph_presence_status: "ready",
+        graph_presence_report_path: graphPresencePath,
+        selected_paper_count: selectedPapers.length,
+        candidate_paper_count: candidatePapers.length,
+        reason:
+          "Graph presence is already ready and the bounded no-Discord literature discovery requisition did not produce additional durable import evidence within the local grace window.",
+        limitations: [
+          "No additional PaperNexus import was credited to this requisition.",
+          "Downstream writing/review may continue using the current graph while preserving this warning for audit.",
+        ],
+        created_at: now,
+        updated_at: now,
+      });
+    }
+  }
+
+  const queuedRequests = state.queuedRequests.map((request) => {
+    if (!updatedRequestIds.has(request.requestId)) {
+      return request;
+    }
+    const reportPath = deriveLiteratureDiscoverySatisfactionReportPath(request);
+    return {
+      ...request,
+      status: "completed" as const,
+      updatedAt: now,
+      finishedAt: request.finishedAt ?? now,
+      lastError: null,
+      validationStatus: "warning" as const,
+      validationSummary:
+        "No-Discord literature discovery grace window elapsed after graph presence was ready; current graph accepted with a durable warning report.",
+      validationReportPath: reportPath,
+      detail:
+        request.detail ??
+        "Literature discovery request was degradably satisfied by the current ready graph state.",
+      deadLetterAt: null,
+      deadLetterReason: null,
+    };
+  });
+
+  const paperIngestionRecord =
+    params.manifest.paper_ingestion &&
+    typeof params.manifest.paper_ingestion === "object" &&
+    !Array.isArray(params.manifest.paper_ingestion)
+      ? (params.manifest.paper_ingestion as Record<string, unknown>)
+      : {};
+  const manifest = {
+    ...params.manifest,
+    paper_ingestion: {
+      ...paperIngestionRecord,
+      ...serializePaperIngestionState({
+        ...state,
+        runtimeStatus: "ready",
+        waitingReason: null,
+        queuedRequests,
+        lastUpdatedAt: now,
+      }),
+    },
+  };
+  await writeJsonEnsured(
+    resolveProjectArtifactPath(params.projectRoot, "PROJECT_MANIFEST.json") ??
+      `${params.projectRoot}/PROJECT_MANIFEST.json`,
+    manifest
+  );
+  return { manifest, updated: true };
+}
+
 async function shouldMaterializeWritingSupport(params: {
   manifest: ManifestLike;
   stage: string | null;
@@ -1454,6 +1607,19 @@ function readManifestStatus(value: unknown, fields: string[]) {
     const normalized = normalizeStageValue(record[field]);
     if (normalized) {
       return normalized;
+    }
+  }
+  return null;
+}
+
+function readManifestString(value: unknown, fields: string[]) {
+  const record = value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+  for (const field of fields) {
+    const raw = record[field];
+    if (typeof raw === "string" && raw.trim()) {
+      return raw.trim();
     }
   }
   return null;
@@ -1843,6 +2009,27 @@ export async function maybePrepareWorkflowStageContracts(params: {
     emittedHookEvents.push({
       hookPoint: "artifact_materialized",
       contract: "literature_discovery_requisition_reconciled",
+      artifactPath: null,
+    });
+  }
+  const staleLiteratureDiscoveryReconciliation =
+    await reconcileStaleLiteratureDiscoveryRequisition({
+      projectRoot,
+      manifest,
+      stage: params.stage,
+    });
+  if (staleLiteratureDiscoveryReconciliation.updated) {
+    manifest = staleLiteratureDiscoveryReconciliation.manifest;
+    materializedContracts.push("literature_discovery_requisition_degraded");
+    materializedArtifacts.push({
+      contract: "literature_discovery_requisition_degraded",
+      artifactPath: null,
+      fingerprint: null,
+      action: "reconciled",
+    });
+    emittedHookEvents.push({
+      hookPoint: "artifact_materialized",
+      contract: "literature_discovery_requisition_degraded",
       artifactPath: null,
     });
   }

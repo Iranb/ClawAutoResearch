@@ -2106,6 +2106,141 @@ test("runWorkflowRuntimeMaintenancePass consumes queued handoff queue entries an
   assert.match(handoffStore.intents[0].toSessionKey ?? "", /^agent:coder:/);
 });
 
+test("runWorkflowRuntimeMaintenancePass supersedes queued handoff replays that no longer match live stage routing", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  const intentId = "intent-stale-code-demo";
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+  await makeProject(projectRoot, "stale-code-handoff");
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "stale-code-handoff",
+    current_stage: "graph_build",
+    owner_agent: "researcher",
+  });
+  await migrateWorkflowRuntimeState({
+    projectRoot,
+    projectId: "stale-code-handoff",
+    compatibilityMode: "sessions_spawn_runtime",
+    reason: "test_bootstrap",
+  });
+  await writeJson(path.join(projectRoot, ".openclaw-research", "workflow-handoff-intents.json"), {
+    schemaVersion: 1,
+    projectRoot,
+    projectId: "stale-code-handoff",
+    updatedAt: "2026-04-21T00:00:00.000Z",
+    intents: [
+      {
+        schemaVersion: 1,
+        intentId,
+        idempotencyKey: "stale-code-demo",
+        projectId: "stale-code-handoff",
+        projectRoot,
+        workflowLine: "experiment",
+        stage: "code",
+        fromRole: "researcher",
+        fromSessionKey: "agent:researcher:discord:group:paper-lab",
+        toRole: "coder",
+        toSessionKey: null,
+        reason: "stage_owner_change",
+        priority: "normal",
+        sourceTaskId: null,
+        targetTaskId: null,
+        artifactReceiptId: null,
+        failureId: null,
+        failureFingerprint: null,
+        repairLineageId: null,
+        status: "queued",
+        stageBefore: "plan",
+        stageAfter: "code",
+        executionId: "exec-stale-code-demo",
+        sessionBindingKey: "discord:group:paper-lab",
+        preferredSessionKeys: ["agent:coder:discord:group:paper-lab"],
+        deliveryPlan: {
+          channels: ["runtime_queue"],
+          requireAck: true,
+          ackDeadlineAt: "2026-04-21T00:10:00.000Z",
+          fallbackAfterMs: 600000,
+          maxAttemptsTotal: 4,
+          maxAttemptsByChannel: { runtime_queue: 1 },
+          staleClaimAfterMs: 900000,
+        },
+        deliveryAttempts: [],
+        dispatchedAt: null,
+        acknowledgedAt: null,
+        claimedAt: null,
+        activatedAt: null,
+        claimLeaseExpiresAt: null,
+        terminalReason: null,
+        createdAt: "2026-04-21T00:00:00.000Z",
+        updatedAt: "2026-04-21T00:00:00.000Z",
+        expiresAt: "2126-04-21T01:00:00.000Z",
+        summary: "Queued stale coder handoff.",
+        command: "/implement-experiment",
+        blockerSummary: null,
+        payload: {},
+      },
+    ],
+  });
+
+  await createWorkflowTransitionIntent({
+    projectRoot,
+    projectId: "stale-code-handoff",
+    queueKey: `handoff:${intentId}`,
+    source: "workflow_auto_stage",
+    entryType: "dispatch_task",
+    ownerAgent: "coder",
+    channelKey: "discord:group:paper-lab",
+    requesterSessionKey: "agent:researcher:discord:group:paper-lab",
+    preferredSessionKey: "agent:coder:discord:group:paper-lab",
+    family: "research",
+    kind: "workflow_stage_dispatch",
+    summary: "Replay the stale coder handoff.",
+    dispatchPayload: {
+      requesterChannel: "discord",
+      requesterAccountId: null,
+      preferredSessionKeys: ["agent:coder:discord:group:paper-lab"],
+      fromRole: "researcher",
+      toRole: "coder",
+      projectRoot,
+      projectId: "stale-code-handoff",
+      stage: "code",
+      summary: "Replay the stale coder handoff.",
+      command: "/implement-experiment",
+      mailboxMessageId: null,
+      requireMailboxAcknowledgement: true,
+      extraBody: "Continue only the assigned stage.",
+      waitTimeoutMs: 5000,
+      retryOnTimeout: true,
+      enableSpawnFallback: true,
+      useWorkflowHandoff: true,
+      autoModeActive: true,
+    },
+  });
+
+  const result = await runWorkflowRuntimeMaintenancePass({
+    projectRoot,
+    projectId: "stale-code-handoff",
+    workflowRuntime: {
+      async run() {
+        throw new Error("stale queued handoff should not replay");
+      },
+    },
+    staleSessionAgeMs: 0,
+  });
+
+  assert.equal(result.replayedQueueKeys.includes(`handoff:${intentId}`), false);
+  assert.equal(result.exhaustedQueueKeys.includes(`handoff:${intentId}`), true);
+  const queueStore = await readWorkflowRuntimeQueueStore(projectRoot);
+  const queueEntry = queueStore.entries.find((entry) => entry.queueKey === `handoff:${intentId}`);
+  assert.equal(queueEntry?.status, "failed");
+  assert.match(queueEntry?.lastError ?? "", /superseded by newer project routing/);
+  assert.match(queueEntry?.lastError ?? "", /current_stage=graph_build/);
+  assert.match(queueEntry?.lastError ?? "", /current_owner=researcher/);
+  const handoffStore = await readWorkflowHandoffIntentStore(projectRoot);
+  assert.equal(handoffStore.intents[0].status, "superseded");
+});
+
 test("runWorkflowRuntimeMaintenancePass refreshes experiment monitor and persists decision without a foreground agent", async (t) => {
   const projectRoot = await makeProjectRoot();
   const previousPath = process.env.PATH;

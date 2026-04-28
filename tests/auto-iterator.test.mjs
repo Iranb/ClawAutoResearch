@@ -4862,6 +4862,130 @@ test("auto iterator waits on queued literature discovery requisitions after grap
   );
 });
 
+test("auto iterator degrades stale running literature discovery requisitions once graph presence is ready", async (t) => {
+  const projectRoot = await makeTempProject();
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  const now = await seedSetupCompleteProject(projectRoot, "graph_build");
+  await writeText(path.join(projectRoot, "graph", "GRAPH_BUILD_REPORT.md"));
+  await writeJson(path.join(projectRoot, "graph", "PAPERNEXUS_STATUS.json"), {
+    status: "ready",
+    corpus_name: "GCD",
+    expected_paper_count: 1,
+    present_paper_count: 1,
+  });
+  await writeJson(path.join(projectRoot, "graph", "GRAPH_PRESENCE_CHECK.json"), {
+    status: "ready",
+    expected_paper_count: 1,
+    present_paper_count: 1,
+    missing_paper_count: 0,
+  });
+  await seedPaperSourceIndex(projectRoot, [
+    {
+      canonical_id: "arxiv:2501.00001",
+      arxiv_id: "2501.00001",
+      title: "Alpha Paper",
+      source_path: path.join(projectRoot, "researcher", "paper_source", "md", "2501.00001--alpha-paper.md"),
+    },
+  ]);
+  const sourceRoot = path.join(
+    projectRoot,
+    ".papernexus-home",
+    "corpora",
+    "shared-global-graph"
+  );
+  await seedGraphCorpus(projectRoot, [
+    {
+      sourceKey: path.join(sourceRoot, "md", "2501.00001--alpha-paper.md"),
+      inputPath: path.join(sourceRoot, "md", "2501.00001--alpha-paper.md"),
+      kind: "markdown",
+      paperId: "paper:alpha",
+      paperTitle: "Alpha Paper",
+      sourcePath: path.join(sourceRoot, "md", "2501.00001--alpha-paper.md"),
+      sourceMarkdownPath: path.join(sourceRoot, "md", "2501.00001--alpha-paper.md"),
+      activeInGraph: true,
+      canonicalSourceKey: path.join(sourceRoot, "md", "2501.00001--alpha-paper.md"),
+    },
+  ]);
+  await writeJson(
+    path.join(
+      projectRoot,
+      "researcher",
+      "literature-discovery",
+      "LITERATURE_DISCOVERY_PACKET.json"
+    ),
+    {
+      schema_version: 1,
+      discovery_id: "review-story-support-gap",
+      discovery_reason: "review_story_support_gap",
+      candidate_queries: [{ query: "gcd fixmatch limitation evidence" }],
+      candidate_papers: [],
+      selected_papers: [],
+      evidence_gap_closed: false,
+      required_stage_reentry: ["graph_build", "review"],
+    }
+  );
+  await seedReadyBrainstormCycle(projectRoot);
+
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  const staleStartedAt = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+  manifest.paper_ingestion = {
+    runtime_status: "waiting_import",
+    queued_requests: [
+      {
+        request_id: "review-story-support-gap-review-story-support-gap",
+        request_kind: "requisition",
+        status: "running",
+        wrapper: "pn_batch_import.py",
+        args: [],
+        trigger_kind: "review_literature_discovery",
+        manifest_path:
+          "researcher/literature-discovery/requisition/review-story-support-gap/DISCOVERY_REQUISITION.json",
+        summary: "review_story_support_gap",
+        created_at: staleStartedAt,
+        updated_at: staleStartedAt,
+        started_at: staleStartedAt,
+        attempt_count: 1,
+        last_run_id: "run:research-queue",
+        last_session_key: "agent:researcher:local:test:subagent:workflow-research-queue",
+      },
+    ],
+    graph_presence_checked_at: now,
+    graph_presence_status: "ready",
+    graph_presence_report_path: "graph/GRAPH_PRESENCE_CHECK.json",
+    graph_presence_expected_papers: 1,
+    graph_presence_present_papers: 1,
+    graph_presence_missing_papers: [],
+    refresh_required: false,
+  };
+  await writeJson(manifestPath, manifest);
+
+  const result = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+  });
+
+  const updatedManifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  const request = updatedManifest.paper_ingestion.queued_requests[0];
+  assert.equal(request.status, "completed");
+  assert.equal(request.validation_status, "warning");
+  assert.match(
+    request.validation_report_path,
+    /REQUISITION_SATISFACTION_REPORT\.json$/
+  );
+  await fs.access(path.join(projectRoot, request.validation_report_path));
+  assert.equal(result.stageBefore, "graph_build");
+  assert.equal(result.stageAfter, "frontier_mapping");
+  assert.doesNotMatch(
+    updatedManifest.blocking_reason ?? "",
+    /workflow-owned graph enrichment requisition is still active/i
+  );
+});
+
 test("auto iterator rejects completed literature requisitions without import evidence", async (t) => {
   const projectRoot = await makeTempProject();
   t.after(async () => {

@@ -184,6 +184,55 @@ function readRecord(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
+function buildDispatchSupersededByProjectRoutingReason(params: {
+  queueKey: string;
+  dispatchStage: string | null;
+  dispatchOwner: string | null;
+  currentStage: string | null;
+  currentOwner: string | null;
+}): string {
+  return [
+    `Workflow transition ${params.queueKey} was superseded by newer project routing.`,
+    params.dispatchStage ? `queued_stage=${params.dispatchStage}` : null,
+    params.dispatchOwner ? `queued_owner=${params.dispatchOwner}` : null,
+    params.currentStage ? `current_stage=${params.currentStage}` : null,
+    params.currentOwner ? `current_owner=${params.currentOwner}` : null,
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
+function isDispatchEntrySupersededByProjectRouting(params: {
+  entry: WorkflowRuntimeQueueEntry;
+  currentStage: string | null;
+  currentOwner: string | null;
+  pendingHandoffId: string | null;
+}): boolean {
+  if (
+    params.entry.entryType !== "dispatch_task" ||
+    !params.entry.dispatchPayload ||
+    !params.entry.queueKey.startsWith("handoff:")
+  ) {
+    return false;
+  }
+  const queuedIntentId = params.entry.queueKey.slice("handoff:".length);
+  if (params.pendingHandoffId && queuedIntentId === params.pendingHandoffId) {
+    return false;
+  }
+  const dispatchStage = readString(params.entry.dispatchPayload.stage);
+  const dispatchOwner = readString(params.entry.dispatchPayload.toRole);
+  if (!dispatchStage && !dispatchOwner) {
+    return false;
+  }
+  if (dispatchStage && params.currentStage && dispatchStage !== params.currentStage) {
+    return true;
+  }
+  if (dispatchOwner && params.currentOwner && dispatchOwner !== params.currentOwner) {
+    return true;
+  }
+  return false;
+}
+
 function readRecordArray(value: unknown): Record<string, unknown>[] {
   return Array.isArray(value)
     ? value
@@ -1864,6 +1913,30 @@ async function syncQueuedHandoffIntentAfterReplay(params: {
   });
 }
 
+async function supersedeQueuedHandoffIntent(params: {
+  projectRoot: string;
+  queueKey: string;
+  summary: string;
+}): Promise<void> {
+  if (!params.queueKey.startsWith("handoff:")) {
+    return;
+  }
+  const intentId = params.queueKey.slice("handoff:".length);
+  const intent = await findWorkflowHandoffIntent({
+    projectRoot: params.projectRoot,
+    intentId,
+  });
+  if (!intent || intent.status === "superseded") {
+    return;
+  }
+  await transitionWorkflowHandoffIntent({
+    projectRoot: params.projectRoot,
+    intentId,
+    toStatus: "superseded",
+    summary: params.summary,
+  });
+}
+
 async function recordBroadcastFailures(params: {
   projectRoot: string;
   projectId: string | null;
@@ -1948,6 +2021,11 @@ export async function runWorkflowRuntimeMaintenancePass(params: {
     path.join(projectRoot, "PROJECT_MANIFEST.json")
   );
   const currentStage = readString(manifest?.current_stage);
+  const currentOwner = readString(manifest?.owner_agent);
+  const orchestrationState = readRecord(manifest?.orchestration_state);
+  const pendingHandoffId = readString(
+    orchestrationState?.pending_handoff_id ?? orchestrationState?.pendingHandoffId
+  );
   const paperIngestion =
     manifest?.paper_ingestion &&
     typeof manifest.paper_ingestion === "object" &&
@@ -2116,6 +2194,61 @@ export async function runWorkflowRuntimeMaintenancePass(params: {
             expectedProjectRoot: projectRoot,
             boundProjectRoot: bindingGate.currentBinding?.projectRoot ?? null,
             boundProjectId: bindingGate.currentBinding?.projectId ?? null,
+          },
+        })
+      );
+      continue;
+    }
+    if (
+      isDispatchEntrySupersededByProjectRouting({
+        entry,
+        currentStage,
+        currentOwner,
+        pendingHandoffId,
+      })
+    ) {
+      const error = buildDispatchSupersededByProjectRoutingReason({
+        queueKey: entry.queueKey,
+        dispatchStage: readString(entry.dispatchPayload?.stage),
+        dispatchOwner: readString(entry.dispatchPayload?.toRole),
+        currentStage,
+        currentOwner,
+      });
+      await markQueueFailed({
+        projectRoot,
+        projectId,
+        entry,
+        error,
+      });
+      await markLinkedSessionsFailed({
+        projectRoot,
+        queueKey: entry.queueKey,
+        error,
+      });
+      await supersedeQueuedHandoffIntent({
+        projectRoot,
+        queueKey: entry.queueKey,
+        summary:
+          "Runtime maintenance superseded the queued handoff because the live project stage/owner moved on.",
+      });
+      exhaustedQueueKeys.push(entry.queueKey);
+      incidents.push(
+        await recordWorkflowRuntimeIncident({
+          projectRoot,
+          projectId,
+          idempotencyKey: `routing-superseded:${entry.queueKey}`,
+          kind: "queue_exhausted",
+          severity: "warning",
+          summary:
+            "Runtime maintenance retired a stale dispatch after project routing advanced.",
+          queueKey: entry.queueKey,
+          sessionKey: entry.requesterSessionKey,
+          error,
+          details: {
+            currentStage,
+            currentOwner,
+            queuedStage: readString(entry.dispatchPayload?.stage),
+            queuedOwner: readString(entry.dispatchPayload?.toRole),
           },
         })
       );
@@ -2435,7 +2568,7 @@ export async function runWorkflowRuntimeMaintenancePass(params: {
           ? "degraded"
           : "completed",
     stage: currentStage,
-    owner: readString(manifest?.owner_agent),
+    owner: currentOwner,
     summary: "Runtime maintenance pass completed.",
     details: {
       replayedQueueKeys,
