@@ -1308,7 +1308,7 @@ function isGraphPresenceReady(manifest: ManifestLike): boolean {
   ]) === "ready";
 }
 
-function isStaleRunningLiteratureDiscoveryRequisition(
+function isStaleUnresolvedLiteratureDiscoveryRequisition(
   request: ReturnType<typeof normalizePaperIngestionState>["queuedRequests"][number],
   nowMs: number
 ): boolean {
@@ -1318,10 +1318,11 @@ function isStaleRunningLiteratureDiscoveryRequisition(
   if (request.requestKind !== "requisition") {
     return false;
   }
-  if (!["launching", "running"].includes(request.status)) {
+  if (!["queued", "launching", "running"].includes(request.status)) {
     return false;
   }
-  const reference = request.startedAt ?? request.lastAttemptAt ?? request.updatedAt;
+  const reference =
+    request.startedAt ?? request.lastAttemptAt ?? request.updatedAt ?? request.createdAt;
   const referenceMs = parseTimestampMs(reference);
   return (
     referenceMs !== null &&
@@ -1352,7 +1353,7 @@ async function reconcileStaleLiteratureDiscoveryRequisition(params: {
   const now = new Date().toISOString();
   const nowMs = Date.parse(now);
   const staleRequests = state.queuedRequests.filter((request) =>
-    isStaleRunningLiteratureDiscoveryRequisition(request, nowMs)
+    isStaleUnresolvedLiteratureDiscoveryRequisition(request, nowMs)
   );
   if (staleRequests.length === 0) {
     return { manifest: params.manifest, updated: false };
