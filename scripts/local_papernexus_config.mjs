@@ -69,9 +69,21 @@ export async function resolveLocalPapernexusConfig(argv, options = {}) {
   const explicitAccessMode = readString(argValue(argv, "--papernexus-access-mode", null));
   const explicitTokenEnv = readString(argValue(argv, "--papernexus-token-env", null));
   const explicitSharedCorpus = readString(argValue(argv, "--papernexus-shared-corpus", null));
+  const explicitSshTarget = readString(argValue(argv, "--papernexus-ssh-target", null));
+  const explicitRemoteStagingRoot = readString(
+    argValue(argv, "--papernexus-remote-staging-root", null)
+  );
   const shouldResolve =
     useLocal ||
-    Boolean(explicitMcpUrl || explicitApiBaseUrl || explicitAccessMode || explicitTokenEnv);
+    Boolean(
+      explicitMcpUrl ||
+        explicitApiBaseUrl ||
+        explicitAccessMode ||
+        explicitTokenEnv ||
+        explicitSharedCorpus ||
+        explicitSshTarget ||
+        explicitRemoteStagingRoot
+    );
 
   if (!shouldResolve) {
     return {
@@ -83,19 +95,25 @@ export async function resolveLocalPapernexusConfig(argv, options = {}) {
   }
 
   const env = options.env ?? process.env;
+  const tokenEnv = explicitTokenEnv ?? "PAPERNEXUS_API_TOKEN";
+  const envToken = readString(env[tokenEnv]);
   const configPath = expandHomePath(
     argValue(argv, "--papernexus-local-config-path", path.join(os.homedir(), ".papernexus", "config.json"))
   );
-  const config = useLocal ? await readJson(configPath) : null;
-  const localUrls = config ? localServeUrlFromConfig(config) : {};
-  const tokenEnv = explicitTokenEnv ?? "PAPERNEXUS_API_TOKEN";
+  const explicitRemoteTargetIsLoopback =
+    Boolean(explicitMcpUrl && isLoopbackUrl(explicitMcpUrl)) ||
+    Boolean(explicitApiBaseUrl && isLoopbackUrl(explicitApiBaseUrl));
+  const canUseLocalServeConfigToken = useLocal || explicitRemoteTargetIsLoopback;
+  const shouldReadConfig = useLocal || (!envToken && canUseLocalServeConfigToken);
+  const config = shouldReadConfig ? await readJson(configPath) : null;
+  const localUrls = useLocal && config ? localServeUrlFromConfig(config) : {};
   const localToken = readString(config?.serve?.apiToken);
-  const envToken = readString(env[tokenEnv]);
   const accessMode = explicitAccessMode ?? (explicitMcpUrl || useLocal ? "remote_mcp" : "auto");
   const mcpUrl = explicitMcpUrl ?? localUrls.mcpUrl ?? null;
   const apiBaseUrl = explicitApiBaseUrl ?? localUrls.apiBaseUrl ?? null;
   const envOverrides = {};
-  if (!envToken && localToken) {
+  const injectedLocalToken = !envToken && localToken && canUseLocalServeConfigToken;
+  if (injectedLocalToken) {
     envOverrides[tokenEnv] = localToken;
   }
   if (mcpUrl && (useLocal || isLoopbackUrl(mcpUrl))) {
@@ -104,12 +122,23 @@ export async function resolveLocalPapernexusConfig(argv, options = {}) {
   if (explicitSharedCorpus && !readString(env.PAPERNEXUS_CORPUS)) {
     envOverrides.PAPERNEXUS_CORPUS = explicitSharedCorpus;
   }
+  if (explicitSshTarget && !readString(env.PAPERNEXUS_SSH_TARGET)) {
+    envOverrides.PAPERNEXUS_SSH_TARGET = explicitSshTarget;
+  }
+  if (
+    explicitRemoteStagingRoot &&
+    !readString(env.PAPERNEXUS_REMOTE_STAGING_ROOT)
+  ) {
+    envOverrides.PAPERNEXUS_REMOTE_STAGING_ROOT = explicitRemoteStagingRoot;
+  }
 
   const pluginOverrides = {
     papernexusAccessMode: accessMode,
-    papernexusApiTokenSource: "env",
     papernexusApiTokenEnv: tokenEnv,
   };
+  if (envToken || injectedLocalToken) {
+    pluginOverrides.papernexusApiTokenSource = "env";
+  }
   if (mcpUrl) {
     pluginOverrides.papernexusMcpUrl = mcpUrl;
     pluginOverrides.papernexusMcpTransport = "streamable-http";
@@ -123,6 +152,15 @@ export async function resolveLocalPapernexusConfig(argv, options = {}) {
   if (explicitSharedCorpus) {
     pluginOverrides.papernexusSharedCorpus = explicitSharedCorpus;
   }
+  const configuredSshTarget = explicitSshTarget ?? readString(env.PAPERNEXUS_SSH_TARGET);
+  if (configuredSshTarget) {
+    pluginOverrides.papernexusSshTarget = configuredSshTarget;
+  }
+  const configuredRemoteStagingRoot =
+    explicitRemoteStagingRoot ?? readString(env.PAPERNEXUS_REMOTE_STAGING_ROOT);
+  if (configuredRemoteStagingRoot) {
+    pluginOverrides.papernexusRemoteStagingRoot = configuredRemoteStagingRoot;
+  }
 
   return {
     enabled: true,
@@ -134,10 +172,28 @@ export async function resolveLocalPapernexusConfig(argv, options = {}) {
       mcpUrl,
       apiBaseUrl,
       tokenEnv,
-      tokenProvidedBy: envToken ? "environment" : localToken ? "local_config" : "missing",
+      tokenProvidedBy: envToken
+        ? "environment"
+        : injectedLocalToken
+          ? "local_config"
+          : mcpUrl || apiBaseUrl
+            ? "runtime_access"
+            : "missing",
       sharedCorpus: explicitSharedCorpus,
       corpusProvidedBy: explicitSharedCorpus
         ? readString(env.PAPERNEXUS_CORPUS)
+          ? "environment"
+          : "cli"
+        : "missing",
+      sshTarget: explicitSshTarget,
+      sshTargetProvidedBy: explicitSshTarget
+        ? readString(env.PAPERNEXUS_SSH_TARGET)
+          ? "environment"
+          : "cli"
+        : "missing",
+      remoteStagingRoot: explicitRemoteStagingRoot,
+      remoteStagingRootProvidedBy: explicitRemoteStagingRoot
+        ? readString(env.PAPERNEXUS_REMOTE_STAGING_ROOT)
           ? "environment"
           : "cli"
         : "missing",
@@ -154,6 +210,8 @@ export function appendLocalPapernexusArgs(argv, args) {
     "--papernexus-access-mode",
     "--papernexus-token-env",
     "--papernexus-shared-corpus",
+    "--papernexus-ssh-target",
+    "--papernexus-remote-staging-root",
   ]) {
     if (name === "--use-local-papernexus") {
       if (hasFlag(argv, name)) {

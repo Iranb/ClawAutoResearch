@@ -17,6 +17,7 @@ import { handoffWorkflowTaskToAgent } from "../tools/workflow-execution/delivery
 import { createStageOwnerHandoffIntent } from "../tools/workflow-handoff/handoff-router.ts";
 import { deliverWorkflowHandoffIntent } from "../tools/workflow-handoff/handoff-delivery.ts";
 import { transitionWorkflowHandoffIntent } from "../tools/workflow-handoff/handoff-store.ts";
+import { detectWorkflowPaperArtifactTerminal } from "../tools/workflow-paper-terminal.ts";
 
 const ACTIVE_LOCAL_HANDOFF_STATUSES = new Set([
   "prepared",
@@ -211,6 +212,8 @@ export async function detectLiveSubstantiveRevisionTerminal(params) {
 function readString(value) {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
+
+export const detectLivePaperArtifactTerminal = detectWorkflowPaperArtifactTerminal;
 
 function sameProjectRoot(left, right) {
   const normalizedLeft = readString(left);
@@ -452,6 +455,89 @@ function workflowProgressFingerprint(manifest) {
   });
 }
 
+function normalizedRuntimeEntries(store) {
+  return Array.isArray(store?.entries) ? store.entries : [];
+}
+
+function discussionRoundFingerprint(store) {
+  const round = store?.currentRound;
+  if (!round || typeof round !== "object") {
+    return null;
+  }
+  return {
+    roundId: round.roundId ?? null,
+    stage: round.stage ?? null,
+    status: round.status ?? null,
+    packetFingerprint: round.packetFingerprint ?? null,
+    aggregateStatus: round.aggregate?.status ?? null,
+    attempts: Array.isArray(round.attempts)
+      ? round.attempts.map((attempt) => ({
+          reviewerRole: attempt?.reviewerRole ?? null,
+          queueKey: attempt?.queueKey ?? null,
+          runId: attempt?.runId ?? null,
+          status: attempt?.status ?? null,
+          completedAt: attempt?.completedAt ?? null,
+          error: attempt?.error ?? null,
+        }))
+      : [],
+  };
+}
+
+export async function workflowRuntimeProgressFingerprint(projectRoot) {
+  const runtimeDir = path.join(projectRoot, ".openclaw-research");
+  const [queue, sessions, handoffs, autoDiscussion, codeReview] = await Promise.all([
+    readJsonIfExists(path.join(runtimeDir, "workflow-runtime-queue.json")),
+    readJsonIfExists(path.join(runtimeDir, "workflow-runtime-sessions.json")),
+    readJsonIfExists(path.join(runtimeDir, "workflow-handoff-intents.json")),
+    readJsonIfExists(path.join(runtimeDir, "auto-mode-discussion-state.json")),
+    readJsonIfExists(path.join(runtimeDir, "code-review-state.json")),
+  ]);
+  const queueEntries = normalizedRuntimeEntries(queue).map((entry) => ({
+    queueKey: entry?.queueKey ?? null,
+    kind: entry?.kind ?? null,
+    ownerAgent: entry?.ownerAgent ?? entry?.owner_agent ?? entry?.agent ?? null,
+    status: entry?.status ?? null,
+    runId: entry?.runId ?? entry?.run_id ?? null,
+    attemptCount: entry?.attemptCount ?? entry?.attempt_count ?? null,
+    nextRetryAt: entry?.nextRetryAt ?? entry?.next_retry_at ?? null,
+    lastError: entry?.lastError ?? entry?.last_error ?? entry?.error ?? null,
+  }));
+  const sessionEntries = normalizedRuntimeEntries(sessions).map((entry) => ({
+    sessionKey: entry?.sessionKey ?? entry?.session_key ?? null,
+    queueKey: entry?.queueKey ?? entry?.queue_key ?? null,
+    kind: entry?.kind ?? null,
+    ownerAgent: entry?.ownerAgent ?? entry?.owner_agent ?? entry?.agentId ?? null,
+    status: entry?.status ?? null,
+    runId: entry?.runId ?? entry?.run_id ?? null,
+    lastFinishedAt: entry?.lastFinishedAt ?? entry?.last_finished_at ?? null,
+    lastError: entry?.lastError ?? entry?.last_error ?? null,
+  }));
+  const handoffEntries = (Array.isArray(handoffs?.intents) ? handoffs.intents : []).map(
+    (entry) => ({
+      intentId: entry?.intentId ?? entry?.intent_id ?? entry?.id ?? null,
+      stage: entry?.stageAfter ?? entry?.stage_after ?? entry?.stage ?? null,
+      ownerAfter: entry?.ownerAfter ?? entry?.owner_after ?? entry?.toRole ?? null,
+      status: entry?.status ?? null,
+      queueKey: entry?.queueKey ?? entry?.queue_key ?? null,
+      updatedAt: entry?.updatedAt ?? entry?.updated_at ?? null,
+    })
+  );
+  return JSON.stringify({
+    queueEntries,
+    sessionEntries,
+    handoffEntries,
+    autoDiscussion: {
+      updatedAt: autoDiscussion?.updatedAt ?? null,
+      roundsStartedByFingerprint: autoDiscussion?.roundsStartedByFingerprint ?? null,
+      currentRound: discussionRoundFingerprint(autoDiscussion),
+    },
+    codeReview: {
+      updatedAt: codeReview?.updatedAt ?? null,
+      currentRound: discussionRoundFingerprint(codeReview),
+    },
+  });
+}
+
 export function buildLiveConversationId(lane, date = new Date()) {
   const prefix = lane === "survey" ? "gcd-survey-live" : "gcd-research-live";
   const timestamp = date.toISOString().replaceAll(":", "").replace(/\.\d+Z$/, "Z");
@@ -611,6 +697,18 @@ export function deriveStageCommand(params) {
   return defaultStageCommand({ lane: params.lane, stage, topic: params.topic });
 }
 
+export function resolveLiveStageHandoffRevision(iterator) {
+  const pending =
+    iterator?.pendingHandoff === true &&
+    iterator?.pendingHandoffPhase === "prepared";
+  const executionId =
+    typeof iterator?.pendingHandoffExecutionId === "string" &&
+    iterator.pendingHandoffExecutionId.trim()
+      ? iterator.pendingHandoffExecutionId.trim()
+      : null;
+  return pending ? executionId : null;
+}
+
 function buildStageExtraBody(params) {
   const lines = [
     `You are the current workflow owner for stage ${params.stage}.`,
@@ -749,10 +847,13 @@ async function withTimeout(promise, timeoutMs, label) {
   }
 }
 
-async function waitForProgress(params) {
+export async function waitForProgress(params) {
   const startedAt = Date.now();
   let latestManifest = params.baselineManifest;
   const baselineFingerprint = workflowProgressFingerprint(params.baselineManifest);
+  const baselineRuntimeFingerprint = await workflowRuntimeProgressFingerprint(
+    params.projectRoot
+  );
   while (Date.now() - startedAt < params.timeoutMs) {
     latestManifest = await readManifest(params.projectRoot);
     const currentStage = String(latestManifest.current_stage ?? "");
@@ -763,6 +864,19 @@ async function waitForProgress(params) {
     if (pdfExists && (currentStage === "submit" || currentStage === "done")) {
       return { progressed: true, manifest: latestManifest, reason: "terminal" };
     }
+    const artifactTerminal = await detectLivePaperArtifactTerminal({
+      projectRoot: params.projectRoot,
+      manifest: latestManifest,
+      lane: params.lane,
+    });
+    if (artifactTerminal.terminal) {
+      return {
+        progressed: true,
+        manifest: latestManifest,
+        reason: artifactTerminal.reason,
+        terminal: artifactTerminal,
+      };
+    }
     if (
       currentStage !== String(params.baselineManifest.current_stage ?? "") ||
       currentOwner !== String(params.baselineManifest.owner_agent ?? "")
@@ -771,6 +885,12 @@ async function waitForProgress(params) {
     }
     if (workflowProgressFingerprint(latestManifest) !== baselineFingerprint) {
       return { progressed: true, manifest: latestManifest, reason: "workflow_state_changed" };
+    }
+    const latestRuntimeFingerprint = await workflowRuntimeProgressFingerprint(
+      params.projectRoot
+    );
+    if (latestRuntimeFingerprint !== baselineRuntimeFingerprint) {
+      return { progressed: true, manifest: latestManifest, reason: "runtime_state_changed" };
     }
     await sleep(params.pollMs);
   }
@@ -801,6 +921,7 @@ async function runLiveStageTurn(params) {
   const fromRole = previousRole ?? "researcher";
   const fromSessionKey = transportContext.sessionKeyFor(fromRole);
   const sameOwner = owner === fromRole;
+  const pendingHandoffExecutionId = resolveLiveStageHandoffRevision(iterator);
 
   if (sameOwner) {
     const started = await runtimeSubagent.run({
@@ -834,6 +955,7 @@ async function runLiveStageTurn(params) {
     const progressPromise = waitForProgress({
       projectRoot,
       baselineManifest: manifest,
+      lane,
       timeoutMs: stageTimeoutMs ?? 180_000,
       pollMs: progressPollMs ?? 5_000,
     });
@@ -874,6 +996,8 @@ async function runLiveStageTurn(params) {
     ownerBefore: fromRole,
     ownerAfter: owner,
     fromSessionKey,
+    executionId: pendingHandoffExecutionId,
+    manifestRevision: pendingHandoffExecutionId,
     nextAction: command,
     deliveryPlan: {
       channels: ["native_runtime"],
@@ -932,6 +1056,7 @@ async function runLiveStageTurn(params) {
     const progress = await waitForProgress({
       projectRoot,
       baselineManifest: manifest,
+      lane,
       timeoutMs: stageTimeoutMs ?? 180_000,
       pollMs: progressPollMs ?? 5_000,
     });
@@ -979,6 +1104,7 @@ async function runLiveStageTurn(params) {
   const progress = await waitForProgress({
     projectRoot,
     baselineManifest: manifest,
+    lane,
     timeoutMs: stageTimeoutMs ?? 180_000,
     pollMs: progressPollMs ?? 5_000,
   });
@@ -1293,6 +1419,28 @@ export async function runAutoCommandEndToEndLive(params) {
       );
       if (pdfExists && ["submit", "done"].includes(String(manifest.current_stage ?? ""))) {
         break;
+      }
+      const artifactTerminal = await detectLivePaperArtifactTerminal({
+        projectRoot,
+        manifest,
+        lane,
+      });
+      if (artifactTerminal.terminal) {
+        const harness = await runHarnessOrFailure(projectRoot, lane, { strictContent: true });
+        return {
+          transport: bootstrapTransport,
+          conversationId,
+          bootstrap,
+          projectId: actualProjectId,
+          projectRoot,
+          turns,
+          harness,
+          failureReason:
+            harness.finalVerdict === "pass"
+              ? null
+              : "live_paper_artifact_ready_but_harness_failed",
+          terminal: artifactTerminal,
+        };
       }
       const revisionTerminal = await detectLiveSubstantiveRevisionTerminal({
         projectRoot,

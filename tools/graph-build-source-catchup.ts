@@ -1149,6 +1149,8 @@ function buildWrapperArgs(params: {
   sharedCorpus: string | null;
   mcpUrl?: string | null;
   apiBaseUrl?: string | null;
+  sshTarget?: string | null;
+  remoteStagingRoot?: string | null;
 }): string[] {
   const args: string[] = [];
   if (params.mcpUrl) {
@@ -1160,6 +1162,12 @@ function buildWrapperArgs(params: {
     args.push("--corpus", params.sharedCorpus);
   }
   args.push("--manifest", params.batchManifestPath, "submit");
+  if (params.sshTarget) {
+    args.push("--ssh-target", params.sshTarget);
+  }
+  if (params.remoteStagingRoot) {
+    args.push("--remote-staging-root", params.remoteStagingRoot);
+  }
   return args;
 }
 
@@ -1239,6 +1247,8 @@ async function queueMaterializedSources(params: {
   sharedCorpus?: string | null;
   mcpUrl?: string | null;
   apiBaseUrl?: string | null;
+  sshTarget?: string | null;
+  remoteStagingRoot?: string | null;
 }): Promise<{
   requestId: string;
   batchManifestPath: string;
@@ -1322,6 +1332,8 @@ async function queueMaterializedSources(params: {
     sharedCorpus,
     mcpUrl: params.mcpUrl,
     apiBaseUrl: params.apiBaseUrl,
+    sshTarget: params.sshTarget,
+    remoteStagingRoot: params.remoteStagingRoot,
   });
   const queuedRequest = {
     request_id: requestId,
@@ -1367,6 +1379,8 @@ export async function maybeMaterializeGraphBuildPaperSources(params: {
     papernexusSharedCorpus?: string | null;
     papernexusMcpUrl?: string | null;
     papernexusApiBaseUrl?: string | null;
+    papernexusSshTarget?: string | null;
+    papernexusRemoteStagingRoot?: string | null;
   } | null;
   now?: string;
   fetchImpl?: FetchLike;
@@ -1623,6 +1637,8 @@ export async function maybeMaterializeGraphBuildPaperSources(params: {
     sharedCorpus: params.workflowPolicy?.papernexusSharedCorpus,
     mcpUrl: params.workflowPolicy?.papernexusMcpUrl,
     apiBaseUrl: params.workflowPolicy?.papernexusApiBaseUrl,
+    sshTarget: params.workflowPolicy?.papernexusSshTarget,
+    remoteStagingRoot: params.workflowPolicy?.papernexusRemoteStagingRoot,
   });
   const result = buildResult({
     attempted: true,

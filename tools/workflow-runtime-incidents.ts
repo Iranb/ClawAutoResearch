@@ -11,6 +11,7 @@ export type WorkflowRuntimeIncidentKind =
   | "lobster_fallback"
   | "repair_exhausted"
   | "repair_orphan_session"
+  | "queue_exhausted"
   | "binding_gate_mismatch"
   | "broadcast_delivery_failed"
   | "discord_inbound_timeout";

@@ -182,6 +182,315 @@ test("runWorkflowRuntimeMaintenancePass replays repairable background transition
   );
 });
 
+test("runWorkflowRuntimeMaintenancePass retires research background queues after paper artifact readiness", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  const queueKey = "research:bg:terminal-paper";
+  const dispatchQueueKey = "terminal-paper::plan::orchestrator";
+
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await makeProject(projectRoot, "alpha");
+  await fs.mkdir(path.join(projectRoot, "academic_writer", "paper"), { recursive: true });
+  await fs.writeFile(path.join(projectRoot, "academic_writer", "paper", "main.pdf"), "pdf");
+  await fs.writeFile(path.join(projectRoot, "academic_writer", "paper", "main.tex"), "\\section{Done}");
+  const manifest = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "PROJECT_MANIFEST.json"), "utf8")
+  );
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    ...manifest,
+    experiment_search: { status: "ready_for_analysis" },
+    write_package: { status: "ready" },
+    paper_qc: { status: "ready" },
+  });
+  await migrateWorkflowRuntimeState({
+    projectRoot,
+    projectId: "alpha",
+    compatibilityMode: "sessions_spawn_runtime",
+    reason: "test_bootstrap",
+  });
+
+  await createWorkflowTransitionIntent({
+    projectRoot,
+    projectId: "alpha",
+    queueKey,
+    source: "start_background_run",
+    entryType: "background_run",
+    ownerAgent: "researcher",
+    channelKey: "local:conversation:test",
+    requesterSessionKey: "agent:researcher:local:conversation:test",
+    preferredSessionKey: "agent:researcher:local:conversation:test:subagent:bg",
+    family: "research",
+    kind: "research_queue",
+    summary: "Resume background research queue.",
+    runPayload: {
+      message: "Continue research queue.",
+      lane: "nested",
+      deliver: false,
+      idempotencyKey: "terminal-paper-bg",
+      extraSystemPrompt: "Stay bounded.",
+    },
+  });
+
+  const queueStore = await readWorkflowRuntimeQueueStore(projectRoot);
+  await writeWorkflowRuntimeQueueStore({
+    projectRoot,
+    projectId: "alpha",
+    entries: [
+      ...queueStore.entries.map((entry) =>
+        entry.queueKey === queueKey
+          ? {
+              ...entry,
+              status: "needs_repair",
+              lastAttemptedAt: "2026-04-10T09:00:00.000Z",
+              lastCheckedAt: "2026-04-10T09:00:00.000Z",
+            }
+          : entry
+      ),
+      {
+        transitionId: dispatchQueueKey,
+        queueId: dispatchQueueKey,
+        queueKey: dispatchQueueKey,
+        source: "workflow_auto_stage",
+        entryType: "dispatch_task",
+        ownerAgent: "orchestrator",
+        channelKey: "local:conversation:test",
+        requesterSessionKey: "agent:researcher:local:conversation:test",
+        messageChannel: "local",
+        preferredSessionKey: "agent:orchestrator:local:conversation:test",
+        family: "research",
+        kind: "workflow_stage_dispatch",
+        projectId: "alpha",
+        projectRoot,
+        queuedAt: "2026-04-10T09:00:00.000Z",
+        lastAttemptedAt: "2026-04-10T09:00:00.000Z",
+        lastCheckedAt: "2026-04-10T09:00:00.000Z",
+        nextRetryAt: null,
+        attemptCount: 1,
+        summary: "Dispatch stale plan stage.",
+        status: "launching",
+        fallbackMode: null,
+        lastError: "Workflow agent dispatch failed.",
+        runPayload: null,
+        dispatchPayload: {
+          requesterChannel: "local",
+          requesterAccountId: "default",
+          preferredSessionKeys: ["agent:orchestrator:local:conversation:test"],
+          fromRole: "researcher",
+          toRole: "orchestrator",
+          projectRoot,
+          projectId: "alpha",
+          stage: "plan",
+          summary: "Run stale plan stage.",
+          command: "Run /plan-research.",
+          mailboxMessageId: null,
+          requireMailboxAcknowledgement: true,
+          extraBody: null,
+          waitTimeoutMs: 90_000,
+          retryOnTimeout: true,
+          enableSpawnFallback: true,
+          useWorkflowHandoff: true,
+          autoModeActive: true,
+        },
+      },
+    ],
+  });
+  await recordWorkflowRuntimeSession({
+    projectRoot,
+    projectId: "alpha",
+    sessionKey: "agent:researcher:local:conversation:test:subagent:bg",
+    sessionId: "runtime-session-terminal-paper",
+    runtime: "subagent",
+    role: "researcher",
+    agentId: "researcher",
+    ownerAgent: "researcher",
+    family: "research",
+    kind: "research_queue",
+    channelKey: "local:conversation:test",
+    requesterSessionKey: "agent:researcher:local:conversation:test",
+    projectRoot,
+    status: "needs_repair",
+    runId: "runtime-run-terminal-paper",
+    queueKey,
+    startedAt: "2026-04-10T09:00:00.000Z",
+    lastHeartbeatAt: "2026-04-10T09:00:00.000Z",
+  });
+
+  const result = await runWorkflowRuntimeMaintenancePass({
+    projectRoot,
+    projectId: "alpha",
+    workflowRuntime: {
+      async run() {
+        throw new Error("terminal paper queues must not be replayed");
+      },
+    },
+    maxRepairAttempts: 3,
+    staleSessionAgeMs: 365 * 24 * 60 * 60 * 1000,
+  });
+
+  assert.deepEqual(result.replayedQueueKeys, []);
+  const refreshedQueue = await readWorkflowRuntimeQueueStore(projectRoot);
+  assert.equal(
+    refreshedQueue.entries.find((entry) => entry.queueKey === queueKey)?.status,
+    "completed"
+  );
+  assert.equal(
+    refreshedQueue.entries.find((entry) => entry.queueKey === dispatchQueueKey)?.status,
+    "completed"
+  );
+  const refreshedSessions = await readWorkflowRuntimeSessionsStore(projectRoot);
+  assert.equal(
+    refreshedSessions.entries.find((entry) => entry.queueKey === queueKey)?.status,
+    "completed"
+  );
+  const diagnostics = await readWorkflowDiagnosticEvents(projectRoot);
+  assert.ok(
+    diagnostics.some(
+      (event) =>
+        event.component === "runtime_maintenance" &&
+        event.action === "terminal_paper_workflow_queue_retired"
+    )
+  );
+});
+
+test("runWorkflowRuntimeMaintenancePass retires terminal auto code review runtime pool", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  const projectId = "code-review-terminal-alpha";
+  const fingerprint = "52f97dfa00ebce12aaf3e0413bcedd2fb71f9cb7";
+  const queueKey = `openclaw-research:auto-code-review:${projectId}:${fingerprint}:reviewer`;
+  const sessionKey = "agent:reviewer:local:conversation:gcd";
+
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await makeProject(projectRoot, projectId);
+  await migrateWorkflowRuntimeState({
+    projectRoot,
+    projectId,
+    compatibilityMode: "sessions_spawn_runtime",
+    reason: "test_bootstrap",
+  });
+  await writeJson(path.join(projectRoot, ".openclaw-research", "code-review-state.json"), {
+    schemaVersion: 1,
+    updatedAt: "2026-04-28T00:00:00.000Z",
+    roundsStarted: 1,
+    currentRound: {
+      gateId: "CODE-REVIEW",
+      stage: "code",
+      roundId: "round-terminal",
+      packetPath: path.join(projectRoot, "reviewer", "code-review", "CODE_REVIEW_PACKET.md"),
+      packetJsonPath: path.join(projectRoot, "reviewer", "code-review", "CODE_REVIEW_PACKET.json"),
+      packetFingerprint: fingerprint,
+      status: "approved",
+      launchedAt: "2026-04-28T00:00:00.000Z",
+      updatedAt: "2026-04-28T00:00:00.000Z",
+      attempts: [],
+      aggregate: {
+        approved: true,
+        status: "approved",
+        thresholdAvg: 8,
+        thresholdMinSingle: 7.2,
+        quorum: 2,
+        reviewCount: 3,
+        averageScore: 8.4,
+        minScore: 8.2,
+        blockerCount: 0,
+        verdictCounts: { pass: 3 },
+        suggestedRollbackStage: null,
+        summary: "Code innovation review approved.",
+      },
+    },
+  });
+
+  await createWorkflowTransitionIntent({
+    projectRoot,
+    projectId,
+    queueKey,
+    source: "workflow_auto_code_review",
+    entryType: "background_run",
+    ownerAgent: "reviewer",
+    channelKey: "local:conversation:gcd",
+    requesterSessionKey: "agent:researcher:local:conversation:gcd",
+    preferredSessionKey: sessionKey,
+    family: "review",
+    kind: "workflow_auto_code_review",
+    summary: "Review the code packet.",
+    runPayload: {
+      message: "Review only the supplied code review packet.",
+      lane: "nested",
+      deliver: false,
+      idempotencyKey: "code-review-terminal-alpha",
+      extraSystemPrompt: "Return structured JSON.",
+    },
+  });
+  const queueStore = await readWorkflowRuntimeQueueStore(projectRoot);
+  await writeWorkflowRuntimeQueueStore({
+    projectRoot,
+    projectId,
+    entries: queueStore.entries.map((entry) =>
+      entry.queueKey === queueKey
+        ? {
+            ...entry,
+            status: "running",
+            attemptCount: 1,
+            lastAttemptedAt: "2026-04-28T00:00:00.000Z",
+            lastCheckedAt: "2026-04-28T00:00:00.000Z",
+          }
+        : entry
+    ),
+  });
+  await recordWorkflowRuntimeSession({
+    projectRoot,
+    projectId,
+    sessionKey,
+    sessionId: "runtime-session-code-review",
+    runtime: "subagent",
+    role: "reviewer",
+    agentId: "reviewer",
+    ownerAgent: "reviewer",
+    family: "review",
+    kind: "workflow_auto_code_review",
+    channelKey: "local:conversation:gcd",
+    requesterSessionKey: "agent:researcher:local:conversation:gcd",
+    projectRoot,
+    status: "active",
+    runId: "runtime-run-code-review",
+    queueKey,
+    startedAt: "2026-04-28T00:00:00.000Z",
+    lastHeartbeatAt: "2026-04-28T00:00:00.000Z",
+  });
+
+  const result = await runWorkflowRuntimeMaintenancePass({
+    projectRoot,
+    projectId,
+    staleSessionAgeMs: 365 * 24 * 60 * 60 * 1000,
+  });
+
+  assert.deepEqual(result.retiredPanelRuntime.autoCodeReviewQueueKeys, [queueKey]);
+  assert.deepEqual(result.retiredPanelRuntime.autoCodeReviewSessionKeys, [sessionKey]);
+
+  const refreshedQueue = await readWorkflowRuntimeQueueStore(projectRoot);
+  assert.equal(
+    refreshedQueue.entries.find((entry) => entry.queueKey === queueKey)?.status,
+    "completed"
+  );
+  const refreshedSessions = await readWorkflowRuntimeSessionsStore(projectRoot);
+  assert.equal(
+    refreshedSessions.entries.find((entry) => entry.sessionKey === sessionKey)?.status,
+    "completed"
+  );
+  const diagnostics = await readWorkflowDiagnosticEvents(projectRoot);
+  assert.ok(
+    diagnostics.some(
+      (event) =>
+        event.component === "runtime_maintenance" &&
+        event.action === "auto_code_review_terminal_runtime_retired"
+    )
+  );
+});
+
 test("runWorkflowRuntimeMaintenancePass restores missing background queue entries from repair sessions", async (t) => {
   const projectRoot = await makeProjectRoot();
   const queueKey = "repair:bg:missing-queue";
@@ -2104,6 +2413,141 @@ test("runWorkflowRuntimeMaintenancePass consumes queued handoff queue entries an
   const handoffStore = await readWorkflowHandoffIntentStore(projectRoot);
   assert.equal(handoffStore.intents[0].status, "dispatched");
   assert.match(handoffStore.intents[0].toSessionKey ?? "", /^agent:coder:/);
+});
+
+test("runWorkflowRuntimeMaintenancePass supersedes queued handoff replays that no longer match live stage routing", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  const intentId = "intent-stale-code-demo";
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+  await makeProject(projectRoot, "stale-code-handoff");
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "stale-code-handoff",
+    current_stage: "graph_build",
+    owner_agent: "researcher",
+  });
+  await migrateWorkflowRuntimeState({
+    projectRoot,
+    projectId: "stale-code-handoff",
+    compatibilityMode: "sessions_spawn_runtime",
+    reason: "test_bootstrap",
+  });
+  await writeJson(path.join(projectRoot, ".openclaw-research", "workflow-handoff-intents.json"), {
+    schemaVersion: 1,
+    projectRoot,
+    projectId: "stale-code-handoff",
+    updatedAt: "2026-04-21T00:00:00.000Z",
+    intents: [
+      {
+        schemaVersion: 1,
+        intentId,
+        idempotencyKey: "stale-code-demo",
+        projectId: "stale-code-handoff",
+        projectRoot,
+        workflowLine: "experiment",
+        stage: "code",
+        fromRole: "researcher",
+        fromSessionKey: "agent:researcher:discord:group:paper-lab",
+        toRole: "coder",
+        toSessionKey: null,
+        reason: "stage_owner_change",
+        priority: "normal",
+        sourceTaskId: null,
+        targetTaskId: null,
+        artifactReceiptId: null,
+        failureId: null,
+        failureFingerprint: null,
+        repairLineageId: null,
+        status: "queued",
+        stageBefore: "plan",
+        stageAfter: "code",
+        executionId: "exec-stale-code-demo",
+        sessionBindingKey: "discord:group:paper-lab",
+        preferredSessionKeys: ["agent:coder:discord:group:paper-lab"],
+        deliveryPlan: {
+          channels: ["runtime_queue"],
+          requireAck: true,
+          ackDeadlineAt: "2026-04-21T00:10:00.000Z",
+          fallbackAfterMs: 600000,
+          maxAttemptsTotal: 4,
+          maxAttemptsByChannel: { runtime_queue: 1 },
+          staleClaimAfterMs: 900000,
+        },
+        deliveryAttempts: [],
+        dispatchedAt: null,
+        acknowledgedAt: null,
+        claimedAt: null,
+        activatedAt: null,
+        claimLeaseExpiresAt: null,
+        terminalReason: null,
+        createdAt: "2026-04-21T00:00:00.000Z",
+        updatedAt: "2026-04-21T00:00:00.000Z",
+        expiresAt: "2126-04-21T01:00:00.000Z",
+        summary: "Queued stale coder handoff.",
+        command: "/implement-experiment",
+        blockerSummary: null,
+        payload: {},
+      },
+    ],
+  });
+
+  await createWorkflowTransitionIntent({
+    projectRoot,
+    projectId: "stale-code-handoff",
+    queueKey: `handoff:${intentId}`,
+    source: "workflow_auto_stage",
+    entryType: "dispatch_task",
+    ownerAgent: "coder",
+    channelKey: "discord:group:paper-lab",
+    requesterSessionKey: "agent:researcher:discord:group:paper-lab",
+    preferredSessionKey: "agent:coder:discord:group:paper-lab",
+    family: "research",
+    kind: "workflow_stage_dispatch",
+    summary: "Replay the stale coder handoff.",
+    dispatchPayload: {
+      requesterChannel: "discord",
+      requesterAccountId: null,
+      preferredSessionKeys: ["agent:coder:discord:group:paper-lab"],
+      fromRole: "researcher",
+      toRole: "coder",
+      projectRoot,
+      projectId: "stale-code-handoff",
+      stage: "code",
+      summary: "Replay the stale coder handoff.",
+      command: "/implement-experiment",
+      mailboxMessageId: null,
+      requireMailboxAcknowledgement: true,
+      extraBody: "Continue only the assigned stage.",
+      waitTimeoutMs: 5000,
+      retryOnTimeout: true,
+      enableSpawnFallback: true,
+      useWorkflowHandoff: true,
+      autoModeActive: true,
+    },
+  });
+
+  const result = await runWorkflowRuntimeMaintenancePass({
+    projectRoot,
+    projectId: "stale-code-handoff",
+    workflowRuntime: {
+      async run() {
+        throw new Error("stale queued handoff should not replay");
+      },
+    },
+    staleSessionAgeMs: 0,
+  });
+
+  assert.equal(result.replayedQueueKeys.includes(`handoff:${intentId}`), false);
+  assert.equal(result.exhaustedQueueKeys.includes(`handoff:${intentId}`), true);
+  const queueStore = await readWorkflowRuntimeQueueStore(projectRoot);
+  const queueEntry = queueStore.entries.find((entry) => entry.queueKey === `handoff:${intentId}`);
+  assert.equal(queueEntry?.status, "failed");
+  assert.match(queueEntry?.lastError ?? "", /superseded by newer project routing/);
+  assert.match(queueEntry?.lastError ?? "", /current_stage=graph_build/);
+  assert.match(queueEntry?.lastError ?? "", /current_owner=researcher/);
+  const handoffStore = await readWorkflowHandoffIntentStore(projectRoot);
+  assert.equal(handoffStore.intents[0].status, "superseded");
 });
 
 test("runWorkflowRuntimeMaintenancePass refreshes experiment monitor and persists decision without a foreground agent", async (t) => {

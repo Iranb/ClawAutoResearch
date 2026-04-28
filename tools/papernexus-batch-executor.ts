@@ -354,6 +354,12 @@ async function buildPapernexusCommandEnv(
   if (summary.allowLocalMcp && !readString(env.PAPERNEXUS_ALLOW_LOCAL_MCP)) {
     env.PAPERNEXUS_ALLOW_LOCAL_MCP = "1";
   }
+  if (summary.sshTarget && !readString(env.PAPERNEXUS_SSH_TARGET)) {
+    env.PAPERNEXUS_SSH_TARGET = summary.sshTarget;
+  }
+  if (summary.remoteStagingRoot && !readString(env.PAPERNEXUS_REMOTE_STAGING_ROOT)) {
+    env.PAPERNEXUS_REMOTE_STAGING_ROOT = summary.remoteStagingRoot;
+  }
 
   const configuredTokenEnv = readString(summary.tokenEnv);
   if (readString(env.PAPERNEXUS_API_TOKEN)) {

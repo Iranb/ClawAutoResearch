@@ -17,6 +17,20 @@ function readString(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
+function resolveRouteRevisionSegment(params: {
+  manifestRevision?: string | number | null;
+  routeRevision?: string | number | null;
+  nextAction?: string | null;
+}): string | number {
+  if (params.routeRevision != null) {
+    return params.routeRevision;
+  }
+  if (params.manifestRevision != null) {
+    return "manifest-bound";
+  }
+  return hashFragment(params.nextAction);
+}
+
 export function buildStageOwnerHandoffIdempotencyKey(params: {
   projectId?: string | null;
   workflowLine?: string | null;
@@ -33,7 +47,7 @@ export function buildStageOwnerHandoffIdempotencyKey(params: {
     params.stageAfter ?? "unknown-stage",
     params.ownerAfter ?? "unknown-owner",
     params.manifestRevision ?? "no-manifest-revision",
-    params.routeRevision ?? hashFragment(params.nextAction),
+    resolveRouteRevisionSegment(params),
   ].join(":");
 }
 

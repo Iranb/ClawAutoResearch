@@ -7,6 +7,7 @@ import path from "node:path";
 import { deliverWorkflowHandoffIntent } from "../tools/workflow-handoff/handoff-delivery.ts";
 import {
   readWorkflowHandoffIntentStore,
+  transitionWorkflowHandoffIntent,
   upsertWorkflowHandoffIntent,
 } from "../tools/workflow-handoff/handoff-store.ts";
 import { readWorkflowDiagnosticEvents } from "../tools/workflow-diagnostics.ts";
@@ -130,6 +131,49 @@ test("deliverWorkflowHandoffIntent falls back from native failure to runtime que
       ["runtime_queue", "delivered"],
     ]
   );
+});
+
+test("deliverWorkflowHandoffIntent does not redispatch an already claimed intent", async (t) => {
+  const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-delivery-claimed-"));
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+  const created = await upsertWorkflowHandoffIntent({
+    projectRoot,
+    idempotencyKey: "deliver-already-claimed",
+    toRole: "orchestrator",
+    reason: "stage_owner_change",
+    deliveryPlan: {
+      channels: ["native_runtime"],
+      maxAttemptsTotal: 2,
+    },
+  });
+  await transitionWorkflowHandoffIntent({
+    projectRoot,
+    intentId: created.intent.intentId,
+    toStatus: "claimed",
+    patch: {
+      toSessionKey: "agent:orchestrator:local:e2e",
+    },
+  });
+
+  let dispatchCalls = 0;
+  const result = await deliverWorkflowHandoffIntent({
+    intent: created.intent,
+    runtime: {
+      async nativeDispatch() {
+        dispatchCalls += 1;
+        return { ok: true };
+      },
+    },
+  });
+
+  assert.equal(result.delivered, true);
+  assert.equal(result.reason, "already_accepted");
+  assert.equal(dispatchCalls, 0);
+  const store = await readWorkflowHandoffIntentStore(projectRoot);
+  assert.equal(store.intents[0].status, "claimed");
+  assert.deepEqual(store.intents[0].deliveryAttempts, []);
 });
 
 test("deliverWorkflowHandoffIntent suppresses stale hook-gated handoffs before delivery", async (t) => {

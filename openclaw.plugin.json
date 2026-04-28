@@ -168,6 +168,16 @@
         "default": "",
         "description": "Optional remote MinerU HTTP endpoint used by PaperNexus for PDF materialization. When configured, the workflow prefers this remote parser path before local Docling or Marker fallbacks."
       },
+      "papernexusSshTarget": {
+        "type": "string",
+        "default": "",
+        "description": "Optional SSH target used by PaperNexus upload wrappers when local staged files must be copied to a remote PaperNexus host before import. Example: user@host."
+      },
+      "papernexusRemoteStagingRoot": {
+        "type": "string",
+        "default": "",
+        "description": "Optional remote directory root used with papernexusSshTarget for staging local PDF/Markdown sources before PaperNexus batch import."
+      },
       "papernexusAccessMode": {
         "type": "string",
         "enum": ["remote_api", "remote_mcp", "local_mcp", "auto"],
@@ -411,6 +421,12 @@
     },
     "papernexusMineruHttpUrl": {
       "label": "PaperNexus MinerU HTTP URL"
+    },
+    "papernexusSshTarget": {
+      "label": "PaperNexus SSH Target"
+    },
+    "papernexusRemoteStagingRoot": {
+      "label": "PaperNexus Remote Staging Root"
     },
     "papernexusAccessMode": {
       "label": "PaperNexus Access Mode"

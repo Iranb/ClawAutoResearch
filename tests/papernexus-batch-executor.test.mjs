@@ -52,6 +52,34 @@ async function writeLocalMcpGuardBatchScript(scriptDir) {
   await fs.chmod(scriptPath, 0o755);
 }
 
+async function writeRemoteStagingGuardBatchScript(scriptDir) {
+  await fs.mkdir(scriptDir, { recursive: true });
+  const scriptPath = path.join(scriptDir, "pn_batch_import.py");
+  await fs.writeFile(
+    scriptPath,
+    [
+      "#!/usr/bin/env python3",
+      "import json, os, sys",
+      "if os.environ.get('PAPERNEXUS_SSH_TARGET') != 'hyq@10.126.56.30':",
+      "    print(json.dumps({'error': 'missing ssh target'}))",
+      "    sys.exit(1)",
+      "if os.environ.get('PAPERNEXUS_REMOTE_STAGING_ROOT') != '/tmp/papernexus-import-staging':",
+      "    print(json.dumps({'error': 'missing remote staging root'}))",
+      "    sys.exit(1)",
+      "args = sys.argv[1:]",
+      "subcommand = next((arg for arg in args if arg in ('submit', 'wait', 'status')), 'status')",
+      "payload = {",
+      "  'submit': {'summary': {'total': 1, 'submitted': 1, 'completed': 0, 'running': 1, 'pending': 0, 'failed': 0, 'remaining': 1}, 'items': [{'paperId': 'paper-a', 'canonicalId': 'paper-a', 'taskId': 'task-a', 'status': 'running', 'submitted': True}]},",
+      "  'wait': {'summary': {'total': 1, 'submitted': 1, 'completed': 1, 'running': 0, 'pending': 0, 'failed': 0, 'remaining': 0}, 'items': [{'paperId': 'paper-a', 'canonicalId': 'paper-a', 'taskId': 'task-a', 'status': 'completed', 'stage': 'completed', 'submitted': True, 'synced': True}]}",
+      "}.get(subcommand, {})",
+      "print(json.dumps(payload))",
+      "",
+    ].join("\n"),
+    "utf8"
+  );
+  await fs.chmod(scriptPath, 0o755);
+}
+
 function makeQueuedRequest(overrides = {}) {
   const manifestPath = "researcher/paper-staging/queued-imports/req-1/batch-import.json";
   return {
@@ -175,6 +203,52 @@ test("PaperNexus batch executor propagates explicit local MCP allowance to wrapp
     remoteAccess: {
       mcpUrl: "http://127.0.0.1:4821/mcp",
       allowLocalMcp: true,
+    },
+  });
+
+  assert.equal(result?.runtimeStatus, "waiting_graph");
+  assert.equal(result?.request.status, "completed");
+  assert.equal(result?.repairRequired, false);
+});
+
+test("PaperNexus batch executor propagates remote staging env to wrappers", async (t) => {
+  const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "pn-batch-remote-stage-"));
+  const scriptDir = path.join(projectRoot, "scripts");
+  const previousScriptDir = process.env.OPENCLAW_PAPERNEXUS_SCRIPT_DIR;
+  const previousSshTarget = process.env.PAPERNEXUS_SSH_TARGET;
+  const previousRemoteStagingRoot = process.env.PAPERNEXUS_REMOTE_STAGING_ROOT;
+  t.after(async () => {
+    if (previousScriptDir === undefined) {
+      delete process.env.OPENCLAW_PAPERNEXUS_SCRIPT_DIR;
+    } else {
+      process.env.OPENCLAW_PAPERNEXUS_SCRIPT_DIR = previousScriptDir;
+    }
+    if (previousSshTarget === undefined) {
+      delete process.env.PAPERNEXUS_SSH_TARGET;
+    } else {
+      process.env.PAPERNEXUS_SSH_TARGET = previousSshTarget;
+    }
+    if (previousRemoteStagingRoot === undefined) {
+      delete process.env.PAPERNEXUS_REMOTE_STAGING_ROOT;
+    } else {
+      process.env.PAPERNEXUS_REMOTE_STAGING_ROOT = previousRemoteStagingRoot;
+    }
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  delete process.env.PAPERNEXUS_SSH_TARGET;
+  delete process.env.PAPERNEXUS_REMOTE_STAGING_ROOT;
+  process.env.OPENCLAW_PAPERNEXUS_SCRIPT_DIR = scriptDir;
+  await writeRemoteStagingGuardBatchScript(scriptDir);
+
+  const result = await executePapernexusBatchImportRequest({
+    projectRoot,
+    request: makeQueuedRequest({ paperCount: 1 }),
+    waitTimeoutSeconds: 1,
+    waitIntervalSeconds: 0.1,
+    remoteAccess: {
+      sshTarget: "hyq@10.126.56.30",
+      remoteStagingRoot: "/tmp/papernexus-import-staging",
     },
   });
 

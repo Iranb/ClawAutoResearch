@@ -619,6 +619,8 @@ export interface WorkflowGuardPolicy extends ChannelProjectBindingPolicy {
   papernexusApiTokenLookupTimeoutMs?: number;
   papernexusMineruHttpUrl?: string;
   papernexusAccessMode?: string;
+  papernexusSshTarget?: string;
+  papernexusRemoteStagingRoot?: string;
   autoMode?: WorkflowAutoMode;
   autoGate?: WorkflowAutoGateConfig;
   lobsterHandoff?: WorkflowLobsterHandoffConfig;
@@ -2360,6 +2362,8 @@ const DEFAULT_POLICY: Required<WorkflowGuardPolicy> = {
   papernexusApiTokenAccount: "default",
   papernexusApiTokenLookupTimeoutMs: 2000,
   papernexusMineruHttpUrl: "",
+  papernexusSshTarget: "",
+  papernexusRemoteStagingRoot: "",
   papernexusAccessMode: "auto",
   autoMode: normalizeWorkflowAutoMode(undefined),
   autoGate: normalizeWorkflowAutoGateConfig(undefined),
@@ -2875,6 +2879,12 @@ function normalizePolicy(
     papernexusMineruHttpUrl:
       asString(config?.papernexusMineruHttpUrl) ??
       DEFAULT_POLICY.papernexusMineruHttpUrl,
+    papernexusSshTarget:
+      asString((config as Record<string, unknown> | null)?.papernexusSshTarget) ??
+      DEFAULT_POLICY.papernexusSshTarget,
+    papernexusRemoteStagingRoot:
+      asString((config as Record<string, unknown> | null)?.papernexusRemoteStagingRoot) ??
+      DEFAULT_POLICY.papernexusRemoteStagingRoot,
     papernexusAccessMode:
       normalizePapernexusAccessMode(
         (config as Record<string, unknown> | null)?.papernexusAccessMode

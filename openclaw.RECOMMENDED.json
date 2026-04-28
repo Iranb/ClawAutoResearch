@@ -144,6 +144,14 @@
           // 只有远程不可达或任务明确要求时，才考虑本地 docling / marker fallback。
           "papernexusMineruHttpUrl": "",
 
+          // 可选的远端 PaperNexus SSH staging 目标，例如 user@host。
+          // 当本机 staged PDF/Markdown 需要交给远端 PaperNexus 主机导入时，batch wrapper 会使用它复制文件。
+          "papernexusSshTarget": "",
+
+          // 与 papernexusSshTarget 配套的远端 staging 根目录。
+          // pn_batch_import.py submit、graph-build source catch-up 和直接 batch worker 会使用同一组参数。
+          "papernexusRemoteStagingRoot": "",
+
           // 图谱访问模式：
           // remote_api = 优先走认证后的远程 wrapper / Web API
           // remote_mcp = 走远程 PaperNexus HTTP MCP

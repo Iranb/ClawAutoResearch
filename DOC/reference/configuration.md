@@ -105,6 +105,12 @@
 - `papernexusMineruHttpUrl`  
   可选的 remote MinerU HTTP 地址。配置后，涉及 PDF materialization 的 PaperNexus 流程会优先走 remote mineru，再考虑本地 docling / marker fallback。
 
+- `papernexusSshTarget`
+  可选的远端 PaperNexus SSH staging 目标，例如 `user@host`。当本机 workflow 生成 staged PDF/Markdown、但远端 PaperNexus 主机负责导入时，batch wrapper 会用它复制文件。
+
+- `papernexusRemoteStagingRoot`
+  与 `papernexusSshTarget` 配套的远端 staging 根目录，例如 `/tmp/papernexus-import-staging`。`pn_batch_import.py submit`、graph-build source catch-up 和直接 batch worker 都会使用同一组参数。
+
 - `papernexusAccessMode`  
   PaperNexus 图谱访问模式。支持：
   - `remote_mcp`：live graph 只走远程 PaperNexus HTTP MCP 路径；优先 MCP tools / MCP-backed wrappers
@@ -273,6 +279,7 @@
 
 - 远程 HTTP MCP 与 `/api/*` 共用同一个 Bearer token
 - `remote_mcp` 负责 live graph 的主控制面；优先使用 `research_lookup`、`research_briefing`、`idea_catalyst`，而 workflow 里的 upload/import 仍走 `pn_stage_sync.py`、`pn_import_submit.py`、`pn_import_queue.py`、`pn_batch_import.py`
+- 如果 upload/import 需要把本机 staged 文件送到远端 PaperNexus 主机，同时配置 `papernexusSshTarget` 和 `papernexusRemoteStagingRoot`
 - 如果你同时配置了 `papernexusApiBaseUrl` 和 `papernexusMcpUrl`，并把 `papernexusAccessMode` 设为 `auto`，系统会先尝试 `remote_mcp`，再尝试 `remote_api`
 
 ### 想让 Zotero MCP 能正常写入

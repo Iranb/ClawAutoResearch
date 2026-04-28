@@ -25,6 +25,9 @@ import {
 } from "./handoff-types";
 
 const HANDOFF_INTENTS_FILENAME = "workflow-handoff-intents.json";
+const HANDOFF_STORE_LOCK_TIMEOUT_MS = 60_000;
+const HANDOFF_STORE_LOCK_RETRY_MS = 100;
+const HANDOFF_STORE_LOCK_STALE_MS = 5 * 60_000;
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -40,6 +43,19 @@ function readNumber(value: unknown): number | null {
 
 function normalizeWorkflowLine(value: unknown): "experiment" | "survey" {
   return value === "survey" ? "survey" : "experiment";
+}
+
+function withWorkflowHandoffStoreLock<T>(
+  projectRoot: string,
+  task: () => Promise<T>
+): Promise<T> {
+  return withAdvisoryLock({
+    lockPath: lockPath(projectRoot),
+    timeoutMs: HANDOFF_STORE_LOCK_TIMEOUT_MS,
+    retryMs: HANDOFF_STORE_LOCK_RETRY_MS,
+    staleMs: HANDOFF_STORE_LOCK_STALE_MS,
+    task,
+  });
 }
 
 function normalizePriority(value: unknown): WorkflowHandoffIntent["priority"] {
@@ -331,150 +347,205 @@ export async function upsertWorkflowHandoffIntent(params: {
   deliveryPlan?: Partial<WorkflowHandoffIntent["deliveryPlan"]>;
 }): Promise<{ intent: WorkflowHandoffIntent; created: boolean }> {
   const projectRoot = path.resolve(params.projectRoot);
-  return withAdvisoryLock({
-    lockPath: lockPath(projectRoot),
-    task: async () => {
-      const store = await readWorkflowHandoffIntentStore(projectRoot);
-      const existing = store.intents.find(
+  return withWorkflowHandoffStoreLock(projectRoot, async () => {
+    const store = await readWorkflowHandoffIntentStore(projectRoot);
+    const matchingIntents = store.intents.filter(
+      (entry) => entry.idempotencyKey === params.idempotencyKey
+    );
+    const terminalExisting = matchingIntents.find((entry) =>
+      isWorkflowHandoffTerminalStatus(entry.status)
+    );
+    if (terminalExisting) {
+      const duplicateActiveIntents = matchingIntents.filter(
         (entry) =>
-          entry.idempotencyKey === params.idempotencyKey &&
+          entry.intentId !== terminalExisting.intentId &&
           isWorkflowHandoffActiveStatus(entry.status)
       );
-      if (existing) {
-        const mergedPayload =
-          params.payload || existing.payload
-            ? {
-                ...(existing.payload ?? {}),
-                ...(params.payload ?? {}),
-              }
-            : null;
-        const enriched: WorkflowHandoffIntent = {
-          ...existing,
-          projectId: readString(params.projectId) ?? existing.projectId,
-          workflowLine: params.workflowLine ?? existing.workflowLine,
-          stage: readString(params.stage) ?? existing.stage,
-          stageBefore: readString(params.stageBefore) ?? existing.stageBefore,
-          stageAfter: readString(params.stageAfter) ?? existing.stageAfter,
-          executionId: readString(params.executionId) ?? existing.executionId,
-          fromRole: readString(params.fromRole) ?? existing.fromRole,
-          fromSessionKey: readString(params.fromSessionKey) ?? existing.fromSessionKey,
-          toSessionKey: readString(params.toSessionKey) ?? existing.toSessionKey,
-          summary: readString(params.summary) ?? existing.summary,
-          command: readString(params.command) ?? existing.command,
-          blockerSummary: readString(params.blockerSummary) ?? existing.blockerSummary,
-          sessionBindingKey:
-            readString(params.sessionBindingKey) ?? existing.sessionBindingKey,
-          preferredSessionKeys:
-            Array.isArray(params.preferredSessionKeys) &&
-            params.preferredSessionKeys.length > 0
-              ? params.preferredSessionKeys
-                  .map(readString)
-                  .filter((entry): entry is string => Boolean(entry))
-              : existing.preferredSessionKeys,
-          payload: mergedPayload,
-          updatedAt: nowIso(),
+      if (duplicateActiveIntents.length > 0) {
+        const updatedAt = nowIso();
+        const nextStore = {
+          ...store,
+          intents: store.intents.map((entry) =>
+            duplicateActiveIntents.some((duplicate) => duplicate.intentId === entry.intentId)
+              ? {
+                  ...entry,
+                  status: "superseded" as const,
+                  terminalReason:
+                    "duplicate_idempotency_key_already_terminal",
+                  updatedAt,
+                }
+              : entry
+          ),
         };
-        const changed =
-          JSON.stringify(enriched) !== JSON.stringify(existing);
-        if (changed) {
-          const nextStore = {
-            ...store,
-            intents: store.intents.map((entry) =>
-              entry.intentId === existing.intentId ? enriched : entry
-            ),
-          };
-          await writeWorkflowHandoffIntentStore(nextStore);
+        await writeWorkflowHandoffIntentStore(nextStore);
+        for (const duplicate of duplicateActiveIntents) {
           await appendWorkflowHandoffEvent({
             projectRoot,
-            projectId: enriched.projectId,
-            intentId: enriched.intentId,
-            idempotencyKey: enriched.idempotencyKey,
-            kind: "intent_enriched",
-            fromStatus: existing.status,
-            toStatus: enriched.status,
-            summary: "Updated an existing active handoff intent with stronger runtime context.",
+            projectId: duplicate.projectId,
+            intentId: duplicate.intentId,
+            idempotencyKey: duplicate.idempotencyKey,
+            kind: "duplicate_intent_superseded",
+            fromStatus: duplicate.status,
+            toStatus: "superseded",
+            summary:
+              "Superseded duplicate active handoff because the same idempotency key already reached a terminal state.",
+            details: {
+              terminalIntentId: terminalExisting.intentId,
+              terminalStatus: terminalExisting.status,
+            },
           });
         }
-        return { intent: changed ? enriched : existing, created: false };
       }
-      const now = new Date();
-      const defaultPlan = buildDefaultWorkflowHandoffDeliveryPlan({
-        reason: params.reason,
-        now,
-      });
-      const intent: WorkflowHandoffIntent = {
-        schemaVersion: 1,
-        intentId: randomUUID(),
-        idempotencyKey: params.idempotencyKey,
-        projectId: readString(params.projectId),
-        projectRoot,
-        workflowLine: params.workflowLine ?? "experiment",
-        stage: readString(params.stage),
-        fromRole: readString(params.fromRole),
-        fromSessionKey: readString(params.fromSessionKey),
-        toRole: params.toRole,
-        toSessionKey: readString(params.toSessionKey),
-        reason: params.reason,
-        priority: params.priority ?? "normal",
-        sourceTaskId: readString(params.sourceTaskId),
-        targetTaskId: readString(params.targetTaskId),
-        artifactReceiptId: readString(params.artifactReceiptId),
-        failureId: readString(params.failureId),
-        failureFingerprint: readString(params.failureFingerprint),
-        repairLineageId: readString(params.repairLineageId),
-        status: params.status ?? "prepared",
-        stageBefore: readString(params.stageBefore),
-        stageAfter: readString(params.stageAfter) ?? readString(params.stage),
-        executionId: readString(params.executionId),
-        sessionBindingKey: readString(params.sessionBindingKey),
-        preferredSessionKeys: Array.isArray(params.preferredSessionKeys)
-          ? params.preferredSessionKeys
-              .map(readString)
-              .filter((entry): entry is string => Boolean(entry))
-          : [],
-        deliveryPlan: {
-          ...defaultPlan,
-          ...params.deliveryPlan,
-          maxAttemptsByChannel: {
-            ...defaultPlan.maxAttemptsByChannel,
-            ...(params.deliveryPlan?.maxAttemptsByChannel ?? {}),
-          },
-          channels: params.deliveryPlan?.channels ?? defaultPlan.channels,
-        },
-        deliveryAttempts: [],
-        dispatchedAt: null,
-        acknowledgedAt: null,
-        claimedAt: null,
-        activatedAt: null,
-        claimLeaseExpiresAt: null,
-        terminalReason: null,
-        createdAt: now.toISOString(),
-        updatedAt: now.toISOString(),
-        expiresAt:
-          readString(params.payload?.expiresAt) ??
-          getWorkflowHandoffDefaultExpiresAt({ reason: params.reason, now }),
-        summary: readString(params.summary),
-        command: readString(params.command),
-        blockerSummary: readString(params.blockerSummary),
-        payload: params.payload ?? null,
-      };
-      const nextStore = {
-        ...store,
-        projectId: intent.projectId ?? store.projectId,
-        intents: [...store.intents, intent],
-      };
-      await writeWorkflowHandoffIntentStore(nextStore);
       await appendWorkflowHandoffEvent({
         projectRoot,
-        projectId: intent.projectId,
-        intentId: intent.intentId,
-        idempotencyKey: intent.idempotencyKey,
-        kind: "intent_created",
-        toStatus: intent.status,
-        summary: intent.summary ?? `Created ${intent.reason} handoff for ${intent.toRole}.`,
+        projectId: terminalExisting.projectId,
+        intentId: terminalExisting.intentId,
+        idempotencyKey: terminalExisting.idempotencyKey,
+        kind: "terminal_intent_reused",
+        fromStatus: terminalExisting.status,
+        toStatus: terminalExisting.status,
+        summary:
+          "Reused terminal handoff intent for duplicate idempotency key instead of creating a new intent.",
       });
-      return { intent, created: true };
-    },
+      return { intent: terminalExisting, created: false };
+    }
+    const existing = matchingIntents.find((entry) =>
+      isWorkflowHandoffActiveStatus(entry.status)
+    );
+    if (existing) {
+      const mergedPayload =
+        params.payload || existing.payload
+          ? {
+              ...(existing.payload ?? {}),
+              ...(params.payload ?? {}),
+            }
+          : null;
+      const enriched: WorkflowHandoffIntent = {
+        ...existing,
+        projectId: readString(params.projectId) ?? existing.projectId,
+        workflowLine: params.workflowLine ?? existing.workflowLine,
+        stage: readString(params.stage) ?? existing.stage,
+        stageBefore: readString(params.stageBefore) ?? existing.stageBefore,
+        stageAfter: readString(params.stageAfter) ?? existing.stageAfter,
+        executionId: readString(params.executionId) ?? existing.executionId,
+        fromRole: readString(params.fromRole) ?? existing.fromRole,
+        fromSessionKey: readString(params.fromSessionKey) ?? existing.fromSessionKey,
+        toSessionKey: readString(params.toSessionKey) ?? existing.toSessionKey,
+        summary: readString(params.summary) ?? existing.summary,
+        command: readString(params.command) ?? existing.command,
+        blockerSummary: readString(params.blockerSummary) ?? existing.blockerSummary,
+        sessionBindingKey:
+          readString(params.sessionBindingKey) ?? existing.sessionBindingKey,
+        preferredSessionKeys:
+          Array.isArray(params.preferredSessionKeys) &&
+          params.preferredSessionKeys.length > 0
+            ? params.preferredSessionKeys
+                .map(readString)
+                .filter((entry): entry is string => Boolean(entry))
+            : existing.preferredSessionKeys,
+        payload: mergedPayload,
+        updatedAt: nowIso(),
+      };
+      const changed =
+        JSON.stringify(enriched) !== JSON.stringify(existing);
+      if (changed) {
+        const nextStore = {
+          ...store,
+          intents: store.intents.map((entry) =>
+            entry.intentId === existing.intentId ? enriched : entry
+          ),
+        };
+        await writeWorkflowHandoffIntentStore(nextStore);
+        await appendWorkflowHandoffEvent({
+          projectRoot,
+          projectId: enriched.projectId,
+          intentId: enriched.intentId,
+          idempotencyKey: enriched.idempotencyKey,
+          kind: "intent_enriched",
+          fromStatus: existing.status,
+          toStatus: enriched.status,
+          summary: "Updated an existing active handoff intent with stronger runtime context.",
+        });
+      }
+      return { intent: changed ? enriched : existing, created: false };
+    }
+    const now = new Date();
+    const defaultPlan = buildDefaultWorkflowHandoffDeliveryPlan({
+      reason: params.reason,
+      now,
+    });
+    const intent: WorkflowHandoffIntent = {
+      schemaVersion: 1,
+      intentId: randomUUID(),
+      idempotencyKey: params.idempotencyKey,
+      projectId: readString(params.projectId),
+      projectRoot,
+      workflowLine: params.workflowLine ?? "experiment",
+      stage: readString(params.stage),
+      fromRole: readString(params.fromRole),
+      fromSessionKey: readString(params.fromSessionKey),
+      toRole: params.toRole,
+      toSessionKey: readString(params.toSessionKey),
+      reason: params.reason,
+      priority: params.priority ?? "normal",
+      sourceTaskId: readString(params.sourceTaskId),
+      targetTaskId: readString(params.targetTaskId),
+      artifactReceiptId: readString(params.artifactReceiptId),
+      failureId: readString(params.failureId),
+      failureFingerprint: readString(params.failureFingerprint),
+      repairLineageId: readString(params.repairLineageId),
+      status: params.status ?? "prepared",
+      stageBefore: readString(params.stageBefore),
+      stageAfter: readString(params.stageAfter) ?? readString(params.stage),
+      executionId: readString(params.executionId),
+      sessionBindingKey: readString(params.sessionBindingKey),
+      preferredSessionKeys: Array.isArray(params.preferredSessionKeys)
+        ? params.preferredSessionKeys
+            .map(readString)
+            .filter((entry): entry is string => Boolean(entry))
+        : [],
+      deliveryPlan: {
+        ...defaultPlan,
+        ...params.deliveryPlan,
+        maxAttemptsByChannel: {
+          ...defaultPlan.maxAttemptsByChannel,
+          ...(params.deliveryPlan?.maxAttemptsByChannel ?? {}),
+        },
+        channels: params.deliveryPlan?.channels ?? defaultPlan.channels,
+      },
+      deliveryAttempts: [],
+      dispatchedAt: null,
+      acknowledgedAt: null,
+      claimedAt: null,
+      activatedAt: null,
+      claimLeaseExpiresAt: null,
+      terminalReason: null,
+      createdAt: now.toISOString(),
+      updatedAt: now.toISOString(),
+      expiresAt:
+        readString(params.payload?.expiresAt) ??
+        getWorkflowHandoffDefaultExpiresAt({ reason: params.reason, now }),
+      summary: readString(params.summary),
+      command: readString(params.command),
+      blockerSummary: readString(params.blockerSummary),
+      payload: params.payload ?? null,
+    };
+    const nextStore = {
+      ...store,
+      projectId: intent.projectId ?? store.projectId,
+      intents: [...store.intents, intent],
+    };
+    await writeWorkflowHandoffIntentStore(nextStore);
+    await appendWorkflowHandoffEvent({
+      projectRoot,
+      projectId: intent.projectId,
+      intentId: intent.intentId,
+      idempotencyKey: intent.idempotencyKey,
+      kind: "intent_created",
+      toStatus: intent.status,
+      summary: intent.summary ?? `Created ${intent.reason} handoff for ${intent.toRole}.`,
+    });
+    return { intent, created: true };
   });
 }
 
@@ -488,90 +559,87 @@ export async function transitionWorkflowHandoffIntent(params: {
   patch?: Partial<WorkflowHandoffIntent>;
 }): Promise<WorkflowHandoffIntent | null> {
   const projectRoot = path.resolve(params.projectRoot);
-  return withAdvisoryLock({
-    lockPath: lockPath(projectRoot),
-    task: async () => {
-      const store = await readWorkflowHandoffIntentStore(projectRoot);
-      const index = store.intents.findIndex(
-        (entry) =>
-          (readString(params.intentId) && entry.intentId === params.intentId) ||
-          (readString(params.idempotencyKey) &&
-            entry.idempotencyKey === params.idempotencyKey)
-      );
-      if (index < 0) {
-        return null;
-      }
-      const current = store.intents[index];
-      if (!canTransitionWorkflowHandoffStatus({ from: current.status, to: params.toStatus })) {
-        await appendWorkflowHandoffEvent({
-          projectRoot,
-          projectId: current.projectId,
-          intentId: current.intentId,
-          idempotencyKey: current.idempotencyKey,
-          kind: "invalid_status_transition",
-          fromStatus: current.status,
-          toStatus: params.toStatus,
-          summary:
-            params.summary ??
-            `Rejected invalid handoff transition ${current.status} -> ${params.toStatus}.`,
-        });
-        return current;
-      }
-      const updated: WorkflowHandoffIntent = {
-        ...current,
-        ...(params.patch ?? {}),
-        status: params.toStatus,
-        acknowledgedAt:
-          params.toStatus === "acknowledged"
-            ? nowIso()
-            : params.toStatus === "claimed" ||
-                params.toStatus === "activated" ||
-                params.toStatus === "completed" ||
-                params.toStatus === "failed" ||
-                params.toStatus === "superseded" ||
-                params.toStatus === "expired" ||
-                params.toStatus === "escalated" ||
-                params.toStatus === "cancelled"
-              ? current.acknowledgedAt
-              : current.acknowledgedAt,
-        dispatchedAt:
-          params.toStatus === "dispatching" || params.toStatus === "dispatched"
-            ? current.dispatchedAt ?? nowIso()
-            : current.dispatchedAt,
-        claimedAt:
-          params.toStatus === "claimed"
-            ? current.claimedAt ?? nowIso()
-            : current.claimedAt,
-        activatedAt:
-          params.toStatus === "activated"
-            ? current.activatedAt ?? nowIso()
-            : current.activatedAt,
-        terminalReason:
-          isWorkflowHandoffTerminalStatus(params.toStatus)
-            ? readString(params.terminalReason) ?? current.terminalReason
-            : current.terminalReason,
-        updatedAt: nowIso(),
-      };
-      const nextIntents = [...store.intents];
-      nextIntents[index] = updated;
-      await writeWorkflowHandoffIntentStore({
-        ...store,
-        intents: nextIntents,
-      });
+  return withWorkflowHandoffStoreLock(projectRoot, async () => {
+    const store = await readWorkflowHandoffIntentStore(projectRoot);
+    const index = store.intents.findIndex(
+      (entry) =>
+        (readString(params.intentId) && entry.intentId === params.intentId) ||
+        (readString(params.idempotencyKey) &&
+          entry.idempotencyKey === params.idempotencyKey)
+    );
+    if (index < 0) {
+      return null;
+    }
+    const current = store.intents[index];
+    if (!canTransitionWorkflowHandoffStatus({ from: current.status, to: params.toStatus })) {
       await appendWorkflowHandoffEvent({
         projectRoot,
-        projectId: updated.projectId,
-        intentId: updated.intentId,
-        idempotencyKey: updated.idempotencyKey,
-        kind: "status_transition",
+        projectId: current.projectId,
+        intentId: current.intentId,
+        idempotencyKey: current.idempotencyKey,
+        kind: "invalid_status_transition",
         fromStatus: current.status,
-        toStatus: updated.status,
+        toStatus: params.toStatus,
         summary:
           params.summary ??
-          `Handoff ${updated.intentId} transitioned ${current.status} -> ${updated.status}.`,
+          `Rejected invalid handoff transition ${current.status} -> ${params.toStatus}.`,
       });
-      return updated;
-    },
+      return current;
+    }
+    const updated: WorkflowHandoffIntent = {
+      ...current,
+      ...(params.patch ?? {}),
+      status: params.toStatus,
+      acknowledgedAt:
+        params.toStatus === "acknowledged"
+          ? nowIso()
+          : params.toStatus === "claimed" ||
+              params.toStatus === "activated" ||
+              params.toStatus === "completed" ||
+              params.toStatus === "failed" ||
+              params.toStatus === "superseded" ||
+              params.toStatus === "expired" ||
+              params.toStatus === "escalated" ||
+              params.toStatus === "cancelled"
+            ? current.acknowledgedAt
+            : current.acknowledgedAt,
+      dispatchedAt:
+        params.toStatus === "dispatching" || params.toStatus === "dispatched"
+          ? current.dispatchedAt ?? nowIso()
+          : current.dispatchedAt,
+      claimedAt:
+        params.toStatus === "claimed"
+          ? current.claimedAt ?? nowIso()
+          : current.claimedAt,
+      activatedAt:
+        params.toStatus === "activated"
+          ? current.activatedAt ?? nowIso()
+          : current.activatedAt,
+      terminalReason:
+        isWorkflowHandoffTerminalStatus(params.toStatus)
+          ? readString(params.terminalReason) ?? current.terminalReason
+          : current.terminalReason,
+      updatedAt: nowIso(),
+    };
+    const nextIntents = [...store.intents];
+    nextIntents[index] = updated;
+    await writeWorkflowHandoffIntentStore({
+      ...store,
+      intents: nextIntents,
+    });
+    await appendWorkflowHandoffEvent({
+      projectRoot,
+      projectId: updated.projectId,
+      intentId: updated.intentId,
+      idempotencyKey: updated.idempotencyKey,
+      kind: "status_transition",
+      fromStatus: current.status,
+      toStatus: updated.status,
+      summary:
+        params.summary ??
+        `Handoff ${updated.intentId} transitioned ${current.status} -> ${updated.status}.`,
+    });
+    return updated;
   });
 }
 
@@ -583,52 +651,49 @@ export async function appendWorkflowHandoffDeliveryAttempt(params: {
     Partial<Pick<WorkflowHandoffDeliveryAttempt, "attemptId" | "attemptedAt">>;
 }): Promise<WorkflowHandoffIntent | null> {
   const projectRoot = path.resolve(params.projectRoot);
-  return withAdvisoryLock({
-    lockPath: lockPath(projectRoot),
-    task: async () => {
-      const store = await readWorkflowHandoffIntentStore(projectRoot);
-      const index = store.intents.findIndex(
-        (entry) =>
-          (readString(params.intentId) && entry.intentId === params.intentId) ||
-          (readString(params.idempotencyKey) &&
-            entry.idempotencyKey === params.idempotencyKey)
-      );
-      if (index < 0) {
-        return null;
-      }
-      const current = store.intents[index];
-      if (isWorkflowHandoffTerminalStatus(current.status)) {
-        return current;
-      }
-      const attempt: WorkflowHandoffDeliveryAttempt = {
-        ...params.attempt,
-        attemptId: readString(params.attempt.attemptId) ?? randomUUID(),
-        attemptedAt: readString(params.attempt.attemptedAt) ?? nowIso(),
-      };
-      const updated: WorkflowHandoffIntent = {
-        ...current,
-        deliveryAttempts: [...current.deliveryAttempts, attempt],
-        updatedAt: nowIso(),
-      };
-      const nextIntents = [...store.intents];
-      nextIntents[index] = updated;
-      await writeWorkflowHandoffIntentStore({
-        ...store,
-        intents: nextIntents,
-      });
-      await appendWorkflowHandoffEvent({
-        projectRoot,
-        projectId: updated.projectId,
-        intentId: updated.intentId,
-        idempotencyKey: updated.idempotencyKey,
-        kind: "delivery_attempt_recorded",
-        fromStatus: current.status,
-        toStatus: updated.status,
-        summary: `${attempt.channel} delivery ${attempt.status}.`,
-        details: { attempt },
-      });
-      return updated;
-    },
+  return withWorkflowHandoffStoreLock(projectRoot, async () => {
+    const store = await readWorkflowHandoffIntentStore(projectRoot);
+    const index = store.intents.findIndex(
+      (entry) =>
+        (readString(params.intentId) && entry.intentId === params.intentId) ||
+        (readString(params.idempotencyKey) &&
+          entry.idempotencyKey === params.idempotencyKey)
+    );
+    if (index < 0) {
+      return null;
+    }
+    const current = store.intents[index];
+    if (isWorkflowHandoffTerminalStatus(current.status)) {
+      return current;
+    }
+    const attempt: WorkflowHandoffDeliveryAttempt = {
+      ...params.attempt,
+      attemptId: readString(params.attempt.attemptId) ?? randomUUID(),
+      attemptedAt: readString(params.attempt.attemptedAt) ?? nowIso(),
+    };
+    const updated: WorkflowHandoffIntent = {
+      ...current,
+      deliveryAttempts: [...current.deliveryAttempts, attempt],
+      updatedAt: nowIso(),
+    };
+    const nextIntents = [...store.intents];
+    nextIntents[index] = updated;
+    await writeWorkflowHandoffIntentStore({
+      ...store,
+      intents: nextIntents,
+    });
+    await appendWorkflowHandoffEvent({
+      projectRoot,
+      projectId: updated.projectId,
+      intentId: updated.intentId,
+      idempotencyKey: updated.idempotencyKey,
+      kind: "delivery_attempt_recorded",
+      fromStatus: current.status,
+      toStatus: updated.status,
+      summary: `${attempt.channel} delivery ${attempt.status}.`,
+      details: { attempt },
+    });
+    return updated;
   });
 }
 

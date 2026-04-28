@@ -179,3 +179,97 @@ test("runWorkflowHandoffMaintenancePass supersedes stale stage-owner intents onc
   const store = await readWorkflowHandoffIntentStore(projectRoot);
   assert.equal(store.intents[0].status, "superseded");
 });
+
+test("runWorkflowHandoffMaintenancePass supersedes duplicate active handoffs", async (t) => {
+  const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-handoff-duplicates-"));
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await fs.mkdir(path.join(projectRoot, ".openclaw-research"), { recursive: true });
+  await fs.writeFile(
+    path.join(projectRoot, ".openclaw-research", "workflow-handoff-intents.json"),
+    `${JSON.stringify(
+      {
+        schemaVersion: 1,
+        projectRoot,
+        updatedAt: new Date().toISOString(),
+        intents: [
+          {
+            schemaVersion: 1,
+            intentId: "intent-completed",
+            idempotencyKey: "stage:demo:write:revision-1",
+            projectId: "demo",
+            projectRoot,
+            workflowLine: "experiment",
+            stage: "write",
+            fromRole: "reviewer",
+            toRole: "academic_writer",
+            reason: "stage_owner_change",
+            priority: "normal",
+            status: "completed",
+            stageAfter: "write",
+            deliveryPlan: {
+              channels: ["native_runtime"],
+              requireAck: false,
+              ackDeadlineAt: null,
+              fallbackAfterMs: 0,
+              maxAttemptsTotal: 3,
+              maxAttemptsByChannel: { native_runtime: 3 },
+              staleClaimAfterMs: 900000,
+            },
+            deliveryAttempts: [],
+            createdAt: "2026-04-28T05:00:00.000Z",
+            updatedAt: "2026-04-28T05:00:10.000Z",
+          },
+          {
+            schemaVersion: 1,
+            intentId: "intent-duplicate",
+            idempotencyKey: "stage:demo:write:revision-1",
+            projectId: "demo",
+            projectRoot,
+            workflowLine: "experiment",
+            stage: "write",
+            fromRole: "reviewer",
+            toRole: "academic_writer",
+            reason: "stage_owner_change",
+            priority: "normal",
+            status: "prepared",
+            stageAfter: "write",
+            deliveryPlan: {
+              channels: ["native_runtime"],
+              requireAck: false,
+              ackDeadlineAt: null,
+              fallbackAfterMs: 0,
+              maxAttemptsTotal: 3,
+              maxAttemptsByChannel: { native_runtime: 3 },
+              staleClaimAfterMs: 900000,
+            },
+            deliveryAttempts: [],
+            createdAt: "2026-04-28T05:00:11.000Z",
+            updatedAt: "2026-04-28T05:00:11.000Z",
+          },
+        ],
+      },
+      null,
+      2
+    )}\n`,
+    "utf8"
+  );
+
+  const result = await runWorkflowHandoffMaintenancePass({
+    projectRoot,
+    now: new Date("2026-04-28T05:00:12.000Z"),
+  });
+  assert.deepEqual(result.supersededIntentIds, ["intent-duplicate"]);
+
+  const store = await readWorkflowHandoffIntentStore(projectRoot);
+  assert.equal(
+    store.intents.find((intent) => intent.intentId === "intent-completed")?.status,
+    "completed"
+  );
+  assert.equal(
+    store.intents.find((intent) => intent.intentId === "intent-duplicate")?.status,
+    "superseded"
+  );
+});

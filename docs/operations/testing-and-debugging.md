@@ -57,6 +57,14 @@ node --test tests/writer-reviewer-runtime-state.test.mjs tests/workflow-writing-
 - `papernexusSharedCorpus` 配置
 - remote access / progress 相关动作返回值
 
+远端 PaperNexus no-Discord E2E 要额外确认：
+
+- `PROJECT_MANIFEST.json.paper_ingestion.queued_requests[].args` 是否包含 `--ssh-target` 和 `--remote-staging-root`
+- `.openclaw-research/workflow-runtime-queue.json` 里 PaperNexus wrapper 任务是否从 `queued/running` 进入 terminal 状态
+- `researcher/paper-staging/queued-imports/*/batch-import.json` 是否指向真实 staged PDF/Markdown
+- 401 通常是 token source/keychain 问题；本机 `~/.papernexus/config.json` 的 loopback serve token 不会用于远端 HTTP MCP
+- 如果部分论文终止失败，检查 `REQUISITION_SATISFACTION_REPORT.json`、`graph/GRAPH_PRESENCE_CHECK.json` 和 manifest 里的 degraded repair evidence，不要要求所有补充论文都必须先入图
+
 ### 阶段一直卡住不前进
 
 先查：

@@ -76,6 +76,16 @@ function hasTotalBudget(intent: WorkflowHandoffIntent): boolean {
   return countWorkflowHandoffAttemptsTotal(intent) < intent.deliveryPlan.maxAttemptsTotal;
 }
 
+function isAlreadyAcceptedByTarget(intent: WorkflowHandoffIntent): boolean {
+  return (
+    intent.status === "dispatched" ||
+    intent.status === "delivered" ||
+    intent.status === "acknowledged" ||
+    intent.status === "claimed" ||
+    intent.status === "activated"
+  );
+}
+
 export async function deliverWorkflowHandoffIntent(params: {
   intent: WorkflowHandoffIntent;
   runtime?: WorkflowHandoffDeliveryRuntime;
@@ -262,6 +272,28 @@ export async function deliverWorkflowHandoffIntent(params: {
       summary: "Starting handoff delivery.",
     })) ?? intent;
   intent = dispatching;
+  if (isWorkflowHandoffTerminalStatus(intent.status)) {
+    await emitDiagnostic({
+      action: "delivery_skipped",
+      status: "waiting",
+      summary: "Skipped handoff delivery because the intent became terminal before dispatch.",
+      details: { terminalStatus: intent.status },
+    });
+    return { delivered: false, intent, terminal: true, reason: "terminal_intent" };
+  }
+  if (intent.status !== "dispatching" && isAlreadyAcceptedByTarget(intent)) {
+    await emitDiagnostic({
+      action: "delivery_skipped",
+      status: "completed",
+      summary:
+        "Skipped duplicate handoff delivery because the target runtime has already accepted the intent.",
+      details: {
+        acceptedStatus: intent.status,
+        acceptedSessionKey: intent.toSessionKey,
+      },
+    });
+    return { delivered: true, intent, terminal: false, reason: "already_accepted" };
+  }
 
   for (const channel of intent.deliveryPlan.channels) {
     if (!hasTotalBudget(intent) && intent.deliveryPlan.maxAttemptsTotal > 0) {

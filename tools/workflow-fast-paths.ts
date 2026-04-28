@@ -86,6 +86,7 @@ import { recordWorkflowNotificationChannelForProject } from "./workflow-notifica
 import { sanitizeProjectIdFragment } from "./workflow-guard-project-state";
 import { materializeZoteroSyncPacket } from "./workflow-zotero-sync";
 import { materializeExecPacketIfNeeded } from "./workflow-execution/exec-packet";
+import { detectWorkflowPaperArtifactTerminal } from "./workflow-paper-terminal";
 import type {
   WorkflowExecutionRuntime,
   WorkflowExecutionSessionInspection,
@@ -138,6 +139,8 @@ function buildPapernexusRemoteAccessConfigFromPolicy(
     tokenAccount: workflowPolicy.papernexusApiTokenAccount,
     mineruHttpUrl: workflowPolicy.papernexusMineruHttpUrl,
     tokenLookupTimeoutMs: workflowPolicy.papernexusApiTokenLookupTimeoutMs,
+    sshTarget: workflowPolicy.papernexusSshTarget,
+    remoteStagingRoot: workflowPolicy.papernexusRemoteStagingRoot,
   };
 }
 
@@ -482,6 +485,42 @@ const PAPERNEXUS_WRAPPER_SUBCOMMANDS = new Set([
 
 function isPapernexusBackgroundKind(kind: string): boolean {
   return kind === "papernexus_skill" || kind === "papernexus_wrapper";
+}
+
+function isResearchBackgroundQueueKind(entry: BackgroundWorkflowQueueEntry): boolean {
+  return (
+    entry.entryType === "background_run" &&
+    entry.family === "research" &&
+    (entry.kind === "research_queue" || entry.kind === "research_pipeline")
+  );
+}
+
+function isRetirableAfterTerminalPaperArtifact(
+  entry: BackgroundWorkflowQueueEntry
+): boolean {
+  return isResearchBackgroundQueueKind(entry) || entry.entryType === "dispatch_task";
+}
+
+async function detectTerminalPaperArtifactForBackgroundEntry(
+  entry: BackgroundWorkflowQueueEntry
+) {
+  const projectRoot = readString(entry.projectRoot);
+  if (!projectRoot || !isRetirableAfterTerminalPaperArtifact(entry)) {
+    return null;
+  }
+  const manifest =
+    (await readJsonIfExists<Record<string, unknown>>(
+      path.join(projectRoot, "PROJECT_MANIFEST.json")
+    )) ?? null;
+  const lane = readString(entry.projectId)?.startsWith("survey-")
+    ? "survey"
+    : "experiment";
+  const terminal = await detectWorkflowPaperArtifactTerminal({
+    projectRoot,
+    manifest,
+    lane,
+  });
+  return terminal.terminal ? terminal : null;
 }
 
 function shellQuote(value: string): string {
@@ -1537,6 +1576,33 @@ async function reconcileBackgroundWorkflowQueueWithRegistry(params: {
   const repairedEntries: BackgroundWorkflowQueueEntry[] = [];
   let changed = false;
   for (const entry of queueEntries) {
+    const terminalPaperArtifact =
+      await detectTerminalPaperArtifactForBackgroundEntry(entry);
+    if (terminalPaperArtifact) {
+      changed = true;
+      const retired = {
+        ...entry,
+        status: "completed" as const,
+        nextRetryAt: null,
+        lastError: null,
+      };
+      repairedEntries.push(retired);
+      await appendBackgroundWorkflowRuntimeEvent({
+        projectRoot: retired.projectRoot,
+        projectId: retired.projectId,
+        kind: "background_queue_retired_project_terminal",
+        summary:
+          "Retired background research queue entry because the project already has a ready paper artifact.",
+        details: {
+          queueKey: retired.queueKey,
+          ownerAgent: retired.ownerAgent,
+          family: retired.family,
+          kind: retired.kind,
+          terminal: terminalPaperArtifact,
+        },
+      });
+      continue;
+    }
     if (
       isRunningBackgroundQueueEntry(entry) &&
       isBackgroundQueueOrphanCheckDue(entry, nowMs) &&
@@ -1859,6 +1925,104 @@ function normalizeStageLike(value: unknown): string | null {
     : null;
 }
 
+function asPlainRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function isManifestGraphPresenceReady(manifest: Record<string, unknown>): boolean {
+  const paperIngestion = asPlainRecord(manifest.paper_ingestion);
+  return (
+    normalizeStageLike(
+      paperIngestion.graph_presence_status ?? paperIngestion.graphPresenceStatus
+    ) === "ready"
+  );
+}
+
+function sanitizeArtifactPathFragment(value: string): string {
+  return (
+    value
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9._-]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 96) || "request"
+  );
+}
+
+function deriveGraphReadyDirectBatchWarningReportPath(requestId: string): string {
+  return `graph/paper-ingestion-validation/${sanitizeArtifactPathFragment(
+    requestId
+  )}-direct-batch-graph-ready-warning.json`;
+}
+
+function shouldDegradeDirectBatchFailureAgainstReadyGraph(params: {
+  manifest: Record<string, unknown>;
+  directResult: PapernexusBatchExecutionState;
+}): boolean {
+  const request = params.directResult.request;
+  return (
+    params.directResult.repairRequired === true &&
+    isManifestGraphPresenceReady(params.manifest) &&
+    isPaperIngestionExecutableUploadRequest(request) &&
+    (request.validationStatus === "valid" || request.validationStatus === "warning")
+  );
+}
+
+async function writeGraphReadyDirectBatchWarningReport(params: {
+  projectRoot: string;
+  manifest: Record<string, unknown>;
+  directResult: PapernexusBatchExecutionState;
+  reportPath: string;
+  nowIso: string;
+}): Promise<void> {
+  const paperIngestion = asPlainRecord(params.manifest.paper_ingestion);
+  await writeJsonAtomicEnsured(path.join(params.projectRoot, params.reportPath), {
+    schema_version: 1,
+    status: "warning",
+    decision: "degraded_satisfied_current_graph",
+    request_id: params.directResult.request.requestId,
+    request_kind: params.directResult.request.requestKind,
+    trigger_kind: params.directResult.request.triggerKind,
+    manifest_path: params.directResult.request.manifestPath,
+    previous_status: params.directResult.request.status,
+    previous_last_error: params.directResult.request.lastError,
+    previous_runtime_status: params.directResult.runtimeStatus,
+    previous_waiting_reason: params.directResult.waitingReason,
+    previous_repair_reason: params.directResult.repairReason,
+    graph_presence: {
+      status:
+        normalizeStageLike(
+          paperIngestion.graph_presence_status ?? paperIngestion.graphPresenceStatus
+        ) ?? null,
+      report_path:
+        typeof paperIngestion.graph_presence_report_path === "string"
+          ? paperIngestion.graph_presence_report_path
+          : typeof paperIngestion.graphPresenceReportPath === "string"
+            ? paperIngestion.graphPresenceReportPath
+            : "graph/GRAPH_PRESENCE_CHECK.json",
+      expected_paper_count:
+        typeof paperIngestion.graph_presence_expected_papers === "number"
+          ? paperIngestion.graph_presence_expected_papers
+          : typeof paperIngestion.graphPresenceExpectedPapers === "number"
+            ? paperIngestion.graphPresenceExpectedPapers
+            : null,
+      present_paper_count:
+        typeof paperIngestion.graph_presence_present_papers === "number"
+          ? paperIngestion.graph_presence_present_papers
+          : typeof paperIngestion.graphPresencePresentPapers === "number"
+            ? paperIngestion.graphPresencePresentPapers
+            : null,
+    },
+    command_outputs: params.directResult.commandOutputs,
+    reason:
+      "Direct PaperNexus batch execution failed after graph presence was already ready; persisted as a workflow warning instead of a blocking repair request.",
+    created_at: params.nowIso,
+    updated_at: params.nowIso,
+  });
+}
+
 export async function retireBackgroundWorkflowRuns(params: {
   workflowRuntime?: WorkflowRuntimeMonitorApi;
   ownerAgent?: string | null;
@@ -2076,6 +2240,35 @@ export async function drainQueuedBackgroundWorkflowRuns(params: {
   const processedEntries: BackgroundWorkflowQueueEntry[] = [];
 
   for (const entry of queue) {
+    const terminalPaperArtifact =
+      await detectTerminalPaperArtifactForBackgroundEntry(entry);
+    if (terminalPaperArtifact) {
+      await retireBackgroundWorkflowRunsFromPool({
+        workflowRuntime,
+        ownerAgent: entry.ownerAgent,
+        family: entry.family,
+        projectId: entry.projectId,
+        projectRoot: entry.projectRoot,
+        statuses: ["active", "idle", "needs_repair"],
+      });
+      await appendBackgroundWorkflowRuntimeEvent({
+        projectRoot: entry.projectRoot,
+        projectId: entry.projectId,
+        kind: "background_queue_retired_project_terminal",
+        summary:
+          "Consumed background research queue entry because the project already has a ready paper artifact.",
+        details: {
+          queueKey: entry.queueKey,
+          entryType: entry.entryType,
+          ownerAgent: entry.ownerAgent,
+          family: entry.family,
+          kind: entry.kind,
+          terminal: terminalPaperArtifact,
+        },
+      });
+      processedEntries.push(entry);
+      continue;
+    }
     if (!isBackgroundQueueEntryPending(entry)) {
       continue;
     }
@@ -3034,27 +3227,90 @@ async function persistDirectPapernexusBatchExecutionResult(params: {
   directResult: PapernexusBatchExecutionState;
 }): Promise<BackgroundRunStartResult> {
   const directResult = params.directResult;
-  const requestPatch = {
+  const manifestBeforePersist =
+    (await readJsonIfExists<Record<string, unknown>>(
+      path.join(params.projectRoot, "PROJECT_MANIFEST.json")
+    )) ?? {};
+  const degradeFailureAgainstReadyGraph =
+    shouldDegradeDirectBatchFailureAgainstReadyGraph({
+      manifest: manifestBeforePersist,
+      directResult,
+    });
+  const nowIso = directResult.request.updatedAt ?? new Date().toISOString();
+  const warningReportPath = degradeFailureAgainstReadyGraph
+    ? deriveGraphReadyDirectBatchWarningReportPath(directResult.request.requestId)
+    : null;
+  if (warningReportPath) {
+    await writeGraphReadyDirectBatchWarningReport({
+      projectRoot: params.projectRoot,
+      manifest: manifestBeforePersist,
+      directResult,
+      reportPath: warningReportPath,
+      nowIso,
+    });
+  }
+  const requestPatch: PaperIngestionQueuedRequest = {
     ...directResult.request,
+    status: degradeFailureAgainstReadyGraph ? "completed" : directResult.request.status,
     queueProgress:
       directResult.queueProgress ?? directResult.request.queueProgress,
+    updatedAt: nowIso,
+    finishedAt: degradeFailureAgainstReadyGraph
+      ? directResult.request.finishedAt ?? nowIso
+      : directResult.request.finishedAt,
+    lastError: degradeFailureAgainstReadyGraph ? null : directResult.request.lastError,
+    detail: degradeFailureAgainstReadyGraph
+      ? "Direct PaperNexus batch failure was degradably satisfied because graph presence is already ready."
+      : directResult.request.detail,
+    validationStatus: degradeFailureAgainstReadyGraph
+      ? "warning"
+      : directResult.request.validationStatus,
+    validationSummary: degradeFailureAgainstReadyGraph
+      ? "Direct PaperNexus batch failed after graph presence was ready; current graph accepted with a durable warning report."
+      : directResult.request.validationSummary,
+    validationReportPath: warningReportPath ?? directResult.request.validationReportPath,
+    nextRetryAt: degradeFailureAgainstReadyGraph ? null : directResult.request.nextRetryAt,
+    deadLetterAt: degradeFailureAgainstReadyGraph
+      ? null
+      : directResult.request.deadLetterAt,
+    deadLetterReason: degradeFailureAgainstReadyGraph
+      ? null
+      : directResult.request.deadLetterReason,
   };
   await setPaperIngestionState({
     projectRoot: params.projectRoot,
     paperIngestion: {
-      runtime_status: directResult.runtimeStatus,
-      waiting_reason: directResult.waitingReason,
+      runtime_status: degradeFailureAgainstReadyGraph
+        ? "ready"
+        : directResult.runtimeStatus,
+      waiting_reason: degradeFailureAgainstReadyGraph
+        ? null
+        : directResult.waitingReason,
       import_task_ids: directResult.importTaskIds,
       last_import_task_id: directResult.lastImportTaskId,
-      last_import_status: directResult.lastImportStatus,
+      last_import_status: degradeFailureAgainstReadyGraph
+        ? "completed"
+        : directResult.lastImportStatus,
       completed_papers: directResult.completedPapers,
-      paper_operations: directResult.paperOperations,
-      active_batches: directResult.activeBatches,
-      batch_items: directResult.batchItems,
+      paper_operations: degradeFailureAgainstReadyGraph
+        ? []
+        : directResult.paperOperations,
+      active_batches: degradeFailureAgainstReadyGraph
+        ? []
+        : directResult.activeBatches,
+      batch_items: degradeFailureAgainstReadyGraph ? [] : directResult.batchItems,
       queued_requests: [serializePaperIngestionQueuedRequest(requestPatch)],
-      repair_required: directResult.repairRequired,
-      repair_reason: directResult.repairReason,
-      last_updated_at: directResult.request.updatedAt,
+      repair_required: degradeFailureAgainstReadyGraph
+        ? false
+        : directResult.repairRequired,
+      repair_reason: degradeFailureAgainstReadyGraph
+        ? null
+        : directResult.repairReason,
+      reconcile_required: degradeFailureAgainstReadyGraph ? false : undefined,
+      replace_paper_operations: degradeFailureAgainstReadyGraph,
+      replace_active_batches: degradeFailureAgainstReadyGraph,
+      replace_batch_items: degradeFailureAgainstReadyGraph,
+      last_updated_at: nowIso,
     },
   });
   const manifest =
@@ -3081,11 +3337,15 @@ async function persistDirectPapernexusBatchExecutionResult(params: {
       source: params.source,
       queueKey: params.queueKey ?? null,
       requestId: directResult.request.requestId,
-      status: directResult.request.status,
-      runtimeStatus: directResult.runtimeStatus,
+      status: requestPatch.status,
+      runtimeStatus: degradeFailureAgainstReadyGraph
+        ? "ready"
+        : directResult.runtimeStatus,
+      degradedDueToGraphReady: degradeFailureAgainstReadyGraph,
+      warningReportPath,
       importTaskCount: directResult.importTaskIds.length,
       completedPaperCount: directResult.completedPapers.length,
-      batchItemCount: directResult.batchItems.length,
+      batchItemCount: degradeFailureAgainstReadyGraph ? 0 : directResult.batchItems.length,
     },
   });
   return {
@@ -3095,7 +3355,11 @@ async function persistDirectPapernexusBatchExecutionResult(params: {
     sessionKey: directResult.request.lastSessionKey,
     projectRoot: params.projectRoot,
     projectId: params.projectId,
-    summary: directResult.request.detail ?? directResult.waitingReason,
+    summary:
+      requestPatch.detail ??
+      (degradeFailureAgainstReadyGraph
+        ? "Direct PaperNexus batch failure was degradably satisfied by the ready graph."
+        : directResult.waitingReason),
     reusedIdleSession: false,
     activeResearcherSessionsInChannel: null,
     queued: false,

@@ -59,6 +59,7 @@ import {
 import { appendWorkflowLocalOperatorRelay } from "./workflow-local-operator-relay.js";
 import { isWorkflowRuntimeTrackingMissError } from "./workflow-background-run-reconcile.js";
 import { inspectRecentSessionProviderCapacity } from "./workflow-session-provider-capacity.js";
+import { detectWorkflowPaperArtifactTerminal } from "./workflow-paper-terminal";
 import type {
   WorkflowExecutionRuntime,
   WorkflowExecutionSessionInspection,
@@ -137,6 +138,10 @@ export type WorkflowRuntimeMaintenanceResult = {
     decision: string | null;
     recommendation: string | null;
   };
+  retiredPanelRuntime: {
+    autoCodeReviewQueueKeys: string[];
+    autoCodeReviewSessionKeys: string[];
+  };
 };
 
 function readString(value: unknown): string | null {
@@ -182,6 +187,55 @@ function readRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : null;
+}
+
+function buildDispatchSupersededByProjectRoutingReason(params: {
+  queueKey: string;
+  dispatchStage: string | null;
+  dispatchOwner: string | null;
+  currentStage: string | null;
+  currentOwner: string | null;
+}): string {
+  return [
+    `Workflow transition ${params.queueKey} was superseded by newer project routing.`,
+    params.dispatchStage ? `queued_stage=${params.dispatchStage}` : null,
+    params.dispatchOwner ? `queued_owner=${params.dispatchOwner}` : null,
+    params.currentStage ? `current_stage=${params.currentStage}` : null,
+    params.currentOwner ? `current_owner=${params.currentOwner}` : null,
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
+function isDispatchEntrySupersededByProjectRouting(params: {
+  entry: WorkflowRuntimeQueueEntry;
+  currentStage: string | null;
+  currentOwner: string | null;
+  pendingHandoffId: string | null;
+}): boolean {
+  if (
+    params.entry.entryType !== "dispatch_task" ||
+    !params.entry.dispatchPayload ||
+    !params.entry.queueKey.startsWith("handoff:")
+  ) {
+    return false;
+  }
+  const queuedIntentId = params.entry.queueKey.slice("handoff:".length);
+  if (params.pendingHandoffId && queuedIntentId === params.pendingHandoffId) {
+    return false;
+  }
+  const dispatchStage = readString(params.entry.dispatchPayload.stage);
+  const dispatchOwner = readString(params.entry.dispatchPayload.toRole);
+  if (!dispatchStage && !dispatchOwner) {
+    return false;
+  }
+  if (dispatchStage && params.currentStage && dispatchStage !== params.currentStage) {
+    return true;
+  }
+  if (dispatchOwner && params.currentOwner && dispatchOwner !== params.currentOwner) {
+    return true;
+  }
+  return false;
 }
 
 function readRecordArray(value: unknown): Record<string, unknown>[] {
@@ -1506,6 +1560,22 @@ async function markQueueFailed(params: {
   }));
 }
 
+async function markQueueCompleted(params: {
+  projectRoot: string;
+  entry: WorkflowRuntimeQueueEntry;
+  summary: string;
+}) {
+  return updateQueueEntry(params.projectRoot, params.entry.queueKey, (entry) => ({
+    ...entry,
+    status: "completed",
+    lastAttemptedAt: entry.lastAttemptedAt ?? nowIso(),
+    lastCheckedAt: nowIso(),
+    nextRetryAt: null,
+    lastError: null,
+    summary: entry.summary ?? params.summary,
+  }));
+}
+
 async function markQueueProviderCapacityCooldown(params: {
   projectRoot: string;
   projectId: string | null;
@@ -1618,6 +1688,152 @@ async function markLinkedSessionsFailed(params: {
       lastError: params.error,
     };
   });
+}
+
+async function markLinkedSessionsCompleted(params: {
+  projectRoot: string;
+  queueKey: string;
+}) {
+  const currentAt = nowIso();
+  await updateSessions(params.projectRoot, (entry) => {
+    if (entry.queueKey !== params.queueKey) {
+      return entry;
+    }
+    return {
+      ...entry,
+      status: "completed",
+      lastCheckedAt: currentAt,
+      lastFinishedAt: entry.lastFinishedAt ?? currentAt,
+      lastError: null,
+    };
+  });
+}
+
+async function retireCompletedAutoCodeReviewRuntimeState(params: {
+  projectRoot: string;
+  projectId: string | null;
+}): Promise<{
+  retiredQueueKeys: string[];
+  retiredSessionKeys: string[];
+}> {
+  const store = await readJsonIfExists<Record<string, unknown>>(
+    path.join(params.projectRoot, ".openclaw-research", "code-review-state.json")
+  );
+  const currentRound = readRecord(store?.currentRound);
+  const status = normalizeRuntimeLikeStatus(currentRound?.status);
+  const packetFingerprint = readString(
+    currentRound?.packetFingerprint ?? currentRound?.packet_fingerprint
+  );
+  if (
+    !packetFingerprint ||
+    !status ||
+    status === "reviewing" ||
+    status === "pending"
+  ) {
+    return {
+      retiredQueueKeys: [],
+      retiredSessionKeys: [],
+    };
+  }
+
+  const currentAt = nowIso();
+  const reason =
+    `Code review round ${packetFingerprint} is already terminal (${status}); ` +
+    "retiring linked runtime reviewer pool entries.";
+  const retiredQueueKeys = new Set<string>();
+  await updateWorkflowRuntimeQueueStore({
+    projectRoot: params.projectRoot,
+    projectId: params.projectId,
+    updater: (store) =>
+      store.entries.map((entry) => {
+        if (
+          entry.kind !== "workflow_auto_code_review" ||
+          !entry.queueKey.includes(`:${packetFingerprint}:`) ||
+          !ACTIVE_RUNTIME_QUEUE_STATUSES.has(entry.status)
+        ) {
+          return entry;
+        }
+        retiredQueueKeys.add(entry.queueKey);
+        return {
+          ...entry,
+          status: "completed",
+          lastCheckedAt: currentAt,
+          nextRetryAt: null,
+          lastError: entry.lastError ?? reason,
+        };
+      }),
+  });
+
+  const retiredSessionKeys: string[] = [];
+  await updateWorkflowRuntimeSessionsStore({
+    projectRoot: params.projectRoot,
+    projectId: params.projectId,
+    updater: (store) =>
+      store.entries.map((entry) => {
+        const queueKey = readString(entry.queueKey);
+        if (
+          entry.kind !== "workflow_auto_code_review" ||
+          !queueKey ||
+          !queueKey.includes(`:${packetFingerprint}:`) ||
+          (entry.status !== "active" && entry.status !== "needs_repair")
+        ) {
+          return entry;
+        }
+        retiredSessionKeys.push(entry.sessionKey);
+        return {
+          ...entry,
+          status: "completed",
+          lastCheckedAt: currentAt,
+          lastFinishedAt: entry.lastFinishedAt ?? currentAt,
+          lastError: entry.lastError ?? reason,
+        };
+      }),
+  });
+
+  const retiredQueueKeyList = [...retiredQueueKeys];
+  if (retiredQueueKeyList.length === 0 && retiredSessionKeys.length === 0) {
+    return {
+      retiredQueueKeys: [],
+      retiredSessionKeys: [],
+    };
+  }
+
+  await appendWorkflowRuntimeEvent({
+    projectRoot: params.projectRoot,
+    projectId: params.projectId,
+    kind: "auto_code_review_runtime_retired",
+    summary:
+      `Runtime maintenance retired ${retiredQueueKeyList.length} code review queue ` +
+      `entry(s) and ${retiredSessionKeys.length} session(s) after terminal review state.`,
+    details: {
+      reason,
+      packetFingerprint,
+      status,
+      queueKeys: retiredQueueKeyList,
+      sessionKeys: retiredSessionKeys,
+    },
+  });
+  await appendWorkflowDiagnosticEvent({
+    projectRoot: params.projectRoot,
+    projectId: params.projectId,
+    component: "runtime_maintenance",
+    action: "auto_code_review_terminal_runtime_retired",
+    status: "completed",
+    summary:
+      "Runtime maintenance retired code review runtime entries after the persisted review round reached a terminal state.",
+    details: {
+      reason,
+      packetFingerprint,
+      status,
+      queueKeys: retiredQueueKeyList,
+      sessionKeys: retiredSessionKeys,
+    },
+  });
+
+  return {
+    retiredQueueKeys: retiredQueueKeyList,
+    retiredSessionKeys,
+  };
 }
 
 async function markSessionFailed(params: {
@@ -1864,6 +2080,30 @@ async function syncQueuedHandoffIntentAfterReplay(params: {
   });
 }
 
+async function supersedeQueuedHandoffIntent(params: {
+  projectRoot: string;
+  queueKey: string;
+  summary: string;
+}): Promise<void> {
+  if (!params.queueKey.startsWith("handoff:")) {
+    return;
+  }
+  const intentId = params.queueKey.slice("handoff:".length);
+  const intent = await findWorkflowHandoffIntent({
+    projectRoot: params.projectRoot,
+    intentId,
+  });
+  if (!intent || intent.status === "superseded") {
+    return;
+  }
+  await transitionWorkflowHandoffIntent({
+    projectRoot: params.projectRoot,
+    intentId,
+    toStatus: "superseded",
+    summary: params.summary,
+  });
+}
+
 async function recordBroadcastFailures(params: {
   projectRoot: string;
   projectId: string | null;
@@ -1890,6 +2130,90 @@ async function recordBroadcastFailures(params: {
     );
   }
   return incidents;
+}
+
+function isResearchBackgroundRuntimeQueueEntry(entry: WorkflowRuntimeQueueEntry): boolean {
+  return (
+    entry.entryType === "background_run" &&
+    entry.family === "research" &&
+    (entry.kind === "research_queue" || entry.kind === "research_pipeline")
+  );
+}
+
+function isTerminalPaperRetirableRuntimeQueueEntry(
+  entry: WorkflowRuntimeQueueEntry
+): boolean {
+  return isResearchBackgroundRuntimeQueueEntry(entry) || entry.entryType === "dispatch_task";
+}
+
+async function retireResearchQueuesForTerminalPaperArtifact(params: {
+  projectRoot: string;
+  projectId: string | null;
+}): Promise<string[]> {
+  const manifest =
+    (await readJsonIfExists<Record<string, unknown>>(
+      path.join(params.projectRoot, "PROJECT_MANIFEST.json")
+    )) ?? {};
+  const lane = readString(params.projectId)?.startsWith("survey-")
+    ? "survey"
+    : "experiment";
+  const terminal = await detectWorkflowPaperArtifactTerminal({
+    projectRoot: params.projectRoot,
+    manifest,
+    lane,
+  });
+  if (!terminal.terminal) {
+    return [];
+  }
+  const queueStore = await readWorkflowRuntimeQueueStore(params.projectRoot);
+  const retireEntries = queueStore.entries.filter(
+    (entry) =>
+      isTerminalPaperRetirableRuntimeQueueEntry(entry) &&
+      ACTIVE_RUNTIME_QUEUE_STATUSES.has(entry.status)
+  );
+  const retiredQueueKeys: string[] = [];
+  for (const entry of retireEntries) {
+    const summary =
+      "Runtime maintenance retired a workflow queue entry because the project already has a ready paper artifact.";
+    await markQueueCompleted({
+      projectRoot: params.projectRoot,
+      entry,
+      summary,
+    });
+    await markLinkedSessionsCompleted({
+      projectRoot: params.projectRoot,
+      queueKey: entry.queueKey,
+    });
+    retiredQueueKeys.push(entry.queueKey);
+  }
+  if (retiredQueueKeys.length > 0) {
+    await appendWorkflowDiagnosticEvent({
+      projectRoot: params.projectRoot,
+      projectId: params.projectId,
+      component: "runtime_maintenance",
+      action: "terminal_paper_workflow_queue_retired",
+      status: "completed",
+      summary:
+        "Runtime maintenance retired workflow queue entries after paper artifact readiness was detected.",
+      details: {
+        queueKeys: retiredQueueKeys,
+        terminal,
+      },
+    });
+    await appendWorkflowRuntimeEvent({
+      projectRoot: params.projectRoot,
+      projectId: params.projectId,
+      kind: "background_queue_retired_project_terminal",
+      summary:
+        `Retired ${retiredQueueKeys.length} workflow queue entr` +
+        `${retiredQueueKeys.length === 1 ? "y" : "ies"} because the project already has a ready paper artifact.`,
+      details: {
+        queueKeys: retiredQueueKeys,
+        terminal,
+      },
+    });
+  }
+  return retiredQueueKeys;
 }
 
 export async function runWorkflowRuntimeMaintenancePass(params: {
@@ -1948,6 +2272,11 @@ export async function runWorkflowRuntimeMaintenancePass(params: {
     path.join(projectRoot, "PROJECT_MANIFEST.json")
   );
   const currentStage = readString(manifest?.current_stage);
+  const currentOwner = readString(manifest?.owner_agent);
+  const orchestrationState = readRecord(manifest?.orchestration_state);
+  const pendingHandoffId = readString(
+    orchestrationState?.pending_handoff_id ?? orchestrationState?.pendingHandoffId
+  );
   const paperIngestion =
     manifest?.paper_ingestion &&
     typeof manifest.paper_ingestion === "object" &&
@@ -2002,6 +2331,11 @@ export async function runWorkflowRuntimeMaintenancePass(params: {
     projectRoot,
     projectId,
   });
+  const retiredAutoCodeReviewRuntime =
+    await retireCompletedAutoCodeReviewRuntimeState({
+      projectRoot,
+      projectId,
+    });
   await restoreMissingQueueEntriesForRepairSessions({
     projectRoot,
     projectId,
@@ -2020,6 +2354,11 @@ export async function runWorkflowRuntimeMaintenancePass(params: {
       projectRoot,
       projectId,
       activeSessionInspectionGraceMs: params.activeSessionInspectionGraceMs,
+    });
+  const terminalPaperRetiredQueueKeys =
+    await retireResearchQueuesForTerminalPaperArtifact({
+      projectRoot,
+      projectId,
     });
 
   const queueStore = await readWorkflowRuntimeQueueStore(projectRoot);
@@ -2116,6 +2455,61 @@ export async function runWorkflowRuntimeMaintenancePass(params: {
             expectedProjectRoot: projectRoot,
             boundProjectRoot: bindingGate.currentBinding?.projectRoot ?? null,
             boundProjectId: bindingGate.currentBinding?.projectId ?? null,
+          },
+        })
+      );
+      continue;
+    }
+    if (
+      isDispatchEntrySupersededByProjectRouting({
+        entry,
+        currentStage,
+        currentOwner,
+        pendingHandoffId,
+      })
+    ) {
+      const error = buildDispatchSupersededByProjectRoutingReason({
+        queueKey: entry.queueKey,
+        dispatchStage: readString(entry.dispatchPayload?.stage),
+        dispatchOwner: readString(entry.dispatchPayload?.toRole),
+        currentStage,
+        currentOwner,
+      });
+      await markQueueFailed({
+        projectRoot,
+        projectId,
+        entry,
+        error,
+      });
+      await markLinkedSessionsFailed({
+        projectRoot,
+        queueKey: entry.queueKey,
+        error,
+      });
+      await supersedeQueuedHandoffIntent({
+        projectRoot,
+        queueKey: entry.queueKey,
+        summary:
+          "Runtime maintenance superseded the queued handoff because the live project stage/owner moved on.",
+      });
+      exhaustedQueueKeys.push(entry.queueKey);
+      incidents.push(
+        await recordWorkflowRuntimeIncident({
+          projectRoot,
+          projectId,
+          idempotencyKey: `routing-superseded:${entry.queueKey}`,
+          kind: "queue_exhausted",
+          severity: "warning",
+          summary:
+            "Runtime maintenance retired a stale dispatch after project routing advanced.",
+          queueKey: entry.queueKey,
+          sessionKey: entry.requesterSessionKey,
+          error,
+          details: {
+            currentStage,
+            currentOwner,
+            queuedStage: readString(entry.dispatchPayload?.stage),
+            queuedOwner: readString(entry.dispatchPayload?.toRole),
           },
         })
       );
@@ -2413,12 +2807,19 @@ export async function runWorkflowRuntimeMaintenancePass(params: {
       replayedQueueKeys,
       exhaustedQueueKeys,
       cooldownQueueKeys,
+      terminalPaperRetiredQueueKeys,
       exhaustedSessionKeys,
       handoffMaintenance,
       queueRepairPending: watchdogSummary.queueRepairPending,
       sessionRepairPending: watchdogSummary.sessionRepairPending,
       repairedPaperIngestionRequestIds:
         paperIngestionMaintenance.repairedRequestIds,
+      retiredPanelRuntime: {
+        autoCodeReviewQueueKeys:
+          retiredAutoCodeReviewRuntime.retiredQueueKeys,
+        autoCodeReviewSessionKeys:
+          retiredAutoCodeReviewRuntime.retiredSessionKeys,
+      },
       incidentCount: watchdogSummary.incidentCount,
       experimentMaintenance,
     },
@@ -2435,16 +2836,23 @@ export async function runWorkflowRuntimeMaintenancePass(params: {
           ? "degraded"
           : "completed",
     stage: currentStage,
-    owner: readString(manifest?.owner_agent),
+    owner: currentOwner,
     summary: "Runtime maintenance pass completed.",
     details: {
       replayedQueueKeys,
       exhaustedQueueKeys,
       cooldownQueueKeys,
+      terminalPaperRetiredQueueKeys,
       exhaustedSessionKeys,
       repairedSessionKeys,
       repairedPaperIngestionRequestIds:
         paperIngestionMaintenance.repairedRequestIds,
+      retiredPanelRuntime: {
+        autoCodeReviewQueueKeys:
+          retiredAutoCodeReviewRuntime.retiredQueueKeys,
+        autoCodeReviewSessionKeys:
+          retiredAutoCodeReviewRuntime.retiredSessionKeys,
+      },
       handoffMaintenance,
       watchdogSummary,
       experimentMaintenance,
@@ -2465,5 +2873,9 @@ export async function runWorkflowRuntimeMaintenancePass(params: {
     handoffMaintenance,
     watchdogSummary,
     experimentMaintenance,
+    retiredPanelRuntime: {
+      autoCodeReviewQueueKeys: retiredAutoCodeReviewRuntime.retiredQueueKeys,
+      autoCodeReviewSessionKeys: retiredAutoCodeReviewRuntime.retiredSessionKeys,
+    },
   };
 }
