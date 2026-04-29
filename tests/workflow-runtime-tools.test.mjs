@@ -1622,10 +1622,25 @@ test("research_workflow run_literature_research_controller executes controller q
   assert.equal(result.receipt.search_execution.provider_names[0], "openalex");
   assert.equal(result.autoPaperIngestion.queued, true);
   assert.equal(result.receipt.papernexus_import.queued, true);
+  assert.equal(result.receipt.provider_result_index.merged_candidate_count, 1);
+  assert.equal(
+    result.receipt.provider_result_index.selected_for_import_count,
+    1
+  );
+  assert.equal(result.receipt.papernexus_import_batch_manifest.status, "queued");
+  assert.equal(
+    result.receipt.papernexus_refresh_report.status,
+    "queued_graph_build"
+  );
+  assert.equal(result.receipt.citation_expansion_report.status, "planned");
   assert.equal(result.receipt.next_route, "graph_build");
   assert.match(
     result.receipt.artifact_paths.run_receipt_path,
     /literature_controller_run_receipt\.json$/
+  );
+  assert.match(
+    result.receipt.artifact_paths.provider_result_index_path,
+    /provider_result_index\.json$/
   );
 
   const receipt = JSON.parse(
@@ -1641,16 +1656,57 @@ test("research_workflow run_literature_research_controller executes controller q
   );
   assert.equal(receipt.executed, true);
 
+  const controllerDir = path.join(
+    projectRoot,
+    "researcher",
+    "literature-research-controller"
+  );
+  const providerIndex = JSON.parse(
+    await fs.readFile(path.join(controllerDir, "provider_result_index.json"), "utf8")
+  );
+  assert.equal(providerIndex.provider_status_counts.ok, 1);
+  assert.equal(providerIndex.merged_candidate_count, 1);
+  assert.equal(providerIndex.candidates[0].execution_decision, "selected_for_import");
+
+  const importManifest = JSON.parse(
+    await fs.readFile(
+      path.join(controllerDir, "papernexus_import_batch_manifest.json"),
+      "utf8"
+    )
+  );
+  assert.equal(importManifest.status, "queued");
+  assert.equal(importManifest.importable_paper_count, 1);
+  assert.equal(importManifest.wrapper, "pn_batch_import.py");
+
+  const refreshReport = JSON.parse(
+    await fs.readFile(
+      path.join(controllerDir, "papernexus_refresh_report.json"),
+      "utf8"
+    )
+  );
+  assert.equal(refreshReport.status, "queued_graph_build");
+  assert.equal(refreshReport.graph_build_expected, true);
+
+  const citationExpansionReport = JSON.parse(
+    await fs.readFile(
+      path.join(controllerDir, "citation_expansion_report.json"),
+      "utf8"
+    )
+  );
+  assert.equal(citationExpansionReport.status, "planned");
+  assert.equal(citationExpansionReport.bounded, true);
+
   const trace = await fs.readFile(
-    path.join(
-      projectRoot,
-      "researcher",
-      "literature-research-controller",
-      "literature_controller_trace.jsonl"
-    ),
+    path.join(controllerDir, "literature_controller_trace.jsonl"),
     "utf8"
   );
   assert.equal(trace.trim().split(/\r?\n/).length, 1);
+
+  const repairLog = await fs.readFile(
+    path.join(controllerDir, "literature_repair_log.jsonl"),
+    "utf8"
+  );
+  assert.match(repairLog, /"papernexus_refresh_status":"queued_graph_build"/);
 });
 
 test("research_workflow queue_paper_ingestion discovers paper-staging source index by default", async (t) => {

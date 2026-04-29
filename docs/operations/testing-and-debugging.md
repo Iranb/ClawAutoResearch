@@ -528,7 +528,7 @@ node scripts/build-e2e-project-dashboard.mjs \
 - `E2E_REVIEWER_CALIBRATION.json`：把 reviewer score 对齐到明确 rubric、venue profile 和 issue schema；当缺少 rubric 或 venue 时，scorecard 会把 reviewer score 标成 partial/uncalibrated，而不是当作可比较审稿分。
 - `E2E_COPYEDIT_STYLE_AUDIT.json`：检查 placeholder、过长句、marketing language、强 claim 是否有边界语言；用于避免 no-Discord 论文在 artifact complete 后仍带有不可投稿的表达问题。
 - `E2E_EXPERIMENT_LEASE_CONTRACT.json`：审计实验搜索的 shared incumbent/CAS 合同，记录 incumbent commit、candidate base/head、活跃实验写锁冲突和裸结果是否能绕过 shared incumbent；用于发现多 worker 并行实验覆盖风险。
-- `researcher/literature-research-controller/*`：no-Discord E2E 会自动物化文献调研闭环合同，包括 `literature_need_assessment.json`、`retrieval_keyword_bank.json`、`literature_query_plan.json`、`candidate_screening_report.json`、`literature_coverage_report.json` 和 `LITERATURE_RESEARCH_CONTROLLER_STATUS.md`。当显式运行 `research_workflow.run_literature_research_controller` 时，还会写入 `literature_controller_run_receipt.json` 和 `literature_controller_trace.jsonl`。
+- `researcher/literature-research-controller/*`：no-Discord E2E 会自动物化文献调研闭环合同，包括 `literature_need_assessment.json`、`retrieval_keyword_bank.json`、`literature_query_plan.json`、`candidate_screening_report.json`、`literature_coverage_report.json` 和 `LITERATURE_RESEARCH_CONTROLLER_STATUS.md`。当显式运行 `research_workflow.run_literature_research_controller` 时，还会写入 `provider_result_index.json`、`papernexus_import_batch_manifest.json`、`papernexus_refresh_report.json`、`citation_expansion_report.json`、`literature_controller_run_receipt.json`、`literature_controller_trace.jsonl` 和 `literature_repair_log.jsonl`。
 - `PLATFORM_PROFILE.json`：记录本次 E2E 的 runtime/platform profile 和 CPU/MLX/CUDA/WebGPU capability matrix；未知硬件只标记为 `unknown_not_probed`，不会伪造可复现实验能力。
 - `E2E_ARTIFACT_CHECKLIST.json`：required artifact 的机器可读 presence gate。
 - `E2E_STATE_TIMELINE.jsonl`：runtime/handoff 事件时间线。
@@ -544,7 +544,12 @@ Graph build 结束后还会写入 `graph/PAPERNEXUS_TASK_CERTIFICATION.json`，�
 `run_literature_research_controller` 会先物化 controller，然后把 `literature_query_plan.json` 中的可执行 research30 queries 传给 provider discovery，最后复用 broad paper search 的 PaperNexus auto-import queue。它不会把 PaperNexus corpus lookup 当成外部 provider；lookup 只保留在 controller plan/receipt 中作为证据路线。运行完成后查看：
 
 - `literature_controller_run_receipt.json`：本轮是否执行、query/provider 数、候选/已解析来源数、source index update、PaperNexus import queue 状态和下一路由。
+- `provider_result_index.json`：把 provider query 状态、hit 数、合并候选、source-backed/import 决策和 risk flags 固定到 controller 目录；不要只看 `researcher/search_raw/*` 的时间戳文件。
+- `papernexus_import_batch_manifest.json`：记录本轮是否创建 PaperNexus batch import、request id、wrapper、manifest path、source index path 和可导入论文数。
+- `papernexus_refresh_report.json`：把下一跳明确为 `queued_graph_build`、`waiting_for_active_import`、`pending_no_importable_sources`、`needs_rerun_failed_gate` 或 `skipped`，用于判断 graph build 是否真的应该继续。
+- `citation_expansion_report.json`：记录 bounded citation expansion packet 的 seed/query 数和 query types；如果没有 packet，会明确写成 `not_required` 或 `skipped`。
 - `literature_controller_trace.jsonl`：每次 controller run 追加一行，可对照多轮 literature repair 是否真的推进。
+- `literature_repair_log.jsonl`：每次 controller run 追加紧凑摘要，适合排查多轮搜索/导入/构图是否被同一个原因卡住。
 
 同一个 certification 文件还会记录 `upload.import_tasks`，用于判断 PaperNexus 上传和构图是否真的逐项完成：
 

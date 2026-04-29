@@ -28,9 +28,14 @@ import {
 import { buildBroadPaperSearchPlan } from "../research30/query-planner";
 import type {
   BroadPaperProviderName,
+  BroadPaperProviderQueryResult,
   BroadPaperSearchDepth,
   BroadPaperSearchQuery,
 } from "../research30/provider-contract";
+import {
+  serializeMergedPaperCandidate,
+  type MergedPaperCandidate,
+} from "../research30/merge";
 import { collectSurveyEntries } from "../survey-review-artifacts";
 
 export const DEFAULT_LITERATURE_RESEARCH_CONTROLLER_DIR =
@@ -91,6 +96,134 @@ type CandidateScreeningRecord = {
     | "included_not_in_source_index";
 };
 
+type ProviderCandidateDecision =
+  | "selected_for_import"
+  | "defer_needs_source"
+  | "background_candidate"
+  | "exclude_low_relevance";
+
+type ProviderCandidateIndexRecord = {
+  canonical_id: string | null;
+  title: string | null;
+  year: number | null;
+  venue: string | null;
+  doi: string | null;
+  arxiv_id: string | null;
+  source_path: string | null;
+  pdf_url: string | null;
+  best_oa_url: string | null;
+  resolution_status: string | null;
+  source_backed: boolean;
+  provider_agreement_count: number;
+  query_ids: string[];
+  provider_scores: Record<string, number | null>;
+  recall_score: number | null;
+  selection_score: number | null;
+  topic_relevance_score: number | null;
+  matched_topic_tokens: string[];
+  topic_relevance_evidence_source: string | null;
+  execution_decision: ProviderCandidateDecision;
+  risk_flags: string[];
+};
+
+type ProviderResultIndexArtifact = {
+  schema_version: 1;
+  generated_at: string;
+  project_id: string | null;
+  project_root: string;
+  topic: string | null;
+  trigger: string;
+  status: "executed" | "skipped";
+  skip_reason: string | null;
+  provider_names: BroadPaperProviderName[];
+  query_count: number;
+  provider_query_count: number;
+  provider_status_counts: Record<string, number>;
+  total_hit_count: number;
+  merged_candidate_count: number;
+  resolved_source_count: number;
+  metadata_only_count: number;
+  selected_for_import_count: number;
+  search_artifacts: Record<string, unknown> | null;
+  provider_query_results: Array<{
+    provider: BroadPaperProviderName;
+    query_id: string;
+    status: BroadPaperProviderQueryResult["status"];
+    total_hits: number;
+    hit_count: number;
+    warning_count: number;
+    error: string | null;
+    availability: string | null;
+  }>;
+  candidates: ProviderCandidateIndexRecord[];
+};
+
+type PapernexusImportBatchManifestArtifact = {
+  schema_version: 1;
+  generated_at: string;
+  project_id: string | null;
+  project_root: string;
+  trigger: string;
+  status:
+    | "queued"
+    | "active_request_exists"
+    | "not_queued"
+    | "not_started"
+    | "skipped";
+  queued: boolean;
+  reason: string | null;
+  request_id: string | null;
+  wrapper: string | null;
+  command_text: string | null;
+  manifest_path: string | null;
+  source_index_path: string | null;
+  shared_corpus: string | null;
+  importable_paper_count: number | null;
+  paper_count: number | null;
+  raw_papernexus_import: Record<string, unknown> | null;
+};
+
+type PapernexusRefreshReportArtifact = {
+  schema_version: 1;
+  generated_at: string;
+  project_id: string | null;
+  project_root: string;
+  trigger: string;
+  status:
+    | "queued_graph_build"
+    | "waiting_for_active_import"
+    | "pending_no_importable_sources"
+    | "skipped"
+    | "not_started"
+    | "needs_rerun_failed_gate"
+    | "none";
+  graph_build_expected: boolean;
+  next_route: LiteratureResearchControllerRunReceipt["next_route"];
+  reason: string | null;
+  import_request_id: string | null;
+  import_manifest_path: string | null;
+  source_index_path: string | null;
+  next_action: string;
+};
+
+type CitationExpansionReportArtifact = {
+  schema_version: 1;
+  generated_at: string;
+  project_id: string | null;
+  project_root: string;
+  trigger: string;
+  status: "planned" | "not_required" | "skipped";
+  bounded: boolean;
+  max_seeds: number | null;
+  seed_count: number;
+  query_count: number;
+  packet_path: string | null;
+  markdown_path: string | null;
+  query_types: Record<string, number>;
+  recommendations: string[];
+  auto_citation_verification: Record<string, unknown> | null;
+};
+
 export type LiteratureResearchControllerArtifacts = {
   schema_version: 1;
   generated_at: string;
@@ -109,6 +242,11 @@ export type LiteratureResearchControllerArtifacts = {
     status_markdown_path: string;
     run_receipt_path: string;
     trace_path: string;
+    provider_result_index_path: string;
+    papernexus_import_batch_manifest_path: string;
+    papernexus_refresh_report_path: string;
+    citation_expansion_report_path: string;
+    repair_log_path: string;
     coverage_audit_path: string;
     citation_expansion_packet_path: string | null;
   };
@@ -122,6 +260,11 @@ export type LiteratureResearchControllerArtifacts = {
     status_markdown_path: string;
     run_receipt_path: string;
     trace_path: string;
+    provider_result_index_path: string;
+    papernexus_import_batch_manifest_path: string;
+    papernexus_refresh_report_path: string;
+    citation_expansion_report_path: string;
+    repair_log_path: string;
   };
   need_assessment: Record<string, unknown>;
   keyword_bank: Record<string, unknown>;
@@ -158,7 +301,11 @@ export type LiteratureResearchControllerRunReceipt = {
     source_index_update: Record<string, unknown> | null;
     artifacts: Record<string, unknown> | null;
   } | null;
+  provider_result_index: Record<string, unknown> | null;
   papernexus_import: Record<string, unknown> | null;
+  papernexus_import_batch_manifest: Record<string, unknown> | null;
+  papernexus_refresh_report: Record<string, unknown> | null;
+  citation_expansion_report: Record<string, unknown> | null;
   controller_after: {
     status: LiteratureResearchControllerArtifacts["status"];
     decision: LiteratureResearchControllerArtifacts["decision"];
@@ -170,6 +317,11 @@ export type LiteratureResearchControllerRunReceipt = {
   artifact_paths: {
     run_receipt_path: string;
     trace_path: string;
+    provider_result_index_path: string;
+    papernexus_import_batch_manifest_path: string;
+    papernexus_refresh_report_path: string;
+    citation_expansion_report_path: string;
+    repair_log_path: string;
   };
 };
 
@@ -231,6 +383,14 @@ function buildArtifactPaths(projectRoot: string) {
     statusMarkdownPath: path.join(baseDir, "LITERATURE_RESEARCH_CONTROLLER_STATUS.md"),
     runReceiptPath: path.join(baseDir, "literature_controller_run_receipt.json"),
     tracePath: path.join(baseDir, "literature_controller_trace.jsonl"),
+    providerResultIndexPath: path.join(baseDir, "provider_result_index.json"),
+    papernexusImportBatchManifestPath: path.join(
+      baseDir,
+      "papernexus_import_batch_manifest.json"
+    ),
+    papernexusRefreshReportPath: path.join(baseDir, "papernexus_refresh_report.json"),
+    citationExpansionReportPath: path.join(baseDir, "citation_expansion_report.json"),
+    repairLogPath: path.join(baseDir, "literature_repair_log.jsonl"),
   };
 }
 
@@ -1102,7 +1262,12 @@ ${bullet(params.nextActions)}
 - candidate_screening_report: ${relativePathFromProject(params.projectRoot, params.paths.candidateScreeningReportPath)}
 - coverage_report: ${relativePathFromProject(params.projectRoot, params.paths.coverageReportPath)}
 - run_receipt: ${relativePathFromProject(params.projectRoot, params.paths.runReceiptPath)}
+- provider_result_index: ${relativePathFromProject(params.projectRoot, params.paths.providerResultIndexPath)}
+- papernexus_import_batch_manifest: ${relativePathFromProject(params.projectRoot, params.paths.papernexusImportBatchManifestPath)}
+- papernexus_refresh_report: ${relativePathFromProject(params.projectRoot, params.paths.papernexusRefreshReportPath)}
+- citation_expansion_report: ${relativePathFromProject(params.projectRoot, params.paths.citationExpansionReportPath)}
 - trace: ${relativePathFromProject(params.projectRoot, params.paths.tracePath)}
+- repair_log: ${relativePathFromProject(params.projectRoot, params.paths.repairLogPath)}
 `;
 }
 
@@ -1132,6 +1297,380 @@ function nextActionsFromController(
   return asStringArray(asRecord(controller.coverage_report)?.next_actions);
 }
 
+function finiteNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function pickFiniteNumber(record: Record<string, unknown> | null, keys: string[]): number | null {
+  if (!record) {
+    return null;
+  }
+  for (const key of keys) {
+    const value = finiteNumber(record[key]);
+    if (value != null) {
+      return value;
+    }
+  }
+  return null;
+}
+
+function countStrings(values: string[]): Record<string, number> {
+  return values.reduce<Record<string, number>>((counts, value) => {
+    counts[value] = (counts[value] ?? 0) + 1;
+    return counts;
+  }, {});
+}
+
+function asNumberMap(raw: unknown): Record<string, number | null> {
+  const record = asRecord(raw);
+  if (!record) {
+    return {};
+  }
+  const normalized: Record<string, number | null> = {};
+  for (const [key, value] of Object.entries(record)) {
+    const numeric = finiteNumber(value);
+    normalized[key] = numeric;
+  }
+  return normalized;
+}
+
+function isResolvedSourceStatus(value: string | null): boolean {
+  return value === "resolved_markdown" || value === "resolved_pdf";
+}
+
+function buildProviderCandidateIndexRecord(
+  candidate: MergedPaperCandidate
+): ProviderCandidateIndexRecord {
+  const serialized = serializeMergedPaperCandidate(candidate);
+  const sourcePath = pickString(serialized, ["source_path", "sourcePath"]);
+  const resolutionStatus = pickString(serialized, [
+    "resolution_status",
+    "resolutionStatus",
+  ]);
+  const sourceBacked = Boolean(sourcePath && isResolvedSourceStatus(resolutionStatus));
+  const topicRelevanceScore = pickFiniteNumber(serialized, [
+    "topic_relevance_score",
+    "topicRelevanceScore",
+  ]);
+  const providerAgreementCount =
+    pickFiniteNumber(serialized, [
+      "provider_agreement_count",
+      "providerAgreementCount",
+    ]) ?? 0;
+  const pdfUrl = pickString(serialized, ["pdf_url", "pdfUrl"]);
+  const bestOaUrl = pickString(serialized, ["best_oa_url", "bestOaUrl"]);
+  const riskFlags = uniqueStrings([
+    resolutionStatus === "metadata_only_unresolved" ? "metadata_only" : null,
+    !sourcePath ? "missing_local_source" : null,
+    !pdfUrl && !bestOaUrl ? "missing_open_access_url" : null,
+    topicRelevanceScore != null && topicRelevanceScore < 18
+      ? "low_topic_relevance"
+      : null,
+    providerAgreementCount < 2 ? "single_provider_candidate" : null,
+  ].filter((value): value is string => Boolean(value)));
+  const executionDecision: ProviderCandidateDecision = sourceBacked &&
+    (topicRelevanceScore == null || topicRelevanceScore >= 18)
+    ? "selected_for_import"
+    : resolutionStatus === "metadata_only_unresolved" &&
+        (topicRelevanceScore == null || topicRelevanceScore >= 30)
+      ? "defer_needs_source"
+      : topicRelevanceScore != null && topicRelevanceScore < 18
+        ? "exclude_low_relevance"
+        : "background_candidate";
+  return {
+    canonical_id: pickString(serialized, ["canonical_id", "canonicalId"]),
+    title: pickString(serialized, ["title"]),
+    year: pickFiniteNumber(serialized, ["year"]),
+    venue: pickString(serialized, ["venue"]),
+    doi: pickString(serialized, ["doi"]),
+    arxiv_id: pickString(serialized, ["arxiv_id", "arxivId"]),
+    source_path: sourcePath,
+    pdf_url: pdfUrl,
+    best_oa_url: bestOaUrl,
+    resolution_status: resolutionStatus,
+    source_backed: sourceBacked,
+    provider_agreement_count: providerAgreementCount,
+    query_ids: asStringArray(serialized.query_ids ?? serialized.queryIds),
+    provider_scores: asNumberMap(serialized.provider_scores ?? serialized.providerScores),
+    recall_score: pickFiniteNumber(serialized, ["recall_score", "recallScore"]),
+    selection_score: pickFiniteNumber(serialized, [
+      "selection_score",
+      "selectionScore",
+    ]),
+    topic_relevance_score: topicRelevanceScore,
+    matched_topic_tokens: asStringArray(
+      serialized.matched_topic_tokens ?? serialized.matchedTopicTokens
+    ),
+    topic_relevance_evidence_source:
+      pickString(serialized, [
+        "topic_relevance_evidence_source",
+        "topicRelevanceEvidenceSource",
+      ]),
+    execution_decision: executionDecision,
+    risk_flags: riskFlags,
+  };
+}
+
+function buildProviderResultIndexArtifact(params: {
+  projectRoot: string;
+  generatedAt: string;
+  trigger: string;
+  controllerBefore: LiteratureResearchControllerArtifacts;
+  executed: boolean;
+  skipReason: string | null;
+  searchExecution: LiteratureResearchControllerRunReceipt["search_execution"];
+  providerQueryResults: BroadPaperProviderQueryResult[];
+  mergedCandidates: MergedPaperCandidate[];
+}): ProviderResultIndexArtifact {
+  const providerQueryResults = params.providerQueryResults.map((result) => ({
+    provider: result.provider,
+    query_id: result.queryId,
+    status: result.status,
+    total_hits: result.totalHits,
+    hit_count: result.hits.length,
+    warning_count: result.warnings.length,
+    error: result.error,
+    availability: result.capabilities.availability,
+  }));
+  const candidates = params.mergedCandidates
+    .map((candidate) => buildProviderCandidateIndexRecord(candidate))
+    .slice(0, 300);
+  const providerNames = params.searchExecution?.provider_names?.length
+    ? params.searchExecution.provider_names
+    : Array.from(new Set(params.providerQueryResults.map((result) => result.provider)));
+  return {
+    schema_version: 1,
+    generated_at: params.generatedAt,
+    project_id: params.controllerBefore.project_id,
+    project_root: params.projectRoot,
+    topic: params.searchExecution?.topic ?? params.controllerBefore.topic,
+    trigger: params.trigger,
+    status: params.executed ? "executed" : "skipped",
+    skip_reason: params.skipReason,
+    provider_names: providerNames,
+    query_count: params.searchExecution?.query_count ?? 0,
+    provider_query_count: providerQueryResults.length,
+    provider_status_counts: countStrings(providerQueryResults.map((result) => result.status)),
+    total_hit_count: providerQueryResults.reduce(
+      (sum, result) => sum + result.total_hits,
+      0
+    ),
+    merged_candidate_count:
+      params.searchExecution?.candidate_count ?? params.mergedCandidates.length,
+    resolved_source_count:
+      params.searchExecution?.resolved_source_count ??
+      candidates.filter((candidate) => candidate.source_backed).length,
+    metadata_only_count:
+      params.searchExecution?.metadata_only_count ??
+      candidates.filter(
+        (candidate) => candidate.resolution_status === "metadata_only_unresolved"
+      ).length,
+    selected_for_import_count: candidates.filter(
+      (candidate) => candidate.execution_decision === "selected_for_import"
+    ).length,
+    search_artifacts: params.searchExecution?.artifacts ?? null,
+    provider_query_results: providerQueryResults,
+    candidates,
+  };
+}
+
+function buildPapernexusImportBatchManifestArtifact(params: {
+  projectRoot: string;
+  generatedAt: string;
+  trigger: string;
+  projectId: string | null;
+  papernexusImport: Record<string, unknown> | null;
+}): PapernexusImportBatchManifestArtifact {
+  const record = asRecord(params.papernexusImport);
+  const request = asRecord(record?.request);
+  const queued = record?.queued === true;
+  const reason = pickString(record ?? {}, ["reason"]);
+  const status: PapernexusImportBatchManifestArtifact["status"] = !record
+    ? "not_started"
+    : queued
+      ? "queued"
+      : reason === "active_papernexus_import_request_exists"
+        ? "active_request_exists"
+        : reason?.includes("disabled") || reason?.includes("skipped")
+          ? "skipped"
+          : "not_queued";
+  return {
+    schema_version: 1,
+    generated_at: params.generatedAt,
+    project_id: params.projectId,
+    project_root: params.projectRoot,
+    trigger: params.trigger,
+    status,
+    queued,
+    reason,
+    request_id:
+      pickString(request ?? {}, ["requestId", "request_id"]) ??
+      pickString(record ?? {}, ["request_id", "requestId"]),
+    wrapper:
+      pickString(request ?? {}, ["wrapper"]) ??
+      pickString(record ?? {}, ["wrapper"]),
+    command_text:
+      pickString(request ?? {}, ["commandText", "command_text"]) ??
+      pickString(record ?? {}, ["commandText", "command_text"]),
+    manifest_path:
+      pickString(request ?? {}, ["manifestPath", "manifest_path"]) ??
+      pickString(record ?? {}, ["manifest_path", "manifestPath"]),
+    source_index_path: pickString(record ?? {}, [
+      "source_index_path",
+      "sourceIndexPath",
+    ]),
+    shared_corpus:
+      pickString(request ?? {}, ["sharedCorpus", "shared_corpus"]) ??
+      pickString(record ?? {}, ["shared_corpus", "sharedCorpus"]),
+    importable_paper_count: pickFiniteNumber(record, [
+      "importable_paper_count",
+      "importablePaperCount",
+    ]),
+    paper_count:
+      pickFiniteNumber(request, ["paperCount", "paper_count"]) ??
+      pickFiniteNumber(record, ["paper_count", "paperCount"]),
+    raw_papernexus_import: record,
+  };
+}
+
+function buildPapernexusRefreshReportArtifact(params: {
+  projectRoot: string;
+  generatedAt: string;
+  trigger: string;
+  projectId: string | null;
+  executed: boolean;
+  nextRoute: LiteratureResearchControllerRunReceipt["next_route"];
+  importManifest: PapernexusImportBatchManifestArtifact;
+}): PapernexusRefreshReportArtifact {
+  const status: PapernexusRefreshReportArtifact["status"] = params.importManifest.queued
+    ? "queued_graph_build"
+    : params.importManifest.status === "active_request_exists"
+      ? "waiting_for_active_import"
+      : !params.executed || params.importManifest.status === "skipped"
+        ? "skipped"
+        : params.importManifest.reason === "no_importable_staged_sources"
+          ? "pending_no_importable_sources"
+          : params.nextRoute === "rerun_failed_gate"
+            ? "needs_rerun_failed_gate"
+            : params.nextRoute === "none"
+              ? "none"
+              : "not_started";
+  const graphBuildExpected =
+    status === "queued_graph_build" || status === "waiting_for_active_import";
+  const nextAction = graphBuildExpected
+    ? "wait for PaperNexus import completion, then run graph_build"
+    : status === "pending_no_importable_sources"
+      ? "rerun source resolution or widen provider discovery before graph_build"
+      : status === "needs_rerun_failed_gate"
+        ? "rerun the failed literature/review gate with current controller artifacts"
+        : status === "skipped"
+          ? "no graph refresh was scheduled in this controller run"
+          : "none";
+  return {
+    schema_version: 1,
+    generated_at: params.generatedAt,
+    project_id: params.projectId,
+    project_root: params.projectRoot,
+    trigger: params.trigger,
+    status,
+    graph_build_expected: graphBuildExpected,
+    next_route: params.nextRoute,
+    reason: params.importManifest.reason,
+    import_request_id: params.importManifest.request_id,
+    import_manifest_path: params.importManifest.manifest_path,
+    source_index_path: params.importManifest.source_index_path,
+    next_action: nextAction,
+  };
+}
+
+function buildCitationExpansionReportArtifact(params: {
+  projectRoot: string;
+  generatedAt: string;
+  trigger: string;
+  projectId: string | null;
+  citationExpansionPacket: CitationExpansionPacket | null;
+  autoCitationVerification: Record<string, unknown> | null;
+  executed: boolean;
+}): CitationExpansionReportArtifact {
+  const packet = params.citationExpansionPacket;
+  return {
+    schema_version: 1,
+    generated_at: params.generatedAt,
+    project_id: params.projectId,
+    project_root: params.projectRoot,
+    trigger: params.trigger,
+    status: packet ? "planned" : params.executed ? "not_required" : "skipped",
+    bounded: packet?.bounded === true,
+    max_seeds: packet?.maxSeeds ?? null,
+    seed_count: packet?.seeds.length ?? 0,
+    query_count: packet?.queries.length ?? 0,
+    packet_path: packet?.packetPath ?? null,
+    markdown_path: packet?.markdownPath ?? null,
+    query_types: countStrings(packet?.queries.map((query) => query.type) ?? []),
+    recommendations: packet?.recommendations ?? [],
+    auto_citation_verification: params.autoCitationVerification,
+  };
+}
+
+function summarizeProviderResultIndex(
+  artifact: ProviderResultIndexArtifact,
+  artifactPath: string
+): Record<string, unknown> {
+  return {
+    path: artifactPath,
+    status: artifact.status,
+    provider_query_count: artifact.provider_query_count,
+    provider_status_counts: artifact.provider_status_counts,
+    merged_candidate_count: artifact.merged_candidate_count,
+    resolved_source_count: artifact.resolved_source_count,
+    metadata_only_count: artifact.metadata_only_count,
+    selected_for_import_count: artifact.selected_for_import_count,
+  };
+}
+
+function summarizePapernexusImportBatchManifest(
+  artifact: PapernexusImportBatchManifestArtifact,
+  artifactPath: string
+): Record<string, unknown> {
+  return {
+    path: artifactPath,
+    status: artifact.status,
+    queued: artifact.queued,
+    reason: artifact.reason,
+    request_id: artifact.request_id,
+    manifest_path: artifact.manifest_path,
+    importable_paper_count: artifact.importable_paper_count,
+    paper_count: artifact.paper_count,
+  };
+}
+
+function summarizePapernexusRefreshReport(
+  artifact: PapernexusRefreshReportArtifact,
+  artifactPath: string
+): Record<string, unknown> {
+  return {
+    path: artifactPath,
+    status: artifact.status,
+    graph_build_expected: artifact.graph_build_expected,
+    next_route: artifact.next_route,
+    next_action: artifact.next_action,
+  };
+}
+
+function summarizeCitationExpansionReport(
+  artifact: CitationExpansionReportArtifact,
+  artifactPath: string
+): Record<string, unknown> {
+  return {
+    path: artifactPath,
+    status: artifact.status,
+    bounded: artifact.bounded,
+    seed_count: artifact.seed_count,
+    query_count: artifact.query_count,
+    packet_path: artifact.packet_path,
+  };
+}
+
 export async function writeLiteratureResearchControllerRunReceipt(params: {
   projectRoot: string;
   generatedAt?: string | null;
@@ -1139,7 +1678,11 @@ export async function writeLiteratureResearchControllerRunReceipt(params: {
   controllerBefore: LiteratureResearchControllerArtifacts;
   controllerAfter?: LiteratureResearchControllerArtifacts | null;
   searchExecution?: LiteratureResearchControllerRunReceipt["search_execution"];
+  providerQueryResults?: BroadPaperProviderQueryResult[] | null;
+  mergedCandidates?: MergedPaperCandidate[] | null;
   papernexusImport?: Record<string, unknown> | null;
+  citationExpansionPacket?: CitationExpansionPacket | null;
+  autoCitationVerification?: Record<string, unknown> | null;
   executed: boolean;
   skipReason?: string | null;
   nextRoute?: LiteratureResearchControllerRunReceipt["next_route"] | null;
@@ -1147,12 +1690,62 @@ export async function writeLiteratureResearchControllerRunReceipt(params: {
   const projectRoot = path.resolve(params.projectRoot);
   const generatedAt = params.generatedAt ?? new Date().toISOString();
   const paths = buildArtifactPaths(projectRoot);
+  const trigger = params.trigger ?? "literature_research_controller_run";
+  const nextRoute =
+    params.nextRoute ??
+    (params.papernexusImport?.queued === true
+      ? "graph_build"
+      : params.controllerAfter &&
+          ["needs_research", "guardrailed"].includes(params.controllerAfter.status)
+        ? "rerun_failed_gate"
+        : "none");
+  const providerResultIndex = buildProviderResultIndexArtifact({
+    projectRoot,
+    generatedAt,
+    trigger,
+    controllerBefore: params.controllerBefore,
+    executed: params.executed,
+    skipReason: params.skipReason ?? null,
+    searchExecution: params.searchExecution ?? null,
+    providerQueryResults: params.providerQueryResults ?? [],
+    mergedCandidates: params.mergedCandidates ?? [],
+  });
+  const papernexusImportBatchManifest =
+    buildPapernexusImportBatchManifestArtifact({
+      projectRoot,
+      generatedAt,
+      trigger,
+      projectId: params.controllerBefore.project_id,
+      papernexusImport: params.papernexusImport ?? null,
+    });
+  const papernexusRefreshReport = buildPapernexusRefreshReportArtifact({
+    projectRoot,
+    generatedAt,
+    trigger,
+    projectId: params.controllerBefore.project_id,
+    executed: params.executed,
+    nextRoute,
+    importManifest: papernexusImportBatchManifest,
+  });
+  const citationExpansionReport = buildCitationExpansionReportArtifact({
+    projectRoot,
+    generatedAt,
+    trigger,
+    projectId: params.controllerBefore.project_id,
+    citationExpansionPacket:
+      params.citationExpansionPacket ??
+      params.controllerAfter?.citation_expansion_packet ??
+      params.controllerBefore.citation_expansion_packet ??
+      null,
+    autoCitationVerification: params.autoCitationVerification ?? null,
+    executed: params.executed,
+  });
   const receipt: LiteratureResearchControllerRunReceipt = {
     schema_version: 1,
     generated_at: generatedAt,
     project_id: params.controllerBefore.project_id,
     project_root: projectRoot,
-    trigger: params.trigger ?? "literature_research_controller_run",
+    trigger,
     executed: params.executed,
     skip_reason: params.skipReason ?? null,
     controller_before: {
@@ -1162,7 +1755,23 @@ export async function writeLiteratureResearchControllerRunReceipt(params: {
       blocking_gap_count: blockingGapCountFromController(params.controllerBefore),
     },
     search_execution: params.searchExecution ?? null,
+    provider_result_index: summarizeProviderResultIndex(
+      providerResultIndex,
+      paths.providerResultIndexPath
+    ),
     papernexus_import: params.papernexusImport ?? null,
+    papernexus_import_batch_manifest: summarizePapernexusImportBatchManifest(
+      papernexusImportBatchManifest,
+      paths.papernexusImportBatchManifestPath
+    ),
+    papernexus_refresh_report: summarizePapernexusRefreshReport(
+      papernexusRefreshReport,
+      paths.papernexusRefreshReportPath
+    ),
+    citation_expansion_report: summarizeCitationExpansionReport(
+      citationExpansionReport,
+      paths.citationExpansionReportPath
+    ),
     controller_after: params.controllerAfter
       ? {
           status: params.controllerAfter.status,
@@ -1172,22 +1781,50 @@ export async function writeLiteratureResearchControllerRunReceipt(params: {
           next_actions: nextActionsFromController(params.controllerAfter),
         }
       : null,
-    next_route:
-      params.nextRoute ??
-      (params.papernexusImport?.queued === true
-        ? "graph_build"
-        : params.controllerAfter &&
-            ["needs_research", "guardrailed"].includes(params.controllerAfter.status)
-          ? "rerun_failed_gate"
-          : "none"),
+    next_route: nextRoute,
     artifact_paths: {
       run_receipt_path: paths.runReceiptPath,
       trace_path: paths.tracePath,
+      provider_result_index_path: paths.providerResultIndexPath,
+      papernexus_import_batch_manifest_path:
+        paths.papernexusImportBatchManifestPath,
+      papernexus_refresh_report_path: paths.papernexusRefreshReportPath,
+      citation_expansion_report_path: paths.citationExpansionReportPath,
+      repair_log_path: paths.repairLogPath,
     },
   };
-  await writeJsonEnsured(paths.runReceiptPath, receipt);
+  await Promise.all([
+    writeJsonEnsured(paths.providerResultIndexPath, providerResultIndex),
+    writeJsonEnsured(
+      paths.papernexusImportBatchManifestPath,
+      papernexusImportBatchManifest
+    ),
+    writeJsonEnsured(paths.papernexusRefreshReportPath, papernexusRefreshReport),
+    writeJsonEnsured(paths.citationExpansionReportPath, citationExpansionReport),
+    writeJsonEnsured(paths.runReceiptPath, receipt),
+  ]);
   await fs.mkdir(path.dirname(paths.tracePath), { recursive: true });
   await fs.appendFile(paths.tracePath, `${JSON.stringify(receipt)}\n`, "utf8");
+  await fs.mkdir(path.dirname(paths.repairLogPath), { recursive: true });
+  await fs.appendFile(
+    paths.repairLogPath,
+    `${JSON.stringify({
+      schema_version: 1,
+      generated_at: generatedAt,
+      project_id: params.controllerBefore.project_id,
+      trigger: receipt.trigger,
+      executed: receipt.executed,
+      skip_reason: receipt.skip_reason,
+      next_route: receipt.next_route,
+      provider_result_status: providerResultIndex.status,
+      merged_candidate_count: providerResultIndex.merged_candidate_count,
+      selected_for_import_count: providerResultIndex.selected_for_import_count,
+      papernexus_import_status: papernexusImportBatchManifest.status,
+      papernexus_refresh_status: papernexusRefreshReport.status,
+      citation_expansion_status: citationExpansionReport.status,
+    })}\n`,
+    "utf8"
+  );
   return receipt;
 }
 
@@ -1367,7 +2004,27 @@ export async function materializeLiteratureResearchControllerArtifacts(params: {
         projectRoot,
         paths.runReceiptPath
       ),
+      provider_result_index_path: relativePathFromProject(
+        projectRoot,
+        paths.providerResultIndexPath
+      ),
+      papernexus_import_batch_manifest_path: relativePathFromProject(
+        projectRoot,
+        paths.papernexusImportBatchManifestPath
+      ),
+      papernexus_refresh_report_path: relativePathFromProject(
+        projectRoot,
+        paths.papernexusRefreshReportPath
+      ),
+      citation_expansion_report_path: relativePathFromProject(
+        projectRoot,
+        paths.citationExpansionReportPath
+      ),
       controller_trace_path: relativePathFromProject(projectRoot, paths.tracePath),
+      literature_repair_log_path: relativePathFromProject(
+        projectRoot,
+        paths.repairLogPath
+      ),
       paper_ingestion_required: reasons.some((reason) =>
         ["thin_core_literature", "metadata_only_or_unindexed_sources", "graph_not_source_backed"].includes(
           reason.code
@@ -1394,6 +2051,23 @@ export async function materializeLiteratureResearchControllerArtifacts(params: {
     status_markdown_path: relativePathFromProject(projectRoot, paths.statusMarkdownPath),
     run_receipt_path: relativePathFromProject(projectRoot, paths.runReceiptPath),
     trace_path: relativePathFromProject(projectRoot, paths.tracePath),
+    provider_result_index_path: relativePathFromProject(
+      projectRoot,
+      paths.providerResultIndexPath
+    ),
+    papernexus_import_batch_manifest_path: relativePathFromProject(
+      projectRoot,
+      paths.papernexusImportBatchManifestPath
+    ),
+    papernexus_refresh_report_path: relativePathFromProject(
+      projectRoot,
+      paths.papernexusRefreshReportPath
+    ),
+    citation_expansion_report_path: relativePathFromProject(
+      projectRoot,
+      paths.citationExpansionReportPath
+    ),
+    repair_log_path: relativePathFromProject(projectRoot, paths.repairLogPath),
   };
   const artifacts: LiteratureResearchControllerArtifacts = {
     schema_version: 1,
@@ -1413,6 +2087,12 @@ export async function materializeLiteratureResearchControllerArtifacts(params: {
       status_markdown_path: paths.statusMarkdownPath,
       run_receipt_path: paths.runReceiptPath,
       trace_path: paths.tracePath,
+      provider_result_index_path: paths.providerResultIndexPath,
+      papernexus_import_batch_manifest_path:
+        paths.papernexusImportBatchManifestPath,
+      papernexus_refresh_report_path: paths.papernexusRefreshReportPath,
+      citation_expansion_report_path: paths.citationExpansionReportPath,
+      repair_log_path: paths.repairLogPath,
       coverage_audit_path: coverageAudit.auditPath,
       citation_expansion_packet_path: citationExpansionPacket?.packetPath ?? null,
     },

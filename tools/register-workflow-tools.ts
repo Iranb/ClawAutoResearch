@@ -3769,6 +3769,8 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                     skipReason: !shouldExecuteProviderDiscovery
                       ? "controller_decision_did_not_require_provider_discovery"
                       : "controller_query_plan_empty",
+                    citationExpansionPacket:
+                      controllerBefore.citation_expansion_packet,
                     nextRoute: controllerBefore.status === "blocked"
                       ? "manual_repair"
                       : "none",
@@ -3884,7 +3886,13 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                     source_index_update: searchResult.sourceIndexUpdate,
                     artifacts: searchResult.artifacts,
                   },
+                  providerQueryResults: searchResult.queryResults,
+                  mergedCandidates: searchResult.mergedCandidates,
                   papernexusImport: autoPaperIngestion,
+                  citationExpansionPacket:
+                    searchResult.citationExpansionPacket ??
+                    controllerAfter.citation_expansion_packet,
+                  autoCitationVerification,
                   nextRoute:
                     autoPaperIngestion.queued === true
                       ? "graph_build"
