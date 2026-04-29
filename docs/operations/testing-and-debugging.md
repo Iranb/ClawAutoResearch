@@ -529,6 +529,7 @@ node scripts/build-e2e-project-dashboard.mjs \
 - `E2E_COPYEDIT_STYLE_AUDIT.json`：检查 placeholder、过长句、marketing language、强 claim 是否有边界语言；用于避免 no-Discord 论文在 artifact complete 后仍带有不可投稿的表达问题。
 - `E2E_EXPERIMENT_LEASE_CONTRACT.json`：审计实验搜索的 shared incumbent/CAS 合同，记录 incumbent commit、candidate base/head、活跃实验写锁冲突和裸结果是否能绕过 shared incumbent；用于发现多 worker 并行实验覆盖风险。
 - `researcher/literature-research-controller/*`：no-Discord E2E 会自动物化文献调研闭环合同，包括 `literature_need_assessment.json`、`retrieval_keyword_bank.json`、`literature_query_plan.json`、`candidate_screening_report.json`、`literature_coverage_report.json` 和 `LITERATURE_RESEARCH_CONTROLLER_STATUS.md`。当显式运行 `research_workflow.run_literature_research_controller` 时，还会写入 `provider_result_index.json`、`papernexus_import_batch_manifest.json`、`papernexus_refresh_report.json`、`citation_expansion_report.json`、`snippet_evidence_report.json`、`literature_controller_run_receipt.json`、`literature_controller_trace.jsonl` 和 `literature_repair_log.jsonl`。
+- `researcher/capability-completion/*`：no-Discord E2E 会自动物化 Capability Completion Controller 产物，包括 `capability_gap_inventory.json`、`capability_execution_plan.json`、`capability_run_receipt.json`、`capability_claim_cap_report.json`、`provider_cache_manifest.json`、`rerun_gate_plan.json`、`capability_repair_queue.jsonl` 和 `CAPABILITY_COMPLETION_STATUS.md`。它把文献 provider、PaperNexus evidence-chain、Storyline v2、真实 evaluator、rewrite/repair、PaperNexus writeback 的缺口统一成可执行计划；现有安全本地 action 会自动执行，尚未实现的外部能力会明确标成 `planned`、`deferred` 或 `blocked`，并进入 claim cap 降级建议。
 - `PLATFORM_PROFILE.json`：记录本次 E2E 的 runtime/platform profile 和 CPU/MLX/CUDA/WebGPU capability matrix；未知硬件只标记为 `unknown_not_probed`，不会伪造可复现实验能力。
 - `E2E_ARTIFACT_CHECKLIST.json`：required artifact 的机器可读 presence gate。
 - `E2E_STATE_TIMELINE.jsonl`：runtime/handoff 事件时间线。
@@ -540,6 +541,22 @@ Graph build 结束后还会写入 `graph/PAPERNEXUS_TASK_CERTIFICATION.json`，�
 - `source_backed_graph`：逐篇论文具备 source-backed graph evidence；这是 no-Discord E2E 里允许继续强化论文 claim 的 PaperNexus 状态。
 
 `literature-research-controller` 的 status/decision 会同时进入 `E2E_RUN_SCORECARD.json`、`progress_chart.json` 和 `E2E_DASHBOARD.html`。如果它是 `blocked` 或 `needs_research`，优先看 `literature_coverage_report.json.next_actions`：常见动作是继续跑 `run_literature_research_controller`、补 PaperNexus import/graph refresh，或先补明确的 project topic/source index。这个 controller 不把 metadata-only 搜索结果当作 source-backed evidence；没有 PaperNexus source-backed graph claim 时，只允许 guarded claim。
+
+`capability-completion` 的 status/claim cap 建议也会进入 `E2E_RUN_SCORECARD.json`、`progress_chart.json` 和 `E2E_DASHBOARD.html`。它不是只读报告：`research_workflow.run_capability_completion_controller` 会生成 gap inventory、execution plan 和 repair queue，并自动执行安全的本地 materializer；429 会写 `deferred_until`，401/auth 会写 `blocked_auth`，PaperNexus 或 evaluator 缺口不会被当成通过，而是降级 claim cap。
+
+手动运行时，通过 `research_workflow` tool 调用：
+
+```json
+{
+  "action": "run_capability_completion_controller",
+  "projectRoot": "<projectRoot>",
+  "capabilityCompletion": {
+    "mode": "autoresearch",
+    "trigger": "manual_debug",
+    "executeRunnableActions": true
+  }
+}
+```
 
 `run_literature_research_controller` 会先物化 controller，然后把 `literature_query_plan.json` 中的可执行 research30 queries 传给 provider discovery，最后复用 broad paper search 的 PaperNexus auto-import queue。它不会把 PaperNexus corpus lookup 当成外部 provider；lookup 只保留在 controller plan/receipt 中作为证据路线。运行完成后查看：
 

@@ -123,6 +123,7 @@ import {
   materializeLiteratureResearchControllerArtifacts,
   writeLiteratureResearchControllerRunReceipt,
 } from "./literature-discovery/controller-contract";
+import { materializeCapabilityCompletionControllerArtifacts } from "./capability-completion/controller";
 import { materializePapernexusPacketContracts } from "./papernexus-packets/materializer";
 import { materializeCycleMemory } from "./research-memory-cycle";
 import { materializeWritingSupportArtifacts } from "./research-writing/materializers";
@@ -1504,6 +1505,7 @@ const SERIALIZED_WORKFLOW_ACTIONS = new Set([
   "materialize_experiment_review_state",
   "materialize_literature_research_controller",
   "run_literature_research_controller",
+  "run_capability_completion_controller",
   "materialize_literature_discovery_packet",
   "materialize_plan_state",
   "materialize_papernexus_packet_contracts",
@@ -1592,6 +1594,8 @@ const WORKFLOW_ACTION_FUNCTIONS: Record<string, string> = {
     "materializeLiteratureResearchControllerArtifacts",
   run_literature_research_controller:
     "materializeLiteratureResearchControllerArtifacts",
+  run_capability_completion_controller:
+    "materializeCapabilityCompletionControllerArtifacts",
   plan_citation_expansion: "planCitationExpansionForWorkflow",
   run_broad_paper_search: "runBroadPaperSearchForWorkflow",
   auto_iterator_tick: "runWorkflowAutoIterator",
@@ -2892,6 +2896,7 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               "audit_literature_coverage",
               "materialize_literature_research_controller",
               "run_literature_research_controller",
+              "run_capability_completion_controller",
               "plan_citation_expansion",
               "run_broad_paper_search",
               "auto_iterator_tick",
@@ -3070,6 +3075,10 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
             additionalProperties: true,
           },
           literatureController: {
+            type: "object",
+            additionalProperties: true,
+          },
+          capabilityCompletion: {
             type: "object",
             additionalProperties: true,
           },
@@ -3912,6 +3921,32 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                   2
                 )
               );
+            }
+            case "run_capability_completion_controller": {
+              const capabilityCompletion = asObject(params.capabilityCompletion);
+              const resolvedProjectRoot = resolveWorkflowProjectRootWithOverride({
+                state,
+                override:
+                  readString(capabilityCompletion?.projectRoot) ??
+                  readString(capabilityCompletion?.project_root),
+              });
+              const result =
+                await materializeCapabilityCompletionControllerArtifacts({
+                  projectRoot: resolvedProjectRoot,
+                  trigger:
+                    readString(capabilityCompletion?.trigger) ??
+                    "run_capability_completion_controller",
+                  mode:
+                    readString(capabilityCompletion?.mode) ??
+                    readString(params.mode) ??
+                    "unknown",
+                  executeRunnableActions:
+                    capabilityCompletion?.executeRunnableActions === false ||
+                    capabilityCompletion?.execute_runnable_actions === false
+                      ? false
+                      : true,
+                });
+              return textResponse(JSON.stringify(result, null, 2));
             }
             case "plan_citation_expansion": {
               const resolvedProjectRoot = requireWorkflowProjectRoot(state);

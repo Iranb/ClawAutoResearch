@@ -39,6 +39,22 @@ async function loadLiteratureResearchController() {
   return null;
 }
 
+async function loadCapabilityCompletionController() {
+  const candidates = [
+    "../dist/tools/capability-completion/controller.js",
+    "../tools/capability-completion/controller.ts",
+  ];
+  for (const candidate of candidates) {
+    try {
+      return await import(new URL(candidate, import.meta.url));
+    } catch {
+      // Keep the E2E harness runnable before a build; capability completion
+      // failures are reported as local artifacts instead of crashing the run.
+    }
+  }
+  return null;
+}
+
 async function exists(filePath) {
   try {
     await fs.access(filePath);
@@ -1020,6 +1036,10 @@ function markdownBullets(items) {
   return items.length > 0 ? items.map((item) => `- ${item}`).join("\n") : "- none";
 }
 
+function uniqueNonEmpty(items) {
+  return [...new Set(items.map((item) => String(item ?? "").trim()).filter(Boolean))];
+}
+
 function escapeHtml(value) {
   return String(value ?? "")
     .replace(/&/g, "&amp;")
@@ -1446,6 +1466,7 @@ a{color:#1f6feb;text-decoration:none}
 <div class="metric">Failed Checks<b>${escapeHtml(latest.failed_required_checks.length)}</b></div>
 <div class="metric">PaperNexus<b>${escapeHtml(latest.papernexus_certification.status)}</b></div>
 <div class="metric">Literature<b>${escapeHtml(latest.literature_research_controller.status)}</b></div>
+<div class="metric">Capabilities<b>${escapeHtml(latest.capability_completion?.status ?? "unknown")}</b></div>
 <div class="metric">Domain Pack<b>${escapeHtml(latest.domain_evaluator.pack)}</b></div>
 <div class="metric">Reviewer Calib.<b>${escapeHtml(latest.reviewer_calibration.status)}</b></div>
 <div class="metric">Copyedit<b>${escapeHtml(latest.copyedit_style_audit.status)}</b></div>
@@ -2071,6 +2092,35 @@ const experimentLeaseContractPath = path.join(
 const platformProfilePath = path.join(openclawDir, "PLATFORM_PROFILE.json");
 const checklistPath = path.join(openclawDir, "E2E_ARTIFACT_CHECKLIST.json");
 const timelinePath = path.join(openclawDir, "E2E_STATE_TIMELINE.jsonl");
+const capabilityCompletionDir = path.join(
+  projectRoot,
+  "researcher",
+  "capability-completion"
+);
+const capabilityCompletionStatusPath = path.join(
+  capabilityCompletionDir,
+  "CAPABILITY_COMPLETION_STATUS.md"
+);
+const capabilityGapInventoryPath = path.join(
+  capabilityCompletionDir,
+  "capability_gap_inventory.json"
+);
+const capabilityExecutionPlanPath = path.join(
+  capabilityCompletionDir,
+  "capability_execution_plan.json"
+);
+const capabilityRunReceiptPath = path.join(
+  capabilityCompletionDir,
+  "capability_run_receipt.json"
+);
+const capabilityClaimCapReportPath = path.join(
+  capabilityCompletionDir,
+  "capability_claim_cap_report.json"
+);
+const capabilityRerunGatePlanPath = path.join(
+  capabilityCompletionDir,
+  "rerun_gate_plan.json"
+);
 const openIncidents = (incidentsStore.entries ?? []).filter((entry) => entry.status !== "resolved");
 const activeHandoffs = (handoffStore.intents ?? []).filter((entry) =>
   ["pending", "queued", "dispatching", "delivered", "acknowledged", "claimed", "activated", "stale_claim"].includes(
@@ -2622,6 +2672,172 @@ const progressChart = {
     dashboard_path: dashboardPath,
   },
 };
+
+const capabilityCompletionModule = await loadCapabilityCompletionController();
+let capabilityCompletion;
+try {
+  capabilityCompletion =
+    capabilityCompletionModule?.materializeCapabilityCompletionControllerArtifacts
+      ? await capabilityCompletionModule.materializeCapabilityCompletionControllerArtifacts({
+          projectRoot,
+          generatedAt: now,
+          trigger: "no_discord_e2e_harness",
+          mode: lane,
+          scorecard,
+          executeRunnableActions: true,
+        })
+      : {
+          status: "unavailable",
+          gap_inventory: {
+            open_gap_count: 1,
+            runnable_gap_count: 0,
+            blocked_gap_count: 1,
+            deferred_gap_count: 0,
+            degraded_gap_count: 0,
+            gaps: [
+              {
+                capability: "repair_console",
+                code: "capability_controller_module_unavailable",
+                status: "blocked",
+                severity: "critical",
+                summary:
+                  "Capability completion controller module was not importable from dist or tools.",
+              },
+            ],
+          },
+          execution_plan: {
+            runnable_action_count: 0,
+            planned_action_count: 0,
+            blocked_action_count: 1,
+            deferred_action_count: 0,
+            actions: [],
+          },
+          claim_cap_report: {
+            recommended_claim_strength_cap: "blocked",
+            reasons: ["Capability completion controller module unavailable."],
+          },
+          run_receipt: {
+            next_actions: [
+              "run npm run build or execute the harness with a Node runtime that can load tools/*.ts",
+            ],
+          },
+          artifact_paths: {
+            status_markdown_path: capabilityCompletionStatusPath,
+            gap_inventory_path: capabilityGapInventoryPath,
+            execution_plan_path: capabilityExecutionPlanPath,
+            run_receipt_path: capabilityRunReceiptPath,
+            claim_cap_report_path: capabilityClaimCapReportPath,
+            rerun_gate_plan_path: capabilityRerunGatePlanPath,
+          },
+          relative_artifact_paths: {},
+        };
+} catch (error) {
+  capabilityCompletion = {
+    status: "failed",
+    gap_inventory: {
+      open_gap_count: 1,
+      runnable_gap_count: 0,
+      blocked_gap_count: 0,
+      deferred_gap_count: 0,
+      degraded_gap_count: 0,
+      gaps: [
+        {
+          capability: "repair_console",
+          code: "capability_controller_failed",
+          status: "blocked",
+          severity: "critical",
+          summary: error instanceof Error ? error.message : String(error),
+        },
+      ],
+    },
+    execution_plan: {
+      runnable_action_count: 0,
+      planned_action_count: 0,
+      blocked_action_count: 1,
+      deferred_action_count: 0,
+      actions: [],
+    },
+    claim_cap_report: {
+      recommended_claim_strength_cap: "blocked",
+      reasons: [error instanceof Error ? error.message : String(error)],
+    },
+    run_receipt: {
+      next_actions: ["repair capability completion controller inputs and rerun E2E"],
+    },
+    artifact_paths: {
+      status_markdown_path: capabilityCompletionStatusPath,
+      gap_inventory_path: capabilityGapInventoryPath,
+      execution_plan_path: capabilityExecutionPlanPath,
+      run_receipt_path: capabilityRunReceiptPath,
+      claim_cap_report_path: capabilityClaimCapReportPath,
+      rerun_gate_plan_path: capabilityRerunGatePlanPath,
+    },
+    relative_artifact_paths: {},
+  };
+}
+const capabilityCompletionSummary = {
+  status: capabilityCompletion.status ?? "unknown",
+  open_gap_count: capabilityCompletion.gap_inventory?.open_gap_count ?? null,
+  runnable_gap_count: capabilityCompletion.gap_inventory?.runnable_gap_count ?? null,
+  blocked_gap_count: capabilityCompletion.gap_inventory?.blocked_gap_count ?? null,
+  deferred_gap_count: capabilityCompletion.gap_inventory?.deferred_gap_count ?? null,
+  degraded_gap_count: capabilityCompletion.gap_inventory?.degraded_gap_count ?? null,
+  runnable_action_count:
+    capabilityCompletion.execution_plan?.runnable_action_count ?? null,
+  planned_action_count:
+    capabilityCompletion.execution_plan?.planned_action_count ?? null,
+  blocked_action_count:
+    capabilityCompletion.execution_plan?.blocked_action_count ?? null,
+  deferred_action_count:
+    capabilityCompletion.execution_plan?.deferred_action_count ?? null,
+  recommended_claim_strength_cap:
+    capabilityCompletion.claim_cap_report?.recommended_claim_strength_cap ?? null,
+  next_actions: Array.isArray(capabilityCompletion.run_receipt?.next_actions)
+    ? capabilityCompletion.run_receipt.next_actions
+    : [],
+  artifact_paths: capabilityCompletion.artifact_paths ?? {},
+  relative_artifact_paths: capabilityCompletion.relative_artifact_paths ?? {},
+};
+scorecard.capability_completion = capabilityCompletionSummary;
+if (
+  capabilityCompletionSummary.recommended_claim_strength_cap &&
+  capabilityCompletionSummary.recommended_claim_strength_cap !== claimStrengthCap
+) {
+  scorecard.verdict.capability_recommended_claim_strength_cap =
+    capabilityCompletionSummary.recommended_claim_strength_cap;
+}
+scorecard.next_actions = uniqueNonEmpty([
+  ...scorecard.next_actions.filter((entry) => entry !== "none"),
+  ...capabilityCompletionSummary.next_actions.filter((entry) => entry !== "none"),
+]);
+if (scorecard.next_actions.length === 0) {
+  scorecard.next_actions.push("none");
+}
+progressChart.summary.capability_completion_status =
+  capabilityCompletionSummary.status;
+progressChart.summary.capability_open_gap_count =
+  capabilityCompletionSummary.open_gap_count;
+progressChart.summary.capability_runnable_action_count =
+  capabilityCompletionSummary.runnable_action_count;
+progressChart.summary.capability_blocked_action_count =
+  capabilityCompletionSummary.blocked_action_count;
+progressChart.summary.capability_recommended_claim_strength_cap =
+  capabilityCompletionSummary.recommended_claim_strength_cap;
+progressChart.linked_artifacts.capability_completion_status_path =
+  capabilityCompletionSummary.artifact_paths.status_markdown_path ?? null;
+progressChart.linked_artifacts.capability_gap_inventory_path =
+  capabilityCompletionSummary.artifact_paths.gap_inventory_path ?? null;
+progressChart.linked_artifacts.capability_execution_plan_path =
+  capabilityCompletionSummary.artifact_paths.execution_plan_path ?? null;
+progressChart.linked_artifacts.capability_claim_cap_report_path =
+  capabilityCompletionSummary.artifact_paths.claim_cap_report_path ?? null;
+progressChart.linked_artifacts.capability_rerun_gate_plan_path =
+  capabilityCompletionSummary.artifact_paths.rerun_gate_plan_path ?? null;
+progressChart.annotations.push({
+  kind: "capability_completion",
+  label: "capability completion controller",
+  summary: `status=${capabilityCompletionSummary.status}; open_gaps=${capabilityCompletionSummary.open_gap_count ?? "n/a"}; runnable_actions=${capabilityCompletionSummary.runnable_action_count ?? "n/a"}; recommended_cap=${capabilityCompletionSummary.recommended_claim_strength_cap ?? "n/a"}`,
+});
 const runLedgerEntry = buildRunLedgerEntry({
   runId,
   scorecard,
@@ -2702,6 +2918,18 @@ const report = `# E2E Run Report
 - blocking_gap_count: ${literatureResearchControllerSummary.blocking_gap_count ?? "unknown"}
 - weak_gap_count: ${literatureResearchControllerSummary.weak_gap_count ?? "unknown"}
 - status_path: ${literatureResearchControllerSummary.artifact_paths.status_markdown_path ?? "unknown"}
+
+## Capability Completion Controller
+
+- status: ${capabilityCompletionSummary.status}
+- open_gap_count: ${capabilityCompletionSummary.open_gap_count ?? "unknown"}
+- runnable_action_count: ${capabilityCompletionSummary.runnable_action_count ?? "unknown"}
+- planned_action_count: ${capabilityCompletionSummary.planned_action_count ?? "unknown"}
+- blocked_action_count: ${capabilityCompletionSummary.blocked_action_count ?? "unknown"}
+- deferred_action_count: ${capabilityCompletionSummary.deferred_action_count ?? "unknown"}
+- recommended_claim_strength_cap: ${capabilityCompletionSummary.recommended_claim_strength_cap ?? "unknown"}
+- status_path: ${capabilityCompletionSummary.artifact_paths.status_markdown_path ?? "unknown"}
+- gap_inventory_path: ${capabilityCompletionSummary.artifact_paths.gap_inventory_path ?? "unknown"}
 
 ## Benchmark Adapter
 
@@ -2884,6 +3112,10 @@ const progressNarrative = `# E2E Progress Narrative
 - literature_controller_decision: ${literatureResearchControllerSummary.decision}
 - literature_controller_coverage_score_100: ${literatureResearchControllerSummary.coverage_score_100 ?? "unknown"}
 - literature_controller_blocking_gap_count: ${literatureResearchControllerSummary.blocking_gap_count ?? "unknown"}
+- capability_completion_status: ${capabilityCompletionSummary.status}
+- capability_open_gap_count: ${capabilityCompletionSummary.open_gap_count ?? "unknown"}
+- capability_runnable_action_count: ${capabilityCompletionSummary.runnable_action_count ?? "unknown"}
+- capability_recommended_claim_strength_cap: ${capabilityCompletionSummary.recommended_claim_strength_cap ?? "unknown"}
 - benchmark_adapter_status: ${benchmarkAdapter.status}
 - benchmark_adapter_metric: ${benchmarkAdapter.metric}
 - benchmark_candidate_score: ${benchmarkAdapter.candidate_score ?? "unknown"}
@@ -2995,6 +3227,7 @@ await fs.writeFile(
         active_write_scopes: activeWriteScopes.length,
       },
       literature_research_controller: literatureResearchControllerSummary,
+      capability_completion: capabilityCompletionSummary,
       artifacts: artifactChecklist,
     },
     null,
@@ -3046,6 +3279,16 @@ console.log(
         literatureResearchControllerSummary.artifact_paths.status_markdown_path ?? null,
       literatureControllerCoverageReportPath:
         literatureResearchControllerSummary.artifact_paths.coverage_report_path ?? null,
+      capabilityCompletionStatusPath:
+        capabilityCompletionSummary.artifact_paths.status_markdown_path ?? null,
+      capabilityGapInventoryPath:
+        capabilityCompletionSummary.artifact_paths.gap_inventory_path ?? null,
+      capabilityExecutionPlanPath:
+        capabilityCompletionSummary.artifact_paths.execution_plan_path ?? null,
+      capabilityClaimCapReportPath:
+        capabilityCompletionSummary.artifact_paths.claim_cap_report_path ?? null,
+      capabilityRerunGatePlanPath:
+        capabilityCompletionSummary.artifact_paths.rerun_gate_plan_path ?? null,
       platformProfilePath,
       checklistPath,
       timelinePath,
@@ -3061,6 +3304,7 @@ console.log(
       copyeditStyleAudit,
       experimentLeaseContract,
       literatureResearchController: literatureResearchControllerSummary,
+      capabilityCompletion: capabilityCompletionSummary,
       platformProfile,
     },
     null,

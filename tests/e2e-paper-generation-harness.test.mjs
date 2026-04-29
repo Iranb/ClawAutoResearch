@@ -223,6 +223,11 @@ test("E2E paper generation harness materializes report, scorecard, checklist, an
     result.literatureControllerStatusPath,
     /LITERATURE_RESEARCH_CONTROLLER_STATUS\.md$/
   );
+  assert.match(
+    result.capabilityCompletionStatusPath,
+    /CAPABILITY_COMPLETION_STATUS\.md$/
+  );
+  assert.match(result.capabilityGapInventoryPath, /capability_gap_inventory\.json$/);
   assert.match(result.platformProfilePath, /PLATFORM_PROFILE\.json$/);
   assert.equal(
     await fs.readFile(path.join(projectRoot, ".openclaw-research", "E2E_RUN_REPORT.md"), "utf8").then((text) => /final_verdict: pass/.test(text)),
@@ -263,6 +268,15 @@ test("E2E paper generation harness materializes report, scorecard, checklist, an
     scorecard.literature_research_controller.artifact_paths.coverage_report_path,
     /literature_coverage_report\.json$/
   );
+  assert.equal(typeof scorecard.capability_completion.status, "string");
+  assert.equal(
+    typeof scorecard.capability_completion.open_gap_count,
+    "number"
+  );
+  assert.match(
+    scorecard.capability_completion.artifact_paths.gap_inventory_path,
+    /capability_gap_inventory\.json$/
+  );
   assert.equal(scorecard.run_trends.status, "improved");
   assert.equal(scorecard.run_trends.previous_score_100, 50);
   assert.equal(scorecard.run_trends.lane_run_count, 2);
@@ -287,6 +301,11 @@ test("E2E paper generation harness materializes report, scorecard, checklist, an
   assert.equal(
     typeof progressChart.summary.literature_controller_status,
     "string"
+  );
+  assert.equal(typeof progressChart.summary.capability_completion_status, "string");
+  assert.match(
+    progressChart.linked_artifacts.capability_gap_inventory_path,
+    /capability_gap_inventory\.json$/
   );
   assert.equal(progressChart.summary.run_trend_status, "improved");
   assert.equal(progressChart.summary.run_trend_lane_run_count, 2);
@@ -324,6 +343,10 @@ test("E2E paper generation harness materializes report, scorecard, checklist, an
   );
   assert.equal(
     progressChart.annotations.some((entry) => entry.kind === "literature_research_controller"),
+    true
+  );
+  assert.equal(
+    progressChart.annotations.some((entry) => entry.kind === "capability_completion"),
     true
   );
   assert.equal(
