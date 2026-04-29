@@ -153,6 +153,9 @@ export type CapabilityProviderCacheManifestArtifact = {
   auth_error_count: number;
   rate_limit_count: number;
   deferred_until: string | null;
+  provider_evidence_status: string | null;
+  provider_evidence_snippet_candidate_count: number;
+  provider_evidence_citation_candidate_count: number;
 };
 
 export type CapabilityRerunGatePlanArtifact = {

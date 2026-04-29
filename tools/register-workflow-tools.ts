@@ -123,6 +123,7 @@ import {
   materializeLiteratureResearchControllerArtifacts,
   writeLiteratureResearchControllerRunReceipt,
 } from "./literature-discovery/controller-contract";
+import { runLiteratureProviderEvidence } from "./literature-discovery/provider-evidence-runner";
 import { materializeCapabilityCompletionControllerArtifacts } from "./capability-completion/controller";
 import { materializePapernexusPacketContracts } from "./papernexus-packets/materializer";
 import { materializeCycleMemory } from "./research-memory-cycle";
@@ -1505,6 +1506,7 @@ const SERIALIZED_WORKFLOW_ACTIONS = new Set([
   "materialize_experiment_review_state",
   "materialize_literature_research_controller",
   "run_literature_research_controller",
+  "run_literature_provider_evidence",
   "run_capability_completion_controller",
   "materialize_literature_discovery_packet",
   "materialize_plan_state",
@@ -1594,6 +1596,7 @@ const WORKFLOW_ACTION_FUNCTIONS: Record<string, string> = {
     "materializeLiteratureResearchControllerArtifacts",
   run_literature_research_controller:
     "materializeLiteratureResearchControllerArtifacts",
+  run_literature_provider_evidence: "runLiteratureProviderEvidence",
   run_capability_completion_controller:
     "materializeCapabilityCompletionControllerArtifacts",
   plan_citation_expansion: "planCitationExpansionForWorkflow",
@@ -3921,6 +3924,37 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                   2
                 )
               );
+            }
+            case "run_literature_provider_evidence": {
+              const providerEvidence = asObject(params.providerEvidence);
+              const resolvedProjectRoot = resolveWorkflowProjectRootWithOverride({
+                state,
+                override:
+                  readString(providerEvidence?.projectRoot) ??
+                  readString(providerEvidence?.project_root),
+              });
+              const result = await runLiteratureProviderEvidence({
+                projectRoot: resolvedProjectRoot,
+                trigger:
+                  readString(providerEvidence?.trigger) ??
+                  "run_literature_provider_evidence",
+                provider429WaitSeconds: readNumber(
+                  providerEvidence?.provider429WaitSeconds ??
+                    providerEvidence?.provider_429_wait_seconds
+                ),
+                providerResultsPaths: Array.isArray(
+                  providerEvidence?.providerResultsPaths
+                )
+                  ? providerEvidence.providerResultsPaths
+                      .map((entry) => readString(entry))
+                      .filter((entry): entry is string => Boolean(entry))
+                  : Array.isArray(providerEvidence?.provider_results_paths)
+                    ? providerEvidence.provider_results_paths
+                        .map((entry) => readString(entry))
+                        .filter((entry): entry is string => Boolean(entry))
+                    : null,
+              });
+              return textResponse(JSON.stringify(result, null, 2));
             }
             case "run_capability_completion_controller": {
               const capabilityCompletion = asObject(params.capabilityCompletion);

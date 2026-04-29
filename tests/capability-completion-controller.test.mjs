@@ -99,6 +99,14 @@ test("capability completion controller materializes gap inventory and execution 
   assert.ok(result.gap_inventory.open_gap_count >= 6);
   assert.ok(result.execution_plan.actions.length >= 6);
   assert.equal(
+    result.execution_plan.actions.some(
+      (action) =>
+        action.tool_action === "run_literature_provider_evidence" &&
+        action.status === "executed"
+    ),
+    true
+  );
+  assert.equal(
     result.gap_inventory.gaps.some(
       (gap) => gap.capability === "literature" && gap.status === "runnable"
     ),
@@ -121,6 +129,20 @@ test("capability completion controller materializes gap inventory and execution 
   assert.match(
     await fs.readFile(result.artifact_paths.repair_queue_path, "utf8"),
     /literature_controller_needs_research/
+  );
+  assert.equal(
+    await fs
+      .access(
+        path.join(
+          projectRoot,
+          "researcher",
+          "literature-research-controller",
+          "provider_evidence_run_manifest.json"
+        )
+      )
+      .then(() => true)
+      .catch(() => false),
+    true
   );
 });
 
@@ -236,5 +258,42 @@ test("research_workflow exposes run_capability_completion_controller", async (t)
   assert.match(
     result.artifact_paths.status_markdown_path,
     /CAPABILITY_COMPLETION_STATUS\.md$/
+  );
+});
+
+test("research_workflow exposes run_literature_provider_evidence", async (t) => {
+  const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-provider-evidence-tool-"));
+  t.after(() => fs.rm(projectRoot, { recursive: true, force: true }));
+
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "provider-evidence-tool-demo",
+    current_stage: "review",
+    owner_agent: "researcher",
+  });
+  await writeJson(path.join(projectRoot, "researcher", "PAPER_SOURCE_INDEX.json"), {
+    papers: [
+      {
+        canonical_id: "demo-paper",
+        title: "A Demo Paper",
+        abstract: "This abstract is available locally and can seed discovery.",
+        references: ["demo-reference"],
+      },
+    ],
+  });
+  const tool = createResearchWorkflowTool({ workspaceDir: projectRoot });
+  const result = await executeWorkflowTool(tool, {
+    action: "run_literature_provider_evidence",
+    projectRoot,
+    providerEvidence: {
+      trigger: "workflow_tool_unit_test",
+    },
+  });
+
+  assert.equal(result.manifest.project_id, "provider-evidence-tool-demo");
+  assert.equal(result.manifest.status, "completed");
+  assert.equal(result.manifest.snippet_candidate_count, 1);
+  assert.match(
+    result.artifact_paths.manifest_path,
+    /provider_evidence_run_manifest\.json$/
   );
 });

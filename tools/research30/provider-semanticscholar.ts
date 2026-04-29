@@ -100,6 +100,7 @@ export async function searchSemanticScholar(
         "publicationTypes",
         "externalIds",
         "openAccessPdf",
+        "tldr",
       ].join(",")
     );
     const headers: Record<string, string> = {};

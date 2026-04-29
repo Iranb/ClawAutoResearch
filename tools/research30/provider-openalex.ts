@@ -24,6 +24,32 @@ function buildCapabilities(): BroadPaperProviderCapabilities {
   };
 }
 
+function abstractFromInvertedIndex(value: unknown): string | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  const positioned: Array<{ word: string; index: number }> = [];
+  for (const [word, positions] of Object.entries(value as Record<string, unknown>)) {
+    if (!Array.isArray(positions)) {
+      continue;
+    }
+    for (const position of positions) {
+      if (typeof position === "number" && Number.isFinite(position)) {
+        positioned.push({ word, index: Math.floor(position) });
+      }
+    }
+  }
+  if (positioned.length === 0) {
+    return null;
+  }
+  return positioned
+    .sort((left, right) => left.index - right.index)
+    .map((entry) => entry.word)
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function parseHit(queryId: string, item: Record<string, unknown>): BroadPaperProviderHit {
   const authorships = Array.isArray(item.authorships) ? item.authorships : [];
   const authors = authorships
@@ -70,7 +96,10 @@ function parseHit(queryId: string, item: Record<string, unknown>): BroadPaperPro
     providerId: typeof item.id === "string" ? item.id : null,
     title: typeof item.display_name === "string" ? item.display_name : null,
     authors,
-    abstract: typeof item.abstract === "string" ? item.abstract : null,
+    abstract:
+      typeof item.abstract === "string"
+        ? item.abstract
+        : abstractFromInvertedIndex(item.abstract_inverted_index),
     url:
       typeof item.id === "string"
         ? item.id
@@ -141,6 +170,8 @@ export async function searchOpenAlex(
         "type_crossref",
         "authorships",
         "cited_by_count",
+        "abstract_inverted_index",
+        "referenced_works",
       ].join(",")
     );
     if (params.fromYear) {

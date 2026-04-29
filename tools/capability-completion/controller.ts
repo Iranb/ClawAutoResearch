@@ -31,6 +31,7 @@ import {
   writeTextEnsured,
 } from "../workflow-guard-core/fs";
 import { materializeLiteratureResearchControllerArtifacts } from "../literature-discovery/controller-contract";
+import { runLiteratureProviderEvidence } from "../literature-discovery/provider-evidence-runner";
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -39,6 +40,7 @@ type ControllerInputs = {
   scorecard: UnknownRecord | null;
   literatureCoverageReport: UnknownRecord | null;
   providerResultIndex: UnknownRecord | null;
+  providerEvidenceRunManifest: UnknownRecord | null;
   papernexusImportBatchManifest: UnknownRecord | null;
   papernexusRefreshReport: UnknownRecord | null;
   citationExpansionReport: UnknownRecord | null;
@@ -253,6 +255,13 @@ function toolActionForGap(gap: CapabilityGapRecord): {
   owner: string;
 } {
   if (gap.capability === "literature") {
+    if (gap.code === "provider_snippet_citation_execution_missing") {
+      return {
+        toolAction: "run_literature_provider_evidence",
+        existingTool: true,
+        owner: "researcher",
+      };
+    }
     if (gap.code === "citation_snowballing_incomplete") {
       return {
         toolAction: "plan_citation_expansion",
@@ -350,6 +359,29 @@ function detectLiteratureGaps(params: {
   const providerStatus = asString(params.inputs.providerResultIndex?.status);
   const providerQueryCount =
     readNestedNumber(params.inputs.providerResultIndex, ["provider_query_count"]) ?? 0;
+  const providerEvidenceStatus = asString(
+    params.inputs.providerEvidenceRunManifest?.status
+  );
+  const providerEvidenceSnippetCount =
+    readNestedNumber(params.inputs.providerEvidenceRunManifest, [
+      "snippet_candidate_count",
+    ]) ?? 0;
+  const providerEvidenceCitationCount =
+    readNestedNumber(params.inputs.providerEvidenceRunManifest, [
+      "citation_candidate_count",
+    ]) ?? 0;
+  const providerEvidenceAuthErrorCount =
+    readNestedNumber(params.inputs.providerEvidenceRunManifest, [
+      "auth_error_count",
+    ]) ?? 0;
+  const providerEvidenceRateLimitCount =
+    readNestedNumber(params.inputs.providerEvidenceRunManifest, [
+      "rate_limit_count",
+    ]) ?? 0;
+  const providerEvidenceDeferredUntil =
+    readNestedString(params.inputs.providerEvidenceRunManifest, ["deferred_until"]);
+  const providerEvidenceCount =
+    providerEvidenceSnippetCount + providerEvidenceCitationCount;
   const snippetStatus = asString(params.inputs.snippetEvidenceReport?.status);
   const snippetGroundedCount =
     readNestedNumber(params.inputs.snippetEvidenceReport, [
@@ -437,6 +469,57 @@ function detectLiteratureGaps(params: {
   }
 
   if (
+    !params.inputs.providerEvidenceRunManifest ||
+    providerEvidenceStatus === "empty" ||
+    providerEvidenceStatus === "error" ||
+    providerEvidenceStatus === "blocked_auth" ||
+    providerEvidenceStatus === "deferred" ||
+    providerEvidenceCount === 0
+  ) {
+    const authBlocked =
+      providerEvidenceStatus === "blocked_auth" ||
+      providerEvidenceAuthErrorCount > 0 ||
+      providerErrorClass.authError;
+    const rateLimited =
+      providerEvidenceStatus === "deferred" ||
+      providerEvidenceRateLimitCount > 0 ||
+      providerErrorClass.rateLimit;
+    gaps.push(
+      makeGap({
+        projectId: params.projectId,
+        capability: "literature",
+        code: "provider_snippet_citation_execution_missing",
+        status: authBlocked ? "blocked" : rateLimited ? "deferred" : "runnable",
+        severity: authBlocked ? "high" : "medium",
+        summary:
+          "Provider raw metadata has not been converted into snippet and citation evidence candidates.",
+        sourceArtifacts: [
+          "researcher/PAPER_SOURCE_INDEX.json",
+          "researcher/literature-research-controller/provider_result_index.json",
+          "researcher/search_raw/*_provider_results.json",
+        ],
+        expectedArtifacts: [
+          "researcher/literature-research-controller/provider_evidence_run_manifest.json",
+          "researcher/literature-research-controller/provider_evidence_candidates.json",
+          "researcher/literature-research-controller/provider_evidence_error_report.json",
+        ],
+        canAutoExecute: !authBlocked && !rateLimited,
+        blockedByAuth: authBlocked,
+        deferredUntil: rateLimited
+          ? providerEvidenceDeferredUntil ?? firstDeferredUntil(params.generatedAt)
+          : null,
+        nextAction: "research_workflow.run_literature_provider_evidence",
+        details: {
+          provider_evidence_status: providerEvidenceStatus,
+          provider_evidence_snippet_candidate_count: providerEvidenceSnippetCount,
+          provider_evidence_citation_candidate_count: providerEvidenceCitationCount,
+          provider_query_count: providerQueryCount,
+        },
+      })
+    );
+  }
+
+  if (
     !params.inputs.snippetEvidenceReport ||
     ["empty", "fallback_only"].includes(snippetStatus ?? "") ||
     snippetGroundedCount === 0 ||
@@ -447,13 +530,19 @@ function detectLiteratureGaps(params: {
         projectId: params.projectId,
         capability: "literature",
         code: "snippet_evidence_not_claim_proof",
-        status: "planned",
+        status:
+          providerEvidenceCount > 0 || snippetGroundedCount > 0
+            ? "degraded"
+            : "planned",
         severity: "medium",
         summary:
-          "Snippet evidence is not strong enough to support claim-level proof; P1 provider/source-span execution is still required.",
+          providerEvidenceCount > 0
+            ? "Provider discovery evidence is available, but claim-level proof still lacks source-backed spans."
+            : "Snippet evidence is not strong enough to support claim-level proof; provider/source-span execution is still required.",
         sourceArtifacts: [
           "researcher/PAPER_SOURCE_INDEX.json",
           "researcher/literature-research-controller/snippet_evidence_report.json",
+          "researcher/literature-research-controller/provider_evidence_candidates.json",
         ],
         expectedArtifacts: [
           "researcher/literature-research-controller/snippet_evidence_report.json",
@@ -465,6 +554,9 @@ function detectLiteratureGaps(params: {
           snippet_status: snippetStatus,
           snippet_grounded_count: snippetGroundedCount,
           claim_proof_eligible_count: claimProofEligibleCount,
+          provider_evidence_status: providerEvidenceStatus,
+          provider_evidence_snippet_candidate_count: providerEvidenceSnippetCount,
+          provider_evidence_citation_candidate_count: providerEvidenceCitationCount,
         },
       })
     );
@@ -901,7 +993,11 @@ function recommendedClaimCap(params: {
     (gap) =>
       gap.capability === "literature" &&
       gap.status !== "satisfied" &&
-      ["snippet_evidence_not_claim_proof", "provider_execution_missing"].includes(gap.code)
+      [
+        "snippet_evidence_not_claim_proof",
+        "provider_execution_missing",
+        "provider_snippet_citation_execution_missing",
+      ].includes(gap.code)
   );
   if (params.gaps.some((gap) => gap.status === "blocked")) {
     reasons.push("At least one critical capability is blocked.");
@@ -955,6 +1051,7 @@ async function loadInputs(params: {
     scorecard,
     literatureCoverageReport,
     providerResultIndex,
+    providerEvidenceRunManifest,
     papernexusImportBatchManifest,
     papernexusRefreshReport,
     citationExpansionReport,
@@ -979,6 +1076,9 @@ async function loadInputs(params: {
     ),
     readJsonIfExists<UnknownRecord>(
       path.join(controllerDir, "provider_result_index.json")
+    ),
+    readJsonIfExists<UnknownRecord>(
+      path.join(controllerDir, "provider_evidence_run_manifest.json")
     ),
     readJsonIfExists<UnknownRecord>(
       path.join(controllerDir, "papernexus_import_batch_manifest.json")
@@ -1029,6 +1129,7 @@ async function loadInputs(params: {
     scorecard,
     literatureCoverageReport,
     providerResultIndex,
+    providerEvidenceRunManifest,
     papernexusImportBatchManifest,
     papernexusRefreshReport,
     citationExpansionReport,
@@ -1075,6 +1176,16 @@ function buildProviderCacheManifest(params: {
     rate_limit_count: errorClass.rateLimit ? 1 : 0,
     deferred_until:
       params.gaps.find((gap) => gap.deferred_until)?.deferred_until ?? null,
+    provider_evidence_status:
+      asString(params.inputs.providerEvidenceRunManifest?.status) ?? null,
+    provider_evidence_snippet_candidate_count:
+      readNestedNumber(params.inputs.providerEvidenceRunManifest, [
+        "snippet_candidate_count",
+      ]) ?? 0,
+    provider_evidence_citation_candidate_count:
+      readNestedNumber(params.inputs.providerEvidenceRunManifest, [
+        "citation_candidate_count",
+      ]) ?? 0,
   };
 }
 
@@ -1196,6 +1307,42 @@ async function executeSafeLocalActions(params: {
       });
       continue;
     }
+    if (action.tool_action === "run_literature_provider_evidence") {
+      try {
+        const result = await runLiteratureProviderEvidence({
+          projectRoot: params.projectRoot,
+          generatedAt: params.generatedAt,
+          trigger: "capability_completion_controller",
+        });
+        const status =
+          result.manifest.status === "blocked_auth"
+            ? "blocked"
+            : result.manifest.status === "deferred"
+              ? "deferred"
+              : "executed";
+        executed.push({
+          ...action,
+          status,
+          result: {
+            executed_local_materializer: true,
+            provider_evidence_status: result.manifest.status,
+            snippet_candidate_count: result.manifest.snippet_candidate_count,
+            citation_candidate_count: result.manifest.citation_candidate_count,
+            error_count: result.manifest.error_count,
+            deferred_until: result.manifest.deferred_until,
+          },
+        });
+      } catch (error) {
+        executed.push({
+          ...action,
+          status: "failed",
+          result: {
+            error: error instanceof Error ? error.message : String(error),
+          },
+        });
+      }
+      continue;
+    }
     executed.push(action);
   }
   return executed;
@@ -1249,18 +1396,17 @@ export async function materializeCapabilityCompletionControllerArtifacts(params:
   const trigger = params.trigger ?? "capability_completion_controller";
   const mode = (asString(params.mode) ?? "unknown") as CapabilityCompletionMode;
   const paths = buildCapabilityCompletionArtifactPaths(projectRoot);
-  const inputs = await loadInputs({ projectRoot, scorecard: params.scorecard });
+  let inputs = await loadInputs({ projectRoot, scorecard: params.scorecard });
   const projectId =
     pickString(inputs.manifest, ["project_id", "projectId"]) ??
     readNestedString(inputs.scorecard, ["project", "project_id"]) ??
     path.basename(projectRoot);
-  const gaps = detectGaps({
+  let gaps = detectGaps({
     projectRoot,
     projectId,
     generatedAt,
     inputs,
   });
-  const status = completionStatusFromGaps(gaps);
   const plannedActions = gaps
     .map((gap) => buildAction(gap))
     .filter((action): action is CapabilityExecutionAction => Boolean(action));
@@ -1270,6 +1416,23 @@ export async function materializeCapabilityCompletionControllerArtifacts(params:
     actions: plannedActions,
     execute: params.executeRunnableActions !== false,
   });
+  if (
+    actions.some(
+      (action) =>
+        action.result?.executed_local_materializer === true ||
+        action.status === "blocked" ||
+        action.status === "deferred"
+    )
+  ) {
+    inputs = await loadInputs({ projectRoot, scorecard: params.scorecard });
+    gaps = detectGaps({
+      projectRoot,
+      projectId,
+      generatedAt,
+      inputs,
+    });
+  }
+  const status = completionStatusFromGaps(gaps);
   const effectiveStatus = actions.some((action) => action.status === "failed")
     ? "failed"
     : status;
