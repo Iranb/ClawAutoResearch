@@ -222,6 +222,47 @@ type CitationExpansionReportArtifact = {
   query_types: Record<string, number>;
   recommendations: string[];
   auto_citation_verification: Record<string, unknown> | null;
+  snowballing: CitationSnowballingReport;
+};
+
+type CitationSnowballingMode =
+  | "backward_references"
+  | "forward_citations"
+  | "co_citation"
+  | "bibliographic_coupling";
+
+type CitationSnowballingCandidate = {
+  seed_canonical_id: string | null;
+  seed_title: string | null;
+  canonical_id: string | null;
+  title: string | null;
+  doi: string | null;
+  arxiv_id: string | null;
+  year: number | null;
+  venue: string | null;
+  source_field: string;
+  source_status: "raw_relation" | "string_relation";
+};
+
+type CitationSnowballingModeReport = {
+  mode: CitationSnowballingMode;
+  status: "extracted" | "empty" | "missing_seed_metadata";
+  seed_count: number;
+  missing_seed_metadata_count: number;
+  candidate_count: number;
+  fallback_query_count: number;
+  candidates: CitationSnowballingCandidate[];
+};
+
+type CitationSnowballingReport = {
+  status: "extracted" | "empty" | "not_required" | "skipped";
+  source_index_path: string;
+  evidence_policy: string;
+  seed_count: number;
+  total_candidate_count: number;
+  missing_seed_metadata_count: number;
+  mode_counts: Record<string, number>;
+  mode_reports: CitationSnowballingModeReport[];
 };
 
 export type LiteratureResearchControllerArtifacts = {
@@ -1583,7 +1624,7 @@ function buildPapernexusRefreshReportArtifact(params: {
   };
 }
 
-function buildCitationExpansionReportArtifact(params: {
+async function buildCitationExpansionReportArtifact(params: {
   projectRoot: string;
   generatedAt: string;
   trigger: string;
@@ -1591,8 +1632,13 @@ function buildCitationExpansionReportArtifact(params: {
   citationExpansionPacket: CitationExpansionPacket | null;
   autoCitationVerification: Record<string, unknown> | null;
   executed: boolean;
-}): CitationExpansionReportArtifact {
+}): Promise<CitationExpansionReportArtifact> {
   const packet = params.citationExpansionPacket;
+  const snowballing = await buildCitationSnowballingReport({
+    projectRoot: params.projectRoot,
+    citationExpansionPacket: packet,
+    executed: params.executed,
+  });
   return {
     schema_version: 1,
     generated_at: params.generatedAt,
@@ -1609,6 +1655,7 @@ function buildCitationExpansionReportArtifact(params: {
     query_types: countStrings(packet?.queries.map((query) => query.type) ?? []),
     recommendations: packet?.recommendations ?? [],
     auto_citation_verification: params.autoCitationVerification,
+    snowballing,
   };
 }
 
@@ -1657,6 +1704,304 @@ function summarizePapernexusRefreshReport(
   };
 }
 
+const SOURCE_INDEX_RECORD_KEYS = [
+  "papers",
+  "entries",
+  "items",
+  "sources",
+  "canonical_papers",
+  "canonicalPapers",
+] as const;
+
+const CITATION_RELATION_FIELDS: Record<CitationSnowballingMode, string[]> = {
+  backward_references: [
+    "references",
+    "reference_papers",
+    "referencePapers",
+    "backward_references",
+    "backwardReferences",
+    "outbound_citations",
+    "outboundCitations",
+  ],
+  forward_citations: [
+    "citations",
+    "citing_papers",
+    "citingPapers",
+    "cited_by",
+    "citedBy",
+    "cited_by_papers",
+    "citedByPapers",
+    "forward_citations",
+    "forwardCitations",
+  ],
+  co_citation: [
+    "co_citations",
+    "coCitations",
+    "co_cited_papers",
+    "coCitedPapers",
+    "related_papers",
+    "relatedPapers",
+  ],
+  bibliographic_coupling: [
+    "shared_references",
+    "sharedReferences",
+    "bibliographic_coupling",
+    "bibliographicCoupling",
+    "coupled_papers",
+    "coupledPapers",
+  ],
+};
+
+function collectRawSourceIndexRecords(raw: unknown): Record<string, unknown>[] {
+  if (Array.isArray(raw)) {
+    return raw
+      .map((entry) => asRecord(entry))
+      .filter((entry): entry is Record<string, unknown> => Boolean(entry));
+  }
+  const record = asRecord(raw);
+  if (!record) {
+    return [];
+  }
+  for (const key of SOURCE_INDEX_RECORD_KEYS) {
+    const value = record[key];
+    if (Array.isArray(value)) {
+      return value
+        .map((entry) => asRecord(entry))
+        .filter((entry): entry is Record<string, unknown> => Boolean(entry));
+    }
+    const nested = asRecord(value);
+    if (nested) {
+      const entries: Record<string, unknown>[] = [];
+      for (const [nestedKey, entry] of Object.entries(nested)) {
+        const entryRecord = asRecord(entry);
+        if (!entryRecord) {
+          continue;
+        }
+        entries.push({
+          canonical_id:
+            pickString(entryRecord, ["canonical_id", "canonicalId"]) ??
+            nestedKey,
+          ...entryRecord,
+        });
+      }
+      return entries;
+    }
+  }
+  const entries: Record<string, unknown>[] = [];
+  for (const [key, entry] of Object.entries(record)) {
+    const entryRecord = asRecord(entry);
+    if (!entryRecord) {
+      continue;
+    }
+    entries.push({
+      canonical_id:
+        pickString(entryRecord, ["canonical_id", "canonicalId"]) ?? key,
+      ...entryRecord,
+    });
+  }
+  return entries;
+}
+
+function candidateFromCitationRelation(params: {
+  seed: CitationExpansionPacket["seeds"][number];
+  sourceField: string;
+  relation: unknown;
+}): CitationSnowballingCandidate | null {
+  if (typeof params.relation === "string") {
+    const value = params.relation.trim();
+    if (!value) {
+      return null;
+    }
+    return {
+      seed_canonical_id: params.seed.canonicalId,
+      seed_title: params.seed.title,
+      canonical_id: normalizeIdentity(value),
+      title: value,
+      doi: null,
+      arxiv_id: null,
+      year: null,
+      venue: null,
+      source_field: params.sourceField,
+      source_status: "string_relation",
+    };
+  }
+  const record = asRecord(params.relation);
+  if (!record) {
+    return null;
+  }
+  const title = pickString(record, ["title", "paper_title", "paperTitle", "name"]);
+  const doi = pickString(record, ["doi"]);
+  const arxivId = pickString(record, ["arxiv_id", "arxivId", "arxiv"]);
+  const canonicalId =
+    pickString(record, ["canonical_id", "canonicalId", "id", "paper_id", "paperId"]) ??
+    (doi ? `doi:${doi}` : null) ??
+    (arxivId ? `arxiv:${arxivId}` : null) ??
+    (title ? `title:${normalizeIdentity(title)}` : null);
+  if (!canonicalId && !title) {
+    return null;
+  }
+  return {
+    seed_canonical_id: params.seed.canonicalId,
+    seed_title: params.seed.title,
+    canonical_id: canonicalId,
+    title,
+    doi,
+    arxiv_id: arxivId,
+    year: pickFiniteNumber(record, ["year", "publication_year", "publicationYear"]),
+    venue: pickString(record, ["venue", "conference", "journal", "container_title"]),
+    source_field: params.sourceField,
+    source_status: "raw_relation",
+  };
+}
+
+function findRawRecordForCitationSeed(
+  rawRecords: Record<string, unknown>[],
+  seed: CitationExpansionPacket["seeds"][number]
+): Record<string, unknown> | null {
+  const seedKeys = uniqueStrings(
+    [seed.canonicalId, seed.title]
+      .map((value) => normalizeIdentity(value))
+      .filter((value): value is string => Boolean(value))
+  );
+  if (seedKeys.length === 0) {
+    return null;
+  }
+  return (
+    rawRecords.find((record) => {
+      const recordKeys = identityKeysFromRawPaper(record);
+      return recordKeys.some((key) => seedKeys.includes(key));
+    }) ?? null
+  );
+}
+
+function buildCitationSnowballingModeReport(params: {
+  mode: CitationSnowballingMode;
+  packet: CitationExpansionPacket;
+  rawRecords: Record<string, unknown>[];
+}): CitationSnowballingModeReport {
+  const candidatesByKey = new Map<string, CitationSnowballingCandidate>();
+  let missingSeedMetadataCount = 0;
+  for (const seed of params.packet.seeds) {
+    const seedRecord = findRawRecordForCitationSeed(params.rawRecords, seed);
+    if (!seedRecord) {
+      missingSeedMetadataCount += 1;
+      continue;
+    }
+    let seedHasRelations = false;
+    for (const field of CITATION_RELATION_FIELDS[params.mode]) {
+      const rawRelations = seedRecord[field];
+      const relations = Array.isArray(rawRelations)
+        ? rawRelations
+        : rawRelations
+          ? [rawRelations]
+          : [];
+      for (const relation of relations) {
+        const candidate = candidateFromCitationRelation({
+          seed,
+          sourceField: field,
+          relation,
+        });
+        if (!candidate) {
+          continue;
+        }
+        seedHasRelations = true;
+        const key =
+          candidate.canonical_id ??
+          normalizeIdentity(candidate.title) ??
+          `${candidate.seed_canonical_id}:${candidate.source_field}:${candidatesByKey.size}`;
+        candidatesByKey.set(key, candidate);
+      }
+    }
+    if (!seedHasRelations) {
+      missingSeedMetadataCount += 1;
+    }
+  }
+  const fallbackQueryCount = params.packet.queries.filter((query) => {
+    if (params.mode === "backward_references") {
+      return query.type === "backward_references";
+    }
+    if (params.mode === "forward_citations") {
+      return query.type === "forward_citations";
+    }
+    return query.type === "keyword_refresh";
+  }).length;
+  const candidates = [...candidatesByKey.values()].slice(0, 100);
+  return {
+    mode: params.mode,
+    status:
+      candidates.length > 0
+        ? "extracted"
+        : missingSeedMetadataCount >= params.packet.seeds.length
+          ? "missing_seed_metadata"
+          : "empty",
+    seed_count: params.packet.seeds.length,
+    missing_seed_metadata_count: missingSeedMetadataCount,
+    candidate_count: candidates.length,
+    fallback_query_count: fallbackQueryCount,
+    candidates,
+  };
+}
+
+async function buildCitationSnowballingReport(params: {
+  projectRoot: string;
+  citationExpansionPacket: CitationExpansionPacket | null;
+  executed: boolean;
+}): Promise<CitationSnowballingReport> {
+  const sourceIndexPath = path.join(
+    params.projectRoot,
+    "researcher",
+    "PAPER_SOURCE_INDEX.json"
+  );
+  if (!params.citationExpansionPacket) {
+    return {
+      status: params.executed ? "not_required" : "skipped",
+      source_index_path: sourceIndexPath,
+      evidence_policy:
+        "Citation snowballing produces discovery candidates only; source-backed proof still requires PaperNexus source spans and evidence chains.",
+      seed_count: 0,
+      total_candidate_count: 0,
+      missing_seed_metadata_count: 0,
+      mode_counts: {},
+      mode_reports: [],
+    };
+  }
+  const rawSourceIndex = await readJsonIfExists<unknown>(sourceIndexPath);
+  const rawRecords = collectRawSourceIndexRecords(rawSourceIndex);
+  const modeReports = ([
+    "backward_references",
+    "forward_citations",
+    "co_citation",
+    "bibliographic_coupling",
+  ] as CitationSnowballingMode[]).map((mode) =>
+    buildCitationSnowballingModeReport({
+      mode,
+      packet: params.citationExpansionPacket as CitationExpansionPacket,
+      rawRecords,
+    })
+  );
+  const totalCandidateCount = modeReports.reduce(
+    (sum, report) => sum + report.candidate_count,
+    0
+  );
+  const missingSeedMetadataCount = modeReports.reduce(
+    (sum, report) => sum + report.missing_seed_metadata_count,
+    0
+  );
+  return {
+    status: totalCandidateCount > 0 ? "extracted" : "empty",
+    source_index_path: sourceIndexPath,
+    evidence_policy:
+      "Citation snowballing produces discovery candidates only; source-backed proof still requires PaperNexus source spans and evidence chains.",
+    seed_count: params.citationExpansionPacket.seeds.length,
+    total_candidate_count: totalCandidateCount,
+    missing_seed_metadata_count: missingSeedMetadataCount,
+    mode_counts: Object.fromEntries(
+      modeReports.map((report) => [report.mode, report.candidate_count])
+    ),
+    mode_reports: modeReports,
+  };
+}
+
 function summarizeCitationExpansionReport(
   artifact: CitationExpansionReportArtifact,
   artifactPath: string
@@ -1668,6 +2013,8 @@ function summarizeCitationExpansionReport(
     seed_count: artifact.seed_count,
     query_count: artifact.query_count,
     packet_path: artifact.packet_path,
+    snowballing_status: artifact.snowballing.status,
+    snowballing_candidate_count: artifact.snowballing.total_candidate_count,
   };
 }
 
@@ -1727,7 +2074,7 @@ export async function writeLiteratureResearchControllerRunReceipt(params: {
     nextRoute,
     importManifest: papernexusImportBatchManifest,
   });
-  const citationExpansionReport = buildCitationExpansionReportArtifact({
+  const citationExpansionReport = await buildCitationExpansionReportArtifact({
     projectRoot,
     generatedAt,
     trigger,

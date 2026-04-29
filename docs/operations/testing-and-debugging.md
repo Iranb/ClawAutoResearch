@@ -547,7 +547,7 @@ Graph build 结束后还会写入 `graph/PAPERNEXUS_TASK_CERTIFICATION.json`，�
 - `provider_result_index.json`：把 provider query 状态、hit 数、合并候选、source-backed/import 决策和 risk flags 固定到 controller 目录；不要只看 `researcher/search_raw/*` 的时间戳文件。
 - `papernexus_import_batch_manifest.json`：记录本轮是否创建 PaperNexus batch import、request id、wrapper、manifest path、source index path 和可导入论文数。
 - `papernexus_refresh_report.json`：把下一跳明确为 `queued_graph_build`、`waiting_for_active_import`、`pending_no_importable_sources`、`needs_rerun_failed_gate` 或 `skipped`，用于判断 graph build 是否真的应该继续。
-- `citation_expansion_report.json`：记录 bounded citation expansion packet 的 seed/query 数和 query types；如果没有 packet，会明确写成 `not_required` 或 `skipped`。
+- `citation_expansion_report.json`：记录 bounded citation expansion packet 的 seed/query 数和 query types，并从 `PAPER_SOURCE_INDEX.json` 原始 metadata 中保守提取 backward references、forward citations、co-citation 和 bibliographic-coupling 候选。这个报告只产生 discovery/import 线索；真正 source-backed proof 仍必须来自 PaperNexus source span/evidence chain。如果 source index 没有显式 citation metadata，会写成 `snowballing.status=empty`，不会把 keyword fallback 冒充为 citation evidence。
 - `literature_controller_trace.jsonl`：每次 controller run 追加一行，可对照多轮 literature repair 是否真的推进。
 - `literature_repair_log.jsonl`：每次 controller run 追加紧凑摘要，适合排查多轮搜索/导入/构图是否被同一个原因卡住。
 

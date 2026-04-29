@@ -4,7 +4,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import { materializeLiteratureResearchControllerArtifacts } from "../tools/literature-discovery/controller-contract.ts";
+import {
+  materializeLiteratureResearchControllerArtifacts,
+  writeLiteratureResearchControllerRunReceipt,
+} from "../tools/literature-discovery/controller-contract.ts";
 
 async function writeJson(filePath, value) {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
@@ -88,4 +91,101 @@ test("literature research controller materializes closed-loop artifacts", async 
       .catch(() => false),
     true
   );
+});
+
+test("literature controller citation report extracts bounded snowballing candidates from source index metadata", async (t) => {
+  const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-literature-snowball-"));
+  t.after(() => fs.rm(projectRoot, { recursive: true, force: true }));
+
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "citation-snowball-demo",
+    current_stage: "review",
+    owner_agent: "researcher",
+    research_program: {
+      goal: "Generalized category discovery with consistency regularization",
+      baseline_reference: "FixMatch",
+      primary_metric: "H-score",
+    },
+  });
+  await writeJson(path.join(projectRoot, "researcher", "PAPER_SOURCE_INDEX.json"), {
+    papers: [
+      {
+        canonical_id: "doi:10.0000/seed",
+        doi: "10.0000/seed",
+        title: "FixMatch for Generalized Category Discovery",
+        year: 2024,
+        citation_count: 120,
+        source_path: "researcher/paper-staging/seed.md",
+        resolution_status: "resolved_markdown",
+        references: [
+          {
+            canonical_id: "doi:10.0000/classic",
+            title: "Classic Consistency Regularization",
+            doi: "10.0000/classic",
+            year: 2020,
+            venue: "NeurIPS",
+          },
+        ],
+        citing_papers: [
+          {
+            canonical_id: "doi:10.0000/followup",
+            title: "Recent Follow-up on GCD Consistency",
+            doi: "10.0000/followup",
+            year: 2026,
+            venue: "ICLR",
+          },
+        ],
+        related_papers: ["Semi-Supervised Discovery Survey"],
+        shared_references: [
+          {
+            canonical_id: "doi:10.0000/coupled",
+            title: "Coupled Open-World Recognition",
+            doi: "10.0000/coupled",
+            year: 2023,
+          },
+        ],
+      },
+    ],
+  });
+
+  const controller = await materializeLiteratureResearchControllerArtifacts({
+    projectRoot,
+    generatedAt: "2026-04-29T00:00:00.000Z",
+    trigger: "citation_snowball_unit_test",
+    minCorePapers: 3,
+    minRecentPapers: 1,
+  });
+  assert.ok(controller.citation_expansion_packet);
+
+  const receipt = await writeLiteratureResearchControllerRunReceipt({
+    projectRoot,
+    generatedAt: "2026-04-29T00:00:01.000Z",
+    trigger: "citation_snowball_unit_test",
+    controllerBefore: controller,
+    controllerAfter: controller,
+    executed: false,
+    skipReason: "unit_test_receipt_only",
+    citationExpansionPacket: controller.citation_expansion_packet,
+    nextRoute: "none",
+  });
+  assert.equal(receipt.citation_expansion_report?.snowballing_status, "extracted");
+  assert.equal(receipt.citation_expansion_report?.snowballing_candidate_count, 4);
+
+  const report = JSON.parse(
+    await fs.readFile(
+      path.join(
+        projectRoot,
+        "researcher",
+        "literature-research-controller",
+        "citation_expansion_report.json"
+      ),
+      "utf8"
+    )
+  );
+  assert.equal(report.snowballing.status, "extracted");
+  assert.equal(report.snowballing.mode_counts.backward_references, 1);
+  assert.equal(report.snowballing.mode_counts.forward_citations, 1);
+  assert.equal(report.snowballing.mode_counts.co_citation, 1);
+  assert.equal(report.snowballing.mode_counts.bibliographic_coupling, 1);
+  assert.match(report.snowballing.evidence_policy, /discovery candidates only/i);
 });
