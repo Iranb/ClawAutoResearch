@@ -225,6 +225,55 @@ type CitationExpansionReportArtifact = {
   snowballing: CitationSnowballingReport;
 };
 
+type SnippetEvidenceKind =
+  | "source_backed_quote"
+  | "explicit_snippet"
+  | "evidence_summary"
+  | "abstract_fallback"
+  | "unavailable";
+
+type SnippetEvidenceRecord = {
+  canonical_id: string | null;
+  title: string | null;
+  doi: string | null;
+  arxiv_id: string | null;
+  year: number | null;
+  venue: string | null;
+  source_path: string | null;
+  source_resolved_path: string | null;
+  source_path_exists: boolean;
+  snippet_status: string | null;
+  evidence_kind: SnippetEvidenceKind;
+  evidence_text: string | null;
+  evidence_source_field: string | null;
+  source_backed: boolean;
+  claim_proof_eligible: boolean;
+  risk_flags: string[];
+};
+
+type SnippetEvidenceReportArtifact = {
+  schema_version: 1;
+  generated_at: string;
+  project_id: string | null;
+  project_root: string;
+  trigger: string;
+  status: "grounded" | "fallback_only" | "empty";
+  source_index_path: string;
+  evidence_policy: string;
+  raw_record_count: number;
+  evaluated_record_count: number;
+  record_limit: number;
+  records_truncated: boolean;
+  source_backed_quote_count: number;
+  explicit_snippet_count: number;
+  evidence_summary_count: number;
+  abstract_fallback_count: number;
+  unavailable_count: number;
+  snippet_grounded_count: number;
+  claim_proof_eligible_count: number;
+  records: SnippetEvidenceRecord[];
+};
+
 type CitationSnowballingMode =
   | "backward_references"
   | "forward_citations"
@@ -287,6 +336,7 @@ export type LiteratureResearchControllerArtifacts = {
     papernexus_import_batch_manifest_path: string;
     papernexus_refresh_report_path: string;
     citation_expansion_report_path: string;
+    snippet_evidence_report_path: string;
     repair_log_path: string;
     coverage_audit_path: string;
     citation_expansion_packet_path: string | null;
@@ -305,6 +355,7 @@ export type LiteratureResearchControllerArtifacts = {
     papernexus_import_batch_manifest_path: string;
     papernexus_refresh_report_path: string;
     citation_expansion_report_path: string;
+    snippet_evidence_report_path: string;
     repair_log_path: string;
   };
   need_assessment: Record<string, unknown>;
@@ -347,6 +398,7 @@ export type LiteratureResearchControllerRunReceipt = {
   papernexus_import_batch_manifest: Record<string, unknown> | null;
   papernexus_refresh_report: Record<string, unknown> | null;
   citation_expansion_report: Record<string, unknown> | null;
+  snippet_evidence_report: Record<string, unknown> | null;
   controller_after: {
     status: LiteratureResearchControllerArtifacts["status"];
     decision: LiteratureResearchControllerArtifacts["decision"];
@@ -362,6 +414,7 @@ export type LiteratureResearchControllerRunReceipt = {
     papernexus_import_batch_manifest_path: string;
     papernexus_refresh_report_path: string;
     citation_expansion_report_path: string;
+    snippet_evidence_report_path: string;
     repair_log_path: string;
   };
 };
@@ -431,6 +484,7 @@ function buildArtifactPaths(projectRoot: string) {
     ),
     papernexusRefreshReportPath: path.join(baseDir, "papernexus_refresh_report.json"),
     citationExpansionReportPath: path.join(baseDir, "citation_expansion_report.json"),
+    snippetEvidenceReportPath: path.join(baseDir, "snippet_evidence_report.json"),
     repairLogPath: path.join(baseDir, "literature_repair_log.jsonl"),
   };
 }
@@ -1307,6 +1361,7 @@ ${bullet(params.nextActions)}
 - papernexus_import_batch_manifest: ${relativePathFromProject(params.projectRoot, params.paths.papernexusImportBatchManifestPath)}
 - papernexus_refresh_report: ${relativePathFromProject(params.projectRoot, params.paths.papernexusRefreshReportPath)}
 - citation_expansion_report: ${relativePathFromProject(params.projectRoot, params.paths.citationExpansionReportPath)}
+- snippet_evidence_report: ${relativePathFromProject(params.projectRoot, params.paths.snippetEvidenceReportPath)}
 - trace: ${relativePathFromProject(params.projectRoot, params.paths.tracePath)}
 - repair_log: ${relativePathFromProject(params.projectRoot, params.paths.repairLogPath)}
 `;
@@ -2002,6 +2057,375 @@ async function buildCitationSnowballingReport(params: {
   };
 }
 
+const SNIPPET_EVIDENCE_MAX_RECORDS = 300;
+const SNIPPET_TEXT_LIMIT = 900;
+
+const SOURCE_PATH_FIELDS = [
+  "source_path",
+  "sourcePath",
+  "markdown_path",
+  "markdownPath",
+  "file_path",
+  "filePath",
+  "local_path",
+  "localPath",
+];
+
+const SOURCE_BACKED_QUOTE_FIELDS = [
+  "source_span_quote",
+  "sourceSpanQuote",
+  "source_quote",
+  "sourceQuote",
+  "evidence_quote",
+  "evidenceQuote",
+  "quote",
+  "source_span",
+  "sourceSpan",
+  "source_spans",
+  "sourceSpans",
+  "evidence_span",
+  "evidenceSpan",
+  "evidence_spans",
+  "evidenceSpans",
+];
+
+const SOURCE_ANCHOR_FIELDS = [
+  "source_span",
+  "sourceSpan",
+  "source_spans",
+  "sourceSpans",
+  "source_span_id",
+  "sourceSpanId",
+  "evidence_span",
+  "evidenceSpan",
+  "evidence_spans",
+  "evidenceSpans",
+  "evidence_source_id",
+  "evidenceSourceId",
+  "page",
+  "page_number",
+  "pageNumber",
+  "section",
+];
+
+const EXPLICIT_SNIPPET_FIELDS = [
+  "snippet",
+  "snippets",
+  "snippet_text",
+  "snippetText",
+  "matched_snippet",
+  "matchedSnippet",
+  "semantic_scholar_snippet",
+  "semanticScholarSnippet",
+];
+
+const EVIDENCE_SUMMARY_FIELDS = [
+  "evidence_summary",
+  "evidenceSummary",
+  "summary",
+  "tldr",
+  "tl_dr",
+  "tlDr",
+  "takeaway",
+];
+
+const ABSTRACT_FALLBACK_FIELDS = [
+  "abstract",
+  "paper_abstract",
+  "paperAbstract",
+  "description",
+];
+
+function normalizeEvidenceText(value: string | null | undefined): string | null {
+  const text = String(value ?? "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!text) {
+    return null;
+  }
+  if (text.length <= SNIPPET_TEXT_LIMIT) {
+    return text;
+  }
+  return `${text.slice(0, SNIPPET_TEXT_LIMIT - 3).trim()}...`;
+}
+
+function evidenceTextFromUnknown(value: unknown): string | null {
+  if (typeof value === "string") {
+    return normalizeEvidenceText(value);
+  }
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      const text = evidenceTextFromUnknown(entry);
+      if (text) {
+        return text;
+      }
+    }
+    return null;
+  }
+  const record = asRecord(value);
+  if (!record) {
+    return null;
+  }
+  return (
+    pickEvidenceFromFields(record, [
+      "text",
+      "quote",
+      "snippet",
+      "summary",
+      "abstract",
+      "content",
+      "paragraph",
+    ])?.text ?? null
+  );
+}
+
+function pickEvidenceFromFields(
+  record: Record<string, unknown>,
+  fields: string[]
+): { field: string; text: string } | null {
+  for (const field of fields) {
+    const text = evidenceTextFromUnknown(record[field]);
+    if (text) {
+      return { field, text };
+    }
+  }
+  return null;
+}
+
+function isDegenerateSnippetStatus(status: string | null): boolean {
+  const normalized = String(status ?? "").trim().toLowerCase();
+  return [
+    "unavailable",
+    "missing",
+    "none",
+    "empty",
+    "degenerate",
+    "abstract_fallback",
+    "abstract-fallback",
+    "abstract_only",
+    "abstract-only",
+  ].includes(normalized);
+}
+
+function hasSourceSpanLikeEvidence(record: Record<string, unknown>): boolean {
+  return SOURCE_ANCHOR_FIELDS.some((field) => record[field] !== undefined);
+}
+
+function quoteFieldImpliesSourceAnchor(field: string): boolean {
+  const normalized = field.toLowerCase().replace(/[^a-z]/g, "");
+  return normalized.includes("sourcespan") || normalized.includes("sourcequote");
+}
+
+function extractRepresentativeSourceQuote(text: string | null): string | null {
+  if (!text) {
+    return null;
+  }
+  let inCodeFence = false;
+  const plainLines = text
+    .split(/\r?\n/)
+    .filter((line) => {
+      if (/^\s*```/.test(line)) {
+        inCodeFence = !inCodeFence;
+        return false;
+      }
+      return !inCodeFence;
+    })
+    .map((line) => line.trimEnd());
+  for (const block of plainLines.join("\n").split(/\n{2,}/)) {
+    const cleaned = normalizeEvidenceText(
+      block
+        .split(/\r?\n/)
+        .map((line) => line.replace(/^>\s*/, "").trim())
+        .filter((line) => line && !/^#{1,6}\s+/.test(line) && !/^\|/.test(line))
+        .join(" ")
+    );
+    if (cleaned && cleaned.length >= 80) {
+      return cleaned;
+    }
+  }
+  return null;
+}
+
+async function readSourcePathQuote(params: {
+  projectRoot: string;
+  sourcePath: string | null;
+}): Promise<{ resolvedPath: string | null; exists: boolean; quote: string | null }> {
+  if (!params.sourcePath) {
+    return { resolvedPath: null, exists: false, quote: null };
+  }
+  const resolvedPath = resolveProjectArtifactPath(params.projectRoot, params.sourcePath);
+  const exists = Boolean(
+    resolvedPath &&
+      (await fs
+        .access(resolvedPath)
+        .then(() => true)
+        .catch(() => false))
+  );
+  const text = await readTextIfExists(resolvedPath);
+  return {
+    resolvedPath,
+    exists,
+    quote: extractRepresentativeSourceQuote(text),
+  };
+}
+
+async function buildSnippetEvidenceRecord(params: {
+  projectRoot: string;
+  rawRecord: Record<string, unknown>;
+}): Promise<SnippetEvidenceRecord> {
+  const record = params.rawRecord;
+  const sourcePath = pickString(record, SOURCE_PATH_FIELDS);
+  const snippetStatus = pickString(record, [
+    "snippet_status",
+    "snippetStatus",
+    "evidence_status",
+    "evidenceStatus",
+  ]);
+  const {
+    resolvedPath,
+    exists: sourcePathExists,
+    quote: sourcePathQuote,
+  } = await readSourcePathQuote({
+    projectRoot: params.projectRoot,
+    sourcePath,
+  });
+  const rawQuote = pickEvidenceFromFields(record, SOURCE_BACKED_QUOTE_FIELDS);
+  const anchoredQuote =
+    rawQuote &&
+    (sourcePathExists ||
+      hasSourceSpanLikeEvidence(record) ||
+      quoteFieldImpliesSourceAnchor(rawQuote.field))
+      ? rawQuote
+      : sourcePathQuote
+        ? { field: "source_path", text: sourcePathQuote }
+        : null;
+  const explicitSnippet = pickEvidenceFromFields(record, EXPLICIT_SNIPPET_FIELDS);
+  const evidenceSummary =
+    (!anchoredQuote && rawQuote ? rawQuote : null) ??
+    pickEvidenceFromFields(record, EVIDENCE_SUMMARY_FIELDS);
+  const abstractFallback = pickEvidenceFromFields(record, ABSTRACT_FALLBACK_FIELDS);
+  const riskFlags: string[] = [];
+
+  let evidenceKind: SnippetEvidenceKind = "unavailable";
+  let evidenceText: string | null = null;
+  let evidenceSourceField: string | null = null;
+  let sourceBacked = false;
+  let claimProofEligible = false;
+
+  if (anchoredQuote) {
+    evidenceKind = "source_backed_quote";
+    evidenceText = anchoredQuote.text;
+    evidenceSourceField = anchoredQuote.field;
+    sourceBacked = true;
+    claimProofEligible = true;
+  } else if (explicitSnippet && !isDegenerateSnippetStatus(snippetStatus)) {
+    evidenceKind = "explicit_snippet";
+    evidenceText = explicitSnippet.text;
+    evidenceSourceField = explicitSnippet.field;
+    riskFlags.push("provider_snippet_not_claim_proof");
+  } else if (evidenceSummary) {
+    evidenceKind = "evidence_summary";
+    evidenceText = evidenceSummary.text;
+    evidenceSourceField = evidenceSummary.field;
+    riskFlags.push("summary_not_source_span");
+  } else if (abstractFallback) {
+    evidenceKind = "abstract_fallback";
+    evidenceText = abstractFallback.text;
+    evidenceSourceField = abstractFallback.field;
+    riskFlags.push("abstract_fallback_not_source_backed");
+  } else {
+    riskFlags.push("missing_snippet_evidence");
+  }
+
+  if (explicitSnippet && isDegenerateSnippetStatus(snippetStatus)) {
+    riskFlags.push("degenerate_snippet_status");
+  }
+
+  return {
+    canonical_id:
+      pickString(record, ["canonical_id", "canonicalId", "id", "paper_id", "paperId"]) ??
+      null,
+    title: pickString(record, ["title", "paper_title", "paperTitle", "name"]),
+    doi: pickString(record, ["doi"]),
+    arxiv_id: pickString(record, ["arxiv_id", "arxivId", "arxiv"]),
+    year: pickFiniteNumber(record, ["year", "publication_year", "publicationYear"]),
+    venue: pickString(record, ["venue", "conference", "journal", "container_title"]),
+    source_path: sourcePath,
+    source_resolved_path: resolvedPath,
+    source_path_exists: sourcePathExists,
+    snippet_status: snippetStatus,
+    evidence_kind: evidenceKind,
+    evidence_text: evidenceText,
+    evidence_source_field: evidenceSourceField,
+    source_backed: sourceBacked,
+    claim_proof_eligible: claimProofEligible,
+    risk_flags: uniqueStrings(riskFlags),
+  };
+}
+
+async function buildSnippetEvidenceReportArtifact(params: {
+  projectRoot: string;
+  generatedAt: string;
+  trigger: string;
+  projectId: string | null;
+}): Promise<SnippetEvidenceReportArtifact> {
+  const sourceIndexPath = path.join(
+    params.projectRoot,
+    "researcher",
+    "PAPER_SOURCE_INDEX.json"
+  );
+  const rawSourceIndex = await readJsonIfExists<unknown>(sourceIndexPath);
+  const rawRecords = collectRawSourceIndexRecords(rawSourceIndex);
+  const evaluatedRecords = rawRecords.slice(0, SNIPPET_EVIDENCE_MAX_RECORDS);
+  const records = await Promise.all(
+    evaluatedRecords.map((rawRecord) =>
+      buildSnippetEvidenceRecord({
+        projectRoot: params.projectRoot,
+        rawRecord,
+      })
+    )
+  );
+  const countKind = (kind: SnippetEvidenceKind) =>
+    records.filter((record) => record.evidence_kind === kind).length;
+  const sourceBackedQuoteCount = countKind("source_backed_quote");
+  const explicitSnippetCount = countKind("explicit_snippet");
+  const evidenceSummaryCount = countKind("evidence_summary");
+  const abstractFallbackCount = countKind("abstract_fallback");
+  const unavailableCount = countKind("unavailable");
+  const snippetGroundedCount = sourceBackedQuoteCount + explicitSnippetCount;
+  const claimProofEligibleCount = records.filter(
+    (record) => record.claim_proof_eligible
+  ).length;
+  return {
+    schema_version: 1,
+    generated_at: params.generatedAt,
+    project_id: params.projectId,
+    project_root: params.projectRoot,
+    trigger: params.trigger,
+    status:
+      snippetGroundedCount > 0
+        ? "grounded"
+        : evidenceSummaryCount + abstractFallbackCount > 0
+          ? "fallback_only"
+          : "empty",
+    source_index_path: sourceIndexPath,
+    evidence_policy:
+      "Explicit snippets and local source quotes can drive discovery/challenge prompts; only source-backed quotes are eligible as claim proof. Abstract fallbacks and summaries must not be cited as source-backed evidence.",
+    raw_record_count: rawRecords.length,
+    evaluated_record_count: records.length,
+    record_limit: SNIPPET_EVIDENCE_MAX_RECORDS,
+    records_truncated: rawRecords.length > records.length,
+    source_backed_quote_count: sourceBackedQuoteCount,
+    explicit_snippet_count: explicitSnippetCount,
+    evidence_summary_count: evidenceSummaryCount,
+    abstract_fallback_count: abstractFallbackCount,
+    unavailable_count: unavailableCount,
+    snippet_grounded_count: snippetGroundedCount,
+    claim_proof_eligible_count: claimProofEligibleCount,
+    records,
+  };
+}
+
 function summarizeCitationExpansionReport(
   artifact: CitationExpansionReportArtifact,
   artifactPath: string
@@ -2015,6 +2439,24 @@ function summarizeCitationExpansionReport(
     packet_path: artifact.packet_path,
     snowballing_status: artifact.snowballing.status,
     snowballing_candidate_count: artifact.snowballing.total_candidate_count,
+  };
+}
+
+function summarizeSnippetEvidenceReport(
+  artifact: SnippetEvidenceReportArtifact,
+  artifactPath: string
+): Record<string, unknown> {
+  return {
+    path: artifactPath,
+    status: artifact.status,
+    raw_record_count: artifact.raw_record_count,
+    evaluated_record_count: artifact.evaluated_record_count,
+    snippet_grounded_count: artifact.snippet_grounded_count,
+    claim_proof_eligible_count: artifact.claim_proof_eligible_count,
+    source_backed_quote_count: artifact.source_backed_quote_count,
+    explicit_snippet_count: artifact.explicit_snippet_count,
+    abstract_fallback_count: artifact.abstract_fallback_count,
+    unavailable_count: artifact.unavailable_count,
   };
 }
 
@@ -2087,6 +2529,12 @@ export async function writeLiteratureResearchControllerRunReceipt(params: {
     autoCitationVerification: params.autoCitationVerification ?? null,
     executed: params.executed,
   });
+  const snippetEvidenceReport = await buildSnippetEvidenceReportArtifact({
+    projectRoot,
+    generatedAt,
+    trigger,
+    projectId: params.controllerBefore.project_id,
+  });
   const receipt: LiteratureResearchControllerRunReceipt = {
     schema_version: 1,
     generated_at: generatedAt,
@@ -2119,6 +2567,10 @@ export async function writeLiteratureResearchControllerRunReceipt(params: {
       citationExpansionReport,
       paths.citationExpansionReportPath
     ),
+    snippet_evidence_report: summarizeSnippetEvidenceReport(
+      snippetEvidenceReport,
+      paths.snippetEvidenceReportPath
+    ),
     controller_after: params.controllerAfter
       ? {
           status: params.controllerAfter.status,
@@ -2137,6 +2589,7 @@ export async function writeLiteratureResearchControllerRunReceipt(params: {
         paths.papernexusImportBatchManifestPath,
       papernexus_refresh_report_path: paths.papernexusRefreshReportPath,
       citation_expansion_report_path: paths.citationExpansionReportPath,
+      snippet_evidence_report_path: paths.snippetEvidenceReportPath,
       repair_log_path: paths.repairLogPath,
     },
   };
@@ -2148,6 +2601,7 @@ export async function writeLiteratureResearchControllerRunReceipt(params: {
     ),
     writeJsonEnsured(paths.papernexusRefreshReportPath, papernexusRefreshReport),
     writeJsonEnsured(paths.citationExpansionReportPath, citationExpansionReport),
+    writeJsonEnsured(paths.snippetEvidenceReportPath, snippetEvidenceReport),
     writeJsonEnsured(paths.runReceiptPath, receipt),
   ]);
   await fs.mkdir(path.dirname(paths.tracePath), { recursive: true });
@@ -2169,6 +2623,9 @@ export async function writeLiteratureResearchControllerRunReceipt(params: {
       papernexus_import_status: papernexusImportBatchManifest.status,
       papernexus_refresh_status: papernexusRefreshReport.status,
       citation_expansion_status: citationExpansionReport.status,
+      snippet_evidence_status: snippetEvidenceReport.status,
+      snippet_grounded_count: snippetEvidenceReport.snippet_grounded_count,
+      claim_proof_eligible_count: snippetEvidenceReport.claim_proof_eligible_count,
     })}\n`,
     "utf8"
   );
@@ -2367,6 +2824,10 @@ export async function materializeLiteratureResearchControllerArtifacts(params: {
         projectRoot,
         paths.citationExpansionReportPath
       ),
+      snippet_evidence_report_path: relativePathFromProject(
+        projectRoot,
+        paths.snippetEvidenceReportPath
+      ),
       controller_trace_path: relativePathFromProject(projectRoot, paths.tracePath),
       literature_repair_log_path: relativePathFromProject(
         projectRoot,
@@ -2414,6 +2875,10 @@ export async function materializeLiteratureResearchControllerArtifacts(params: {
       projectRoot,
       paths.citationExpansionReportPath
     ),
+    snippet_evidence_report_path: relativePathFromProject(
+      projectRoot,
+      paths.snippetEvidenceReportPath
+    ),
     repair_log_path: relativePathFromProject(projectRoot, paths.repairLogPath),
   };
   const artifacts: LiteratureResearchControllerArtifacts = {
@@ -2439,6 +2904,7 @@ export async function materializeLiteratureResearchControllerArtifacts(params: {
         paths.papernexusImportBatchManifestPath,
       papernexus_refresh_report_path: paths.papernexusRefreshReportPath,
       citation_expansion_report_path: paths.citationExpansionReportPath,
+      snippet_evidence_report_path: paths.snippetEvidenceReportPath,
       repair_log_path: paths.repairLogPath,
       coverage_audit_path: coverageAudit.auditPath,
       citation_expansion_packet_path: citationExpansionPacket?.packetPath ?? null,

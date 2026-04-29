@@ -189,3 +189,108 @@ test("literature controller citation report extracts bounded snowballing candida
   assert.equal(report.snowballing.mode_counts.bibliographic_coupling, 1);
   assert.match(report.snowballing.evidence_policy, /discovery candidates only/i);
 });
+
+test("literature controller writes snippet evidence report from source index and local sources", async (t) => {
+  const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-literature-snippets-"));
+  t.after(() => fs.rm(projectRoot, { recursive: true, force: true }));
+
+  const sourceMarkdownPath = path.join(projectRoot, "researcher", "paper-staging", "quote.md");
+  await fs.mkdir(path.dirname(sourceMarkdownPath), { recursive: true });
+  await fs.writeFile(
+    sourceMarkdownPath,
+    [
+      "# Source Paper",
+      "",
+      "The method combines pseudo-label filtering with consistency regularization across weak and strong augmentations, which directly supports the generalized category discovery bridge being tested in this project.",
+    ].join("\n"),
+    "utf8"
+  );
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "snippet-evidence-demo",
+    current_stage: "review",
+    owner_agent: "researcher",
+    research_program: {
+      goal: "Use FixMatch-style consistency regularization to improve generalized category discovery",
+      baseline_reference: "FixMatch",
+      primary_metric: "H-score",
+    },
+  });
+  await writeJson(path.join(projectRoot, "researcher", "PAPER_SOURCE_INDEX.json"), {
+    papers: [
+      {
+        canonical_id: "doi:10.0000/snippet",
+        title: "Snippet Evidence Paper",
+        doi: "10.0000/snippet",
+        year: 2025,
+        snippet_status: "snippet",
+        snippet: "Weak and strong augmentation agreement improves pseudo-label reliability for discovery.",
+      },
+      {
+        canonical_id: "doi:10.0000/quote",
+        title: "Local Source Quote Paper",
+        doi: "10.0000/quote",
+        year: 2024,
+        source_path: "researcher/paper-staging/quote.md",
+        resolution_status: "resolved_markdown",
+      },
+      {
+        canonical_id: "doi:10.0000/abstract",
+        title: "Abstract Fallback Paper",
+        doi: "10.0000/abstract",
+        year: 2023,
+        abstract:
+          "This abstract describes semi-supervised consistency regularization but is not a source-backed quote.",
+      },
+      {
+        canonical_id: "doi:10.0000/missing",
+        title: "Missing Evidence Paper",
+        doi: "10.0000/missing",
+        year: 2022,
+      },
+    ],
+  });
+
+  const controller = await materializeLiteratureResearchControllerArtifacts({
+    projectRoot,
+    generatedAt: "2026-04-29T01:00:00.000Z",
+    trigger: "snippet_evidence_unit_test",
+    minCorePapers: 4,
+    minRecentPapers: 1,
+  });
+  const receipt = await writeLiteratureResearchControllerRunReceipt({
+    projectRoot,
+    generatedAt: "2026-04-29T01:00:01.000Z",
+    trigger: "snippet_evidence_unit_test",
+    controllerBefore: controller,
+    controllerAfter: controller,
+    executed: false,
+    skipReason: "unit_test_receipt_only",
+    nextRoute: "none",
+  });
+
+  assert.equal(receipt.snippet_evidence_report?.status, "grounded");
+  assert.equal(receipt.snippet_evidence_report?.snippet_grounded_count, 2);
+  assert.equal(receipt.snippet_evidence_report?.claim_proof_eligible_count, 1);
+
+  const report = JSON.parse(
+    await fs.readFile(
+      path.join(
+        projectRoot,
+        "researcher",
+        "literature-research-controller",
+        "snippet_evidence_report.json"
+      ),
+      "utf8"
+    )
+  );
+  assert.equal(report.source_backed_quote_count, 1);
+  assert.equal(report.explicit_snippet_count, 1);
+  assert.equal(report.abstract_fallback_count, 1);
+  assert.equal(report.unavailable_count, 1);
+  assert.match(report.evidence_policy, /only source-backed quotes/i);
+  assert.ok(
+    report.records
+      .find((record) => record.canonical_id === "doi:10.0000/abstract")
+      .risk_flags.includes("abstract_fallback_not_source_backed")
+  );
+});
