@@ -20,6 +20,11 @@ export type WorkflowGraphContext = {
   status: WorkflowGraphContextStatus;
   graphPresenceStatus: ReturnType<typeof normalizeGraphPresenceStatus>;
   graphPresenceCheckStatus: GraphPresenceCheckResult["status"] | null;
+  graphBuildWorkflowStatus: GraphPresenceCheckResult["graphBuildWorkflowStatus"] | null;
+  graphBuildCanContinue: boolean | null;
+  graphBuildRequiresImport: boolean | null;
+  graphBuildRequiresSourceRepair: boolean | null;
+  graphBuildStatusReason: string | null;
   checkedAt: string | null;
   checkedAtMs: number | null;
   recentlyChecked: boolean;
@@ -35,6 +40,25 @@ export type WorkflowGraphContext = {
 function readIsoTimestamp(value: unknown): number | null {
   const parsed = typeof value === "string" ? Date.parse(value) : Number.NaN;
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+function readOptionalBoolean(value: unknown): boolean | null {
+  return typeof value === "boolean" ? value : null;
+}
+
+function normalizeGraphBuildWorkflowStatus(
+  value: unknown
+): GraphPresenceCheckResult["graphBuildWorkflowStatus"] | null {
+  const normalized = typeof value === "string" ? value.trim().toLowerCase() : null;
+  switch (normalized) {
+    case "ready":
+    case "waiting":
+    case "degraded":
+    case "blocked":
+      return normalized;
+    default:
+      return null;
+  }
 }
 
 export function isGraphSensitiveWorkflowStage(stage: string | null | undefined): boolean {
@@ -75,6 +99,36 @@ export function deriveWorkflowGraphContext(params: {
     normalizeGraphPresenceStatus(
       paperIngestionRecord?.graph_presence_status ?? paperIngestionRecord?.graphPresenceStatus
     );
+  const graphBuildWorkflowStatus =
+    params.graphPresenceCheck?.graphBuildWorkflowStatus ??
+    normalizeGraphBuildWorkflowStatus(
+      paperIngestionRecord?.graph_build_workflow_status ??
+        paperIngestionRecord?.graphBuildWorkflowStatus
+    );
+  const graphBuildCanContinue =
+    params.graphPresenceCheck?.graphBuildCanContinue ??
+    readOptionalBoolean(
+      paperIngestionRecord?.graph_build_can_continue ??
+        paperIngestionRecord?.graphBuildCanContinue
+    );
+  const graphBuildRequiresImport =
+    params.graphPresenceCheck?.graphBuildRequiresImport ??
+    readOptionalBoolean(
+      paperIngestionRecord?.graph_build_requires_import ??
+        paperIngestionRecord?.graphBuildRequiresImport
+    );
+  const graphBuildRequiresSourceRepair =
+    params.graphPresenceCheck?.graphBuildRequiresSourceRepair ??
+    readOptionalBoolean(
+      paperIngestionRecord?.graph_build_requires_source_repair ??
+        paperIngestionRecord?.graphBuildRequiresSourceRepair
+    );
+  const graphBuildStatusReason =
+    params.graphPresenceCheck?.graphBuildStatusReason ??
+    pickString(paperIngestionRecord ?? {}, [
+      "graph_build_status_reason",
+      "graphBuildStatusReason",
+    ]);
 
   let status: WorkflowGraphContextStatus = "missing";
   if (!graphSensitive) {
@@ -101,6 +155,11 @@ export function deriveWorkflowGraphContext(params: {
     status,
     graphPresenceStatus,
     graphPresenceCheckStatus: params.graphPresenceCheck?.status ?? null,
+    graphBuildWorkflowStatus,
+    graphBuildCanContinue,
+    graphBuildRequiresImport,
+    graphBuildRequiresSourceRepair,
+    graphBuildStatusReason,
     checkedAt,
     checkedAtMs,
     recentlyChecked,

@@ -101,7 +101,7 @@ export function mergeProviderQueryResults(params: {
 }): MergedPaperCandidate[] {
   const byCanonicalId = new Map<string, MergedPaperCandidate>();
   for (const result of params.queryResults) {
-    if (result.status !== "ok") {
+    if (result.status !== "ok" && result.status !== "degraded") {
       continue;
     }
     for (const hit of result.hits) {

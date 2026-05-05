@@ -5,7 +5,10 @@ export type BroadPaperSearchDiagnostics = {
   generatedAt: string;
   topic: string;
   queryCount: number;
-  providerStatuses: Record<string, { ok: number; skipped: number; error: number }>;
+  providerStatuses: Record<
+    string,
+    { ok: number; skipped: number; error: number; degraded: number }
+  >;
   providerCoverage: Record<string, number>;
   mergedCandidateCount: number;
   metadataOnlyCount: number;
@@ -30,9 +33,12 @@ export function buildBroadPaperSearchDiagnostics(params: {
   queryResults: BroadPaperProviderQueryResult[];
   mergedCandidates: MergedPaperCandidate[];
 }): BroadPaperSearchDiagnostics {
-  const providerStatuses: Record<string, { ok: number; skipped: number; error: number }> = {};
+  const providerStatuses: Record<
+    string,
+    { ok: number; skipped: number; error: number; degraded: number }
+  > = {};
   for (const result of params.queryResults) {
-    providerStatuses[result.provider] ??= { ok: 0, skipped: 0, error: 0 };
+    providerStatuses[result.provider] ??= { ok: 0, skipped: 0, error: 0, degraded: 0 };
     providerStatuses[result.provider][result.status] += 1;
   }
   const providerCoverage = countBy(
@@ -73,7 +79,9 @@ export function renderBroadPaperSearchMarkdown(params: {
   }
   lines.push("", "## Provider Status");
   for (const [provider, counts] of Object.entries(params.diagnostics.providerStatuses)) {
-    lines.push(`- ${provider}: ok=${counts.ok} skipped=${counts.skipped} error=${counts.error}`);
+    lines.push(
+      `- ${provider}: ok=${counts.ok} skipped=${counts.skipped} degraded=${counts.degraded} error=${counts.error}`
+    );
   }
   lines.push("", "## Top Candidates");
   for (const candidate of params.mergedCandidates.slice(0, 20)) {

@@ -17,6 +17,7 @@ import {
 } from "./merge";
 import { searchCore } from "./provider-core";
 import {
+  DEFAULT_BROAD_PAPER_PROVIDERS,
   type BroadPaperProviderName,
   type BroadPaperProviderQueryResult,
   type BroadPaperSearchDepth,
@@ -24,6 +25,7 @@ import {
 } from "./provider-contract";
 import { searchCrossref } from "./provider-crossref";
 import { searchDblp } from "./provider-dblp";
+import { searchPapersCool, searchPasa } from "./provider-local-scripts";
 import { searchOpenAlex } from "./provider-openalex";
 import { searchSemanticScholar } from "./provider-semanticscholar";
 import { buildBroadPaperSearchPlan } from "./query-planner";
@@ -31,14 +33,6 @@ import {
   resolveMergedCandidatesToStaging,
   serializeUnresolvedCandidates,
 } from "./source-resolution";
-
-const DEFAULT_PROVIDERS: BroadPaperProviderName[] = [
-  "openalex",
-  "semanticscholar",
-  "crossref",
-  "dblp",
-  "core",
-];
 
 function shouldRetryProviderResult(result: BroadPaperProviderQueryResult): boolean {
   if (result.status !== "error" || !result.error) {
@@ -113,6 +107,10 @@ async function runProviderQuery(params: {
       return searchDblp(common);
     case "core":
       return searchCore(common);
+    case "papers_cool":
+      return searchPapersCool(common);
+    case "pasa":
+      return searchPasa(common);
     default:
       return {
         provider: params.provider,
@@ -257,7 +255,9 @@ export async function runBroadPaperSearch(params: {
           depth,
           maxQueries: params.maxQueries,
         });
-  const providers = params.providers?.length ? params.providers : DEFAULT_PROVIDERS;
+  const providers = params.providers?.length
+    ? params.providers
+    : DEFAULT_BROAD_PAPER_PROVIDERS;
   const queryResults = (
     await executeProviderQueries({
       providers,

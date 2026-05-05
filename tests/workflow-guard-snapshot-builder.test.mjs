@@ -88,7 +88,7 @@ async function writeAutoIteratorAudit(projectRoot, audit) {
 test("snapshot builder preserves project context and emits derived fields", async (t) => {
   const workspaceRoot = await makeWorkspace();
   const projectRoot = await makeProject(workspaceRoot, "workflow-guard-split");
-  const sessionKey = "agent:researcher:discord:group:paper-lab";
+  const sessionKey = "agent:researcher:local:group:paper-lab";
 
   t.after(async () => {
     await fs.rm(workspaceRoot, { recursive: true, force: true });
@@ -102,12 +102,12 @@ test("snapshot builder preserves project context and emits derived fields", asyn
     context: {
       workspaceDir: workspaceRoot,
       sessionKey,
-      messageChannel: "discord",
+      messageChannel: "local",
       role: "researcher",
     },
     projectRoot,
     projectId: "workflow-guard-split",
-    messageChannel: "discord",
+    messageChannel: "local",
     boundByAgent: "researcher",
   });
 
@@ -118,7 +118,7 @@ test("snapshot builder preserves project context and emits derived fields", asyn
     },
     workspaceDir: workspaceRoot,
     sessionKey,
-    messageChannel: "discord",
+    messageChannel: "local",
     role: "researcher",
   });
 
@@ -141,7 +141,7 @@ test("snapshot builder preserves project context and emits derived fields", asyn
   assert.equal(snapshot.projectRoot, projectRoot);
   assert.equal(snapshot.projectId, "workflow-guard-split");
   assert.equal(snapshot.projectResolutionSource, "channel_binding");
-  assert.equal(snapshot.channelProjectBindingKey, "discord:group:paper-lab");
+  assert.equal(snapshot.channelProjectBindingKey, "local:group:paper-lab");
   assert.equal(snapshot.channelProjectBindingWorkflowSessionKey, sessionKey);
   assert.equal(snapshot.currentStage, "plan");
   assert.equal(snapshot.recommendedOwner, "orchestrator");
@@ -154,7 +154,7 @@ test("snapshot builder preserves project context and emits derived fields", asyn
 test("snapshot builder surfaces revision control, auto diagnostics, and survey visual compiler summaries", async (t) => {
   const workspaceRoot = await makeWorkspace();
   const projectRoot = await makeProject(workspaceRoot, "workflow-revision-snapshot");
-  const sessionKey = "agent:academic_writer:discord:group:revision-lab";
+  const sessionKey = "agent:academic_writer:local:group:revision-lab";
 
   t.after(async () => {
     await fs.rm(workspaceRoot, { recursive: true, force: true });
@@ -273,8 +273,8 @@ test("snapshot builder surfaces revision control, auto diagnostics, and survey v
             source: "start_background_run",
             entryType: "background_run",
             ownerAgent: "researcher",
-            channelKey: "discord:channel:paper-lab",
-            requesterSessionKey: "agent:researcher:discord:channel:paper-lab",
+            channelKey: "local:channel:paper-lab",
+            requesterSessionKey: "agent:researcher:local:channel:paper-lab",
             family: "research",
             kind: "survey_review",
             projectId: "workflow-revision-snapshot",
@@ -372,12 +372,12 @@ test("snapshot builder surfaces revision control, auto diagnostics, and survey v
     context: {
       workspaceDir: workspaceRoot,
       sessionKey,
-      messageChannel: "discord",
+      messageChannel: "local",
       role: "academic_writer",
     },
     projectRoot,
     projectId: "workflow-revision-snapshot",
-    messageChannel: "discord",
+    messageChannel: "local",
     boundByAgent: "academic_writer",
   });
 
@@ -388,7 +388,7 @@ test("snapshot builder surfaces revision control, auto diagnostics, and survey v
     },
     workspaceDir: workspaceRoot,
     sessionKey,
-    messageChannel: "discord",
+    messageChannel: "local",
     role: "academic_writer",
   });
 
@@ -469,7 +469,7 @@ test("snapshot builder surfaces revision control, auto diagnostics, and survey v
 test("snapshot builder surfaces evidence contract summaries from manifest state", async (t) => {
   const workspaceRoot = await makeWorkspace();
   const projectRoot = await makeProject(workspaceRoot, "workflow-evidence-contracts");
-  const sessionKey = "agent:researcher:discord:group:evidence-lab";
+  const sessionKey = "agent:researcher:local:group:evidence-lab";
 
   t.after(async () => {
     await fs.rm(workspaceRoot, { recursive: true, force: true });
@@ -568,12 +568,12 @@ test("snapshot builder surfaces evidence contract summaries from manifest state"
     context: {
       workspaceDir: workspaceRoot,
       sessionKey,
-      messageChannel: "discord",
+      messageChannel: "local",
       role: "researcher",
     },
     projectRoot,
     projectId: "workflow-evidence-contracts",
-    messageChannel: "discord",
+    messageChannel: "local",
     boundByAgent: "researcher",
   });
 
@@ -584,7 +584,7 @@ test("snapshot builder surfaces evidence contract summaries from manifest state"
     },
     workspaceDir: workspaceRoot,
     sessionKey,
-    messageChannel: "discord",
+    messageChannel: "local",
     role: "researcher",
   });
 
@@ -656,7 +656,7 @@ test("snapshot builder surfaces evidence contract summaries from manifest state"
 test("snapshot builder suppresses stale waiting blockers once missing stage signals are cleared", async (t) => {
   const workspaceRoot = await makeWorkspace();
   const projectRoot = await makeProject(workspaceRoot, "workflow-guard-stale-blocker");
-  const sessionKey = "agent:researcher:discord:group:paper-lab";
+  const sessionKey = "agent:researcher:local:group:paper-lab";
 
   t.after(async () => {
     await fs.rm(workspaceRoot, { recursive: true, force: true });
@@ -677,12 +677,12 @@ test("snapshot builder suppresses stale waiting blockers once missing stage sign
     context: {
       workspaceDir: workspaceRoot,
       sessionKey,
-      messageChannel: "discord",
+      messageChannel: "local",
       role: "researcher",
     },
     projectRoot,
     projectId: "workflow-guard-stale-blocker",
-    messageChannel: "discord",
+    messageChannel: "local",
     boundByAgent: "researcher",
   });
 
@@ -693,7 +693,7 @@ test("snapshot builder suppresses stale waiting blockers once missing stage sign
     },
     workspaceDir: workspaceRoot,
     sessionKey,
-    messageChannel: "discord",
+    messageChannel: "local",
     role: "researcher",
   });
 
@@ -719,7 +719,7 @@ test("snapshot builder suppresses stale waiting blockers once missing stage sign
 test("snapshot builder marks stale auto-iterator audits without regressing live ready evidence state", async (t) => {
   const workspaceRoot = await makeWorkspace();
   const projectRoot = await makeProject(workspaceRoot, "workflow-guard-stale-audit");
-  const sessionKey = "agent:researcher:discord:group:paper-lab";
+  const sessionKey = "agent:researcher:local:group:paper-lab";
 
   t.after(async () => {
     await fs.rm(workspaceRoot, { recursive: true, force: true });
@@ -767,12 +767,12 @@ test("snapshot builder marks stale auto-iterator audits without regressing live 
     context: {
       workspaceDir: workspaceRoot,
       sessionKey,
-      messageChannel: "discord",
+      messageChannel: "local",
       role: "researcher",
     },
     projectRoot,
     projectId: "workflow-guard-stale-audit",
-    messageChannel: "discord",
+    messageChannel: "local",
     boundByAgent: "researcher",
   });
 
@@ -783,7 +783,7 @@ test("snapshot builder marks stale auto-iterator audits without regressing live 
     },
     workspaceDir: workspaceRoot,
     sessionKey,
-    messageChannel: "discord",
+    messageChannel: "local",
     role: "researcher",
   });
 
@@ -813,7 +813,7 @@ test("snapshot builder marks stale auto-iterator audits without regressing live 
 test("snapshot builder downgrades orphan started auto-iterator audits to timed_out", async (t) => {
   const workspaceRoot = await makeWorkspace();
   const projectRoot = await makeProject(workspaceRoot, "workflow-guard-started-audit");
-  const sessionKey = "agent:researcher:discord:group:paper-lab";
+  const sessionKey = "agent:researcher:local:group:paper-lab";
 
   t.after(async () => {
     await fs.rm(workspaceRoot, { recursive: true, force: true });
@@ -836,12 +836,12 @@ test("snapshot builder downgrades orphan started auto-iterator audits to timed_o
     context: {
       workspaceDir: workspaceRoot,
       sessionKey,
-      messageChannel: "discord",
+      messageChannel: "local",
       role: "researcher",
     },
     projectRoot,
     projectId: "workflow-guard-started-audit",
-    messageChannel: "discord",
+    messageChannel: "local",
     boundByAgent: "researcher",
   });
 
@@ -852,7 +852,7 @@ test("snapshot builder downgrades orphan started auto-iterator audits to timed_o
     },
     workspaceDir: workspaceRoot,
     sessionKey,
-    messageChannel: "discord",
+    messageChannel: "local",
     role: "researcher",
   });
 
@@ -879,7 +879,7 @@ test("snapshot builder downgrades orphan started auto-iterator audits to timed_o
 test("snapshot builder filters stale auto-iterator mailbox handoffs whose blocker no longer matches", async (t) => {
   const workspaceRoot = await makeWorkspace();
   const projectRoot = await makeProject(workspaceRoot, "workflow-guard-stale-mailbox");
-  const sessionKey = "agent:researcher:discord:group:paper-lab";
+  const sessionKey = "agent:researcher:local:group:paper-lab";
 
   t.after(async () => {
     await fs.rm(workspaceRoot, { recursive: true, force: true });
@@ -917,12 +917,12 @@ test("snapshot builder filters stale auto-iterator mailbox handoffs whose blocke
     context: {
       workspaceDir: workspaceRoot,
       sessionKey,
-      messageChannel: "discord",
+      messageChannel: "local",
       role: "researcher",
     },
     projectRoot,
     projectId: "workflow-guard-stale-mailbox",
-    messageChannel: "discord",
+    messageChannel: "local",
     boundByAgent: "researcher",
   });
 
@@ -933,7 +933,7 @@ test("snapshot builder filters stale auto-iterator mailbox handoffs whose blocke
     },
     workspaceDir: workspaceRoot,
     sessionKey,
-    messageChannel: "discord",
+    messageChannel: "local",
     role: "researcher",
   });
 
@@ -959,7 +959,7 @@ test("snapshot builder filters stale auto-iterator mailbox handoffs whose blocke
 test("snapshot builder surfaces survey review state for projectless review workflows", async (t) => {
   const workspaceRoot = await makeWorkspace();
   const projectRoot = await makeProject(workspaceRoot, "survey-graph-reasoning");
-  const sessionKey = "agent:researcher:discord:group:survey-lab";
+  const sessionKey = "agent:researcher:local:group:survey-lab";
 
   t.after(async () => {
     await fs.rm(workspaceRoot, { recursive: true, force: true });
@@ -1009,12 +1009,12 @@ test("snapshot builder surfaces survey review state for projectless review workf
     context: {
       workspaceDir: workspaceRoot,
       sessionKey,
-      messageChannel: "discord",
+      messageChannel: "local",
       role: "researcher",
     },
     projectRoot,
     projectId: "survey-graph-reasoning",
-    messageChannel: "discord",
+    messageChannel: "local",
     boundByAgent: "researcher",
   });
 
@@ -1025,7 +1025,7 @@ test("snapshot builder surfaces survey review state for projectless review workf
     },
     workspaceDir: workspaceRoot,
     sessionKey,
-    messageChannel: "discord",
+    messageChannel: "local",
     role: "researcher",
   });
 
@@ -1072,7 +1072,7 @@ test("snapshot builder surfaces survey review state for projectless review workf
 test("snapshot builder classifies file-backed track evidence as repairable and distinguishes it from missing evidence", async (t) => {
   const workspaceRoot = await makeWorkspace();
   const projectRoot = await makeProject(workspaceRoot, "workflow-guard-file-backed-evidence");
-  const sessionKey = "agent:researcher:discord:group:paper-lab";
+  const sessionKey = "agent:researcher:local:group:paper-lab";
 
   t.after(async () => {
     await fs.rm(workspaceRoot, { recursive: true, force: true });
@@ -1120,12 +1120,12 @@ test("snapshot builder classifies file-backed track evidence as repairable and d
     context: {
       workspaceDir: workspaceRoot,
       sessionKey,
-      messageChannel: "discord",
+      messageChannel: "local",
       role: "researcher",
     },
     projectRoot,
     projectId: "workflow-guard-file-backed-evidence",
-    messageChannel: "discord",
+    messageChannel: "local",
     boundByAgent: "researcher",
   });
 
@@ -1136,7 +1136,7 @@ test("snapshot builder classifies file-backed track evidence as repairable and d
     },
     workspaceDir: workspaceRoot,
     sessionKey,
-    messageChannel: "discord",
+    messageChannel: "local",
     role: "researcher",
   });
 
@@ -1167,7 +1167,7 @@ test("snapshot builder classifies file-backed track evidence as repairable and d
 test("snapshot builder clears stale blocker text when derived evidence readiness is satisfied", async (t) => {
   const workspaceRoot = await makeWorkspace();
   const projectRoot = await makeProject(workspaceRoot, "workflow-guard-ready-evidence");
-  const sessionKey = "agent:researcher:discord:group:paper-lab";
+  const sessionKey = "agent:researcher:local:group:paper-lab";
 
   t.after(async () => {
     await fs.rm(workspaceRoot, { recursive: true, force: true });
@@ -1199,12 +1199,12 @@ test("snapshot builder clears stale blocker text when derived evidence readiness
     context: {
       workspaceDir: workspaceRoot,
       sessionKey,
-      messageChannel: "discord",
+      messageChannel: "local",
       role: "researcher",
     },
     projectRoot,
     projectId: "workflow-guard-ready-evidence",
-    messageChannel: "discord",
+    messageChannel: "local",
     boundByAgent: "researcher",
   });
 
@@ -1215,7 +1215,7 @@ test("snapshot builder clears stale blocker text when derived evidence readiness
     },
     workspaceDir: workspaceRoot,
     sessionKey,
-    messageChannel: "discord",
+    messageChannel: "local",
     role: "researcher",
   });
 

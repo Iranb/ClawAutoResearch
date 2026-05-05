@@ -5,6 +5,31 @@ import os from "node:os";
 import path from "node:path";
 
 import { runBroadPaperSearch } from "../tools/research30/workflow-bridge.ts";
+import {
+  DEFAULT_BROAD_PAPER_PROVIDERS,
+  normalizeBroadPaperProviderNames,
+} from "../tools/research30/provider-contract.ts";
+
+test("broad paper provider registry normalizes supplementary provider aliases", () => {
+  assert.deepEqual(DEFAULT_BROAD_PAPER_PROVIDERS, [
+    "openalex",
+    "semanticscholar",
+    "crossref",
+    "dblp",
+    "core",
+  ]);
+  assert.deepEqual(
+    normalizeBroadPaperProviderNames([
+      "OpenAlex",
+      "semantic-scholar",
+      "papers.cool",
+      "papers-cool",
+      "pasa-paper-search",
+      "unknown-provider",
+    ]),
+    ["openalex", "semanticscholar", "papers_cool", "pasa"]
+  );
+});
 
 test("broad paper search persists merged candidates, staged pdfs, and source index entries", async (t) => {
   const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "broad-paper-search-"));

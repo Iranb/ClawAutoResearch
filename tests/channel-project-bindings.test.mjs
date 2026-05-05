@@ -25,7 +25,11 @@ import {
   getProjectBindingAuditPath,
   getProjectsBindingAuditPath,
   getProjectsBindingIndexPath,
+  setChannelProjectBinding,
 } from "../tools/channel-project-bindings.ts";
+import {
+  listWorkflowNotificationChannelsForProject,
+} from "../tools/workflow-notification-channels.ts";
 
 async function makeTempWorkspace() {
   return fs.mkdtemp(path.join(os.tmpdir(), "openclaw-research-channel-bindings-"));
@@ -45,7 +49,7 @@ async function makeTempProject(workspaceRoot, projectId = "demo-project") {
 test("channel-project binding resolves workflow snapshot without OPENCLAW_PROJECT", async (t) => {
   const workspaceRoot = await makeTempWorkspace();
   const projectRoot = await makeTempProject(workspaceRoot, "nlp-track");
-  const sessionKey = "agent:researcher:discord:group:paper-lab";
+  const sessionKey = "agent:researcher:local:group:paper-lab";
   delete process.env.OPENCLAW_PROJECT;
 
   t.after(async () => {
@@ -60,7 +64,7 @@ test("channel-project binding resolves workflow snapshot without OPENCLAW_PROJEC
     },
     workspaceDir: workspaceRoot,
     sessionKey,
-    messageChannel: "discord",
+    messageChannel: "local",
     projectRoot,
     boundByAgent: "researcher",
   });
@@ -73,19 +77,107 @@ test("channel-project binding resolves workflow snapshot without OPENCLAW_PROJEC
     agentId: "researcher",
     workspaceDir: workspaceRoot,
     sessionKey,
-    messageChannel: "discord",
+    messageChannel: "local",
   });
 
   assert.equal(snapshot.projectRoot, projectRoot);
   assert.equal(snapshot.projectId, "nlp-track");
   assert.equal(snapshot.projectResolutionSource, "channel_binding");
-  assert.equal(snapshot.channelProjectBindingKey, "discord:group:paper-lab");
+  assert.equal(snapshot.channelProjectBindingKey, "local:group:paper-lab");
+});
+
+test("discord workflow channels are recorded as notification-only targets", async (t) => {
+  const workspaceRoot = await makeTempWorkspace();
+  const projectsRoot = path.join(workspaceRoot, "projects");
+  const projectRoot = await makeTempProject(workspaceRoot, "notify-track");
+  const sessionKey = "agent:researcher:discord:group:paper-lab";
+  delete process.env.OPENCLAW_PROJECT;
+
+  t.after(async () => {
+    delete process.env.OPENCLAW_PROJECT;
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  });
+
+  const result = await bindChannelProjectForWorkflow({
+    policy: {
+      enableChannelProjectBindings: true,
+      projectsRoot,
+    },
+    workspaceDir: workspaceRoot,
+    sessionKey,
+    messageChannel: "discord",
+    projectRoot,
+    projectId: "notify-track",
+    boundByAgent: "researcher",
+  });
+
+  assert.equal(result.notificationOnly, true);
+  assert.equal(result.binding, null);
+  assert.match(result.storePath, /workflow-notification-channels\.json$/);
+
+  const binding = getChannelProjectBindingForWorkflow({
+    policy: {
+      enableChannelProjectBindings: true,
+      projectsRoot,
+    },
+    workspaceDir: workspaceRoot,
+    sessionKey,
+    messageChannel: "discord",
+  });
+  assert.equal(binding.binding, null);
+
+  const notifications = await listWorkflowNotificationChannelsForProject(projectRoot);
+  assert.equal(notifications.length, 1);
+  assert.equal(notifications[0].messageChannel, "discord");
+  assert.equal(notifications[0].projectId, "notify-track");
+});
+
+test("low-level channel binding writer rejects discord project bindings", async (t) => {
+  const workspaceRoot = await makeTempWorkspace();
+  const projectsRoot = path.join(workspaceRoot, "projects");
+  const projectRoot = await makeTempProject(workspaceRoot, "low-level-notify-track");
+
+  t.after(async () => {
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  });
+
+  await assert.rejects(
+    () =>
+      setChannelProjectBinding({
+        policy: {
+          enableChannelProjectBindings: true,
+          projectsRoot,
+        },
+        context: {
+          workspaceDir: workspaceRoot,
+          sessionKey: "agent:researcher:discord:group:paper-lab",
+          messageChannel: "discord",
+          role: "researcher",
+        },
+        projectRoot,
+        projectId: "low-level-notify-track",
+        messageChannel: "discord",
+        boundByAgent: "researcher",
+      }),
+    /notification-only channel/i
+  );
+
+  const lookup = getChannelProjectBindingForWorkflow({
+    policy: {
+      enableChannelProjectBindings: true,
+      projectsRoot,
+    },
+    workspaceDir: workspaceRoot,
+    sessionKey: "agent:researcher:discord:group:paper-lab",
+    messageChannel: "discord",
+  });
+  assert.equal(lookup.binding, null);
 });
 
 test("non-workflow agents do not inherit project workflow bindings from the shared channel", async (t) => {
   const workspaceRoot = await makeTempWorkspace();
   const projectRoot = await makeTempProject(workspaceRoot, "isolated-track");
-  const sessionKey = "agent:researcher:discord:group:paper-lab";
+  const sessionKey = "agent:researcher:local:group:paper-lab";
   delete process.env.OPENCLAW_PROJECT;
 
   t.after(async () => {
@@ -100,7 +192,7 @@ test("non-workflow agents do not inherit project workflow bindings from the shar
     },
     workspaceDir: workspaceRoot,
     sessionKey,
-    messageChannel: "discord",
+    messageChannel: "local",
     projectRoot,
     boundByAgent: "researcher",
   });
@@ -112,8 +204,8 @@ test("non-workflow agents do not inherit project workflow bindings from the shar
     },
     agentId: "designer",
     workspaceDir: workspaceRoot,
-    sessionKey: "agent:designer:discord:group:paper-lab",
-    messageChannel: "discord",
+    sessionKey: "agent:designer:local:group:paper-lab",
+    messageChannel: "local",
   });
 
   assert.equal(snapshot.projectRoot, null);
@@ -164,7 +256,7 @@ test("dashboard workflow sessions prefer explicit conversation bindings and refu
   const reviewProjectRoot = await makeTempProject(workspaceRoot, "gcd-survey-tpami-2026");
   const labProjectRoot = await makeTempProject(workspaceRoot, "gcd-part-manifold-2026");
   const dashboardSessionKey = "agent:researcher:dashboard:main";
-  const reviewChannelKey = "binding:discord:default:channel:1491811255814586530";
+  const reviewChannelKey = "binding:local:default:channel:1491811255814586530";
   delete process.env.OPENCLAW_PROJECT;
 
   t.after(async () => {
@@ -179,7 +271,7 @@ test("dashboard workflow sessions prefer explicit conversation bindings and refu
     },
     workspaceDir: workspaceRoot,
     sessionKey: dashboardSessionKey,
-    messageChannel: "discord",
+    messageChannel: "local",
     channelKey: reviewChannelKey,
     projectRoot: reviewProjectRoot,
     boundByAgent: "researcher",
@@ -204,7 +296,7 @@ test("dashboard workflow sessions prefer explicit conversation bindings and refu
     agentId: "researcher",
     workspaceDir: workspaceRoot,
     sessionKey: dashboardSessionKey,
-    messageChannel: "discord",
+    messageChannel: "local",
     channelKey: reviewChannelKey,
   });
   assert.equal(explicitSnapshot.projectRoot, reviewProjectRoot);
@@ -229,7 +321,7 @@ test("dashboard workflow sessions prefer explicit conversation bindings and refu
 test("workflow snapshot does not inherit channel project bindings when agent identity is missing", async (t) => {
   const workspaceRoot = await makeTempWorkspace();
   const projectRoot = await makeTempProject(workspaceRoot, "missing-agent-track");
-  const sessionKey = "agent:researcher:discord:group:paper-lab";
+  const sessionKey = "agent:researcher:local:group:paper-lab";
   delete process.env.OPENCLAW_PROJECT;
 
   t.after(async () => {
@@ -244,7 +336,7 @@ test("workflow snapshot does not inherit channel project bindings when agent ide
     },
     workspaceDir: workspaceRoot,
     sessionKey,
-    messageChannel: "discord",
+    messageChannel: "local",
     projectRoot,
     boundByAgent: "researcher",
   });
@@ -255,8 +347,8 @@ test("workflow snapshot does not inherit channel project bindings when agent ide
       projectsRoot: path.join(workspaceRoot, "projects"),
     },
     workspaceDir: workspaceRoot,
-    sessionKey: "discord:group:paper-lab",
-    messageChannel: "discord",
+    sessionKey: "local:group:paper-lab",
+    messageChannel: "local",
   });
 
   assert.equal(snapshot.projectRoot, null);
@@ -268,7 +360,7 @@ test("binding updates maintain a projects-root binding index", async (t) => {
   const workspaceRoot = await makeTempWorkspace();
   const projectsRoot = path.join(workspaceRoot, "projects");
   const projectRoot = await makeTempProject(workspaceRoot, "indexed-track");
-  const sessionKey = "agent:researcher:discord:group:index-room";
+  const sessionKey = "agent:researcher:local:group:index-room";
 
   t.after(async () => {
     await fs.rm(workspaceRoot, { recursive: true, force: true });
@@ -281,7 +373,7 @@ test("binding updates maintain a projects-root binding index", async (t) => {
     },
     workspaceDir: workspaceRoot,
     sessionKey,
-    messageChannel: "discord",
+    messageChannel: "local",
     projectRoot,
     boundByAgent: "researcher",
   });
@@ -302,7 +394,7 @@ test("binding updates maintain a projects-root binding index", async (t) => {
     },
     workspaceDir: workspaceRoot,
     sessionKey,
-    messageChannel: "discord",
+    messageChannel: "local",
     agentId: "researcher",
   });
   assert.equal(lookup.binding?.projectRoot, projectRoot);
@@ -312,8 +404,8 @@ test("ensureProjectsBindingIndex recovers a stale projects-root binding index lo
   const workspaceRoot = await makeTempWorkspace();
   const projectsRoot = path.join(workspaceRoot, "projects");
   const projectRoot = await makeTempProject(workspaceRoot, "stale-index-track");
-  const sessionKey = "agent:researcher:discord:group:stale-index-room";
-  const channelKey = "discord:group:stale-index-room";
+  const sessionKey = "agent:researcher:local:group:stale-index-room";
+  const channelKey = "local:group:stale-index-room";
 
   t.after(async () => {
     await fs.rm(workspaceRoot, { recursive: true, force: true });
@@ -336,7 +428,7 @@ test("ensureProjectsBindingIndex recovers a stale projects-root binding index lo
             channelKey,
             projectRoot,
             projectId: "stale-index-track",
-            messageChannel: "discord",
+            messageChannel: "local",
             sessionKeySample: sessionKey,
             boundAt: "2026-04-23T02:00:00.000Z",
             updatedAt: "2026-04-23T02:00:00.000Z",
@@ -368,7 +460,7 @@ test("binding updates recover a stale projects-root index lock before refreshing
   const workspaceRoot = await makeTempWorkspace();
   const projectsRoot = path.join(workspaceRoot, "projects");
   const projectRoot = await makeTempProject(workspaceRoot, "stale-bind-track");
-  const sessionKey = "agent:researcher:discord:group:stale-bind-room";
+  const sessionKey = "agent:researcher:local:group:stale-bind-room";
 
   t.after(async () => {
     await fs.rm(workspaceRoot, { recursive: true, force: true });
@@ -386,7 +478,7 @@ test("binding updates recover a stale projects-root index lock before refreshing
     },
     workspaceDir: workspaceRoot,
     sessionKey,
-    messageChannel: "discord",
+    messageChannel: "local",
     projectRoot,
     boundByAgent: "researcher",
   });
@@ -402,7 +494,7 @@ test("binding updates append a queryable audit trail under the project and proje
   const workspaceRoot = await makeTempWorkspace();
   const projectsRoot = path.join(workspaceRoot, "projects");
   const projectRoot = await makeTempProject(workspaceRoot, "audited-track");
-  const sessionKey = "agent:researcher:discord:group:audit-room";
+  const sessionKey = "agent:researcher:local:group:audit-room";
 
   t.after(async () => {
     await fs.rm(workspaceRoot, { recursive: true, force: true });
@@ -415,7 +507,7 @@ test("binding updates append a queryable audit trail under the project and proje
     },
     workspaceDir: workspaceRoot,
     sessionKey,
-    messageChannel: "discord",
+    messageChannel: "local",
     projectRoot,
     boundByAgent: "researcher",
   });
@@ -426,7 +518,7 @@ test("binding updates append a queryable audit trail under the project and proje
     },
     workspaceDir: workspaceRoot,
     sessionKey,
-    messageChannel: "discord",
+    messageChannel: "local",
   });
 
   const projectAudit = (await fs.readFile(getProjectBindingAuditPath(projectRoot), "utf8"))
@@ -468,7 +560,7 @@ test("binding audit logs rotate and tails span archives", async (t) => {
   });
 
   for (const suffix of ["1", "2", "3"]) {
-    const sessionKey = `agent:researcher:discord:group:audit-rotation-${suffix}`;
+    const sessionKey = `agent:researcher:local:group:audit-rotation-${suffix}`;
     await bindChannelProjectForWorkflow({
       policy: {
         enableChannelProjectBindings: true,
@@ -478,7 +570,7 @@ test("binding audit logs rotate and tails span archives", async (t) => {
       projectRoot,
       projectId: "audit-rotation",
       sessionKey,
-      messageChannel: "discord",
+      messageChannel: "local",
       agentId: "researcher",
     });
     await unbindChannelProjectForWorkflow({
@@ -488,7 +580,7 @@ test("binding audit logs rotate and tails span archives", async (t) => {
       },
       workspaceDir: workspaceRoot,
       sessionKey,
-      messageChannel: "discord",
+      messageChannel: "local",
     });
   }
 
@@ -518,12 +610,12 @@ test("binding audit logs rotate and tails span archives", async (t) => {
   );
 });
 
-test("explicit discord binding also persists a direct session-key alias for background continuations", async (t) => {
+test("explicit local binding also persists a direct session-key alias for background continuations", async (t) => {
   const workspaceRoot = await makeTempWorkspace();
   const projectsRoot = path.join(workspaceRoot, "projects");
   const projectRoot = await makeTempProject(workspaceRoot, "alias-track");
-  const explicitChannelKey = "binding:discord:researcher:channel:1493115773701329030";
-  const sessionKey = "agent:researcher:discord:channel:1493115773701329030";
+  const explicitChannelKey = "binding:local:researcher:channel:1493115773701329030";
+  const sessionKey = "agent:researcher:local:channel:1493115773701329030";
 
   t.after(async () => {
     await fs.rm(workspaceRoot, { recursive: true, force: true });
@@ -536,7 +628,7 @@ test("explicit discord binding also persists a direct session-key alias for back
     },
     workspaceDir: workspaceRoot,
     sessionKey,
-    messageChannel: "discord",
+    messageChannel: "local",
     channelKey: explicitChannelKey,
     projectRoot,
     boundByAgent: "researcher",
@@ -550,8 +642,8 @@ test("explicit discord binding also persists a direct session-key alias for back
   );
   const keys = store.bindings.map((entry) => entry.channelKey).sort();
   assert.deepEqual(keys, [
-    "binding:discord:researcher:channel:1493115773701329030",
-    "discord:channel:1493115773701329030",
+    "binding:local:researcher:channel:1493115773701329030",
+    "local:channel:1493115773701329030",
   ]);
 
   const lookup = getChannelProjectBindingForWorkflow({
@@ -561,8 +653,8 @@ test("explicit discord binding also persists a direct session-key alias for back
     },
     workspaceDir: workspaceRoot,
     sessionKey:
-      "agent:researcher:discord:channel:1493115773701329030:subagent:workflow-research-pipeline:alias-track",
-    messageChannel: "discord",
+      "agent:researcher:local:channel:1493115773701329030:subagent:workflow-research-pipeline:alias-track",
+    messageChannel: "local",
   });
   assert.equal(lookup.binding?.projectRoot, projectRoot);
 });
@@ -570,7 +662,7 @@ test("explicit discord binding also persists a direct session-key alias for back
 test("workflow snapshot suppresses local PaperNexus defaults when remote access is configured", async (t) => {
   const workspaceRoot = await makeTempWorkspace();
   const projectRoot = await makeTempProject(workspaceRoot, "remote-only-track");
-  const sessionKey = "agent:researcher:discord:group:remote-only-room";
+  const sessionKey = "agent:researcher:local:group:remote-only-room";
   delete process.env.OPENCLAW_PROJECT;
 
   t.after(async () => {
@@ -588,7 +680,7 @@ test("workflow snapshot suppresses local PaperNexus defaults when remote access 
     },
     workspaceDir: workspaceRoot,
     sessionKey,
-    messageChannel: "discord",
+    messageChannel: "local",
     projectRoot,
     boundByAgent: "researcher",
   });
@@ -604,7 +696,7 @@ test("workflow snapshot suppresses local PaperNexus defaults when remote access 
     agentId: "researcher",
     workspaceDir: workspaceRoot,
     sessionKey,
-    messageChannel: "discord",
+    messageChannel: "local",
   });
 
   assert.equal(snapshot.projectRoot, projectRoot);
@@ -616,7 +708,7 @@ test("workflow snapshot suppresses local PaperNexus defaults when remote access 
 test("workflow snapshot uses the shared PaperNexus source root in local mode", async (t) => {
   const workspaceRoot = await makeTempWorkspace();
   const projectRoot = await makeTempProject(workspaceRoot, "shared-root-track");
-  const sessionKey = "agent:researcher:discord:group:shared-root-room";
+  const sessionKey = "agent:researcher:local:group:shared-root-room";
   delete process.env.OPENCLAW_PROJECT;
 
   t.after(async () => {
@@ -631,7 +723,7 @@ test("workflow snapshot uses the shared PaperNexus source root in local mode", a
     },
     workspaceDir: workspaceRoot,
     sessionKey,
-    messageChannel: "discord",
+    messageChannel: "local",
     projectRoot,
     boundByAgent: "researcher",
   });
@@ -644,7 +736,7 @@ test("workflow snapshot uses the shared PaperNexus source root in local mode", a
     agentId: "researcher",
     workspaceDir: workspaceRoot,
     sessionKey,
-    messageChannel: "discord",
+    messageChannel: "local",
   });
 
   assert.equal(snapshot.projectRoot, projectRoot);
@@ -659,9 +751,9 @@ test("legacy subagent-scoped channel bindings still resolve against the root wor
   const workspaceRoot = await makeTempWorkspace();
   const projectsRoot = path.join(workspaceRoot, "projects");
   const projectRoot = await makeTempProject(workspaceRoot, "legacy-track");
-  const rootSessionKey = "agent:researcher:discord:group:paper-lab";
+  const rootSessionKey = "agent:researcher:local:group:paper-lab";
   const subagentSessionKey =
-    "agent:researcher:discord:group:paper-lab:subagent:papernexus-skill:task:legacy-track";
+    "agent:researcher:local:group:paper-lab:subagent:papernexus-skill:task:legacy-track";
   const storePath = path.join(
     projectRoot,
     ".openclaw-research",
@@ -683,10 +775,10 @@ test("legacy subagent-scoped channel bindings still resolve against the root wor
         updatedAt: "2026-04-08T00:00:00.000Z",
         bindings: [
           {
-            channelKey: "discord:group:paper-lab:subagent:papernexus-skill:task:legacy-track",
+            channelKey: "local:group:paper-lab:subagent:papernexus-skill:task:legacy-track",
             projectRoot,
             projectId: "legacy-track",
-            messageChannel: "discord",
+            messageChannel: "local",
             sessionKeySample: subagentSessionKey,
             sessionId: "session-legacy-track",
             boundAt: "2026-04-08T00:00:00.000Z",
@@ -720,11 +812,11 @@ test("legacy subagent-scoped channel bindings still resolve against the root wor
     agentId: "researcher",
     workspaceDir: workspaceRoot,
     sessionKey: rootSessionKey,
-    messageChannel: "discord",
+    messageChannel: "local",
   });
   assert.equal(rootSnapshot.projectRoot, projectRoot);
   assert.equal(rootSnapshot.projectResolutionSource, "channel_binding");
-  assert.equal(rootSnapshot.channelProjectBindingKey, "discord:group:paper-lab");
+  assert.equal(rootSnapshot.channelProjectBindingKey, "local:group:paper-lab");
 
   const subagentSnapshot = await buildWorkflowSnapshot({
     policy: {
@@ -734,17 +826,17 @@ test("legacy subagent-scoped channel bindings still resolve against the root wor
     agentId: "researcher",
     workspaceDir: workspaceRoot,
     sessionKey: subagentSessionKey,
-    messageChannel: "discord",
+    messageChannel: "local",
   });
   assert.equal(subagentSnapshot.projectRoot, projectRoot);
   assert.equal(subagentSnapshot.projectResolutionSource, "channel_binding");
-  assert.equal(subagentSnapshot.channelProjectBindingKey, "discord:group:paper-lab");
+  assert.equal(subagentSnapshot.channelProjectBindingKey, "local:group:paper-lab");
 });
 
 test("research memory paths follow the current channel binding", async (t) => {
   const workspaceRoot = await makeTempWorkspace();
   const projectRoot = await makeTempProject(workspaceRoot, "vision-track");
-  const sessionKey = "agent:researcher:discord:group:vision-room";
+  const sessionKey = "agent:researcher:local:group:vision-room";
   delete process.env.OPENCLAW_PROJECT;
 
   t.after(async () => {
@@ -759,7 +851,7 @@ test("research memory paths follow the current channel binding", async (t) => {
     },
     workspaceDir: workspaceRoot,
     sessionKey,
-    messageChannel: "discord",
+    messageChannel: "local",
     projectRoot,
     boundByAgent: "researcher",
   });
@@ -774,7 +866,7 @@ test("research memory paths follow the current channel binding", async (t) => {
       workspaceDir: workspaceRoot,
       agentId: "researcher",
       sessionKey,
-      messageChannel: "discord",
+      messageChannel: "local",
     }
   );
 
@@ -793,7 +885,7 @@ test("research memory paths follow the current channel binding", async (t) => {
 test("channel-project bindings can be inspected and removed", async (t) => {
   const workspaceRoot = await makeTempWorkspace();
   const projectRoot = await makeTempProject(workspaceRoot, "graph-track");
-  const sessionKey = "agent:researcher:discord:group:graph-room";
+  const sessionKey = "agent:researcher:local:group:graph-room";
   delete process.env.OPENCLAW_PROJECT;
 
   t.after(async () => {
@@ -808,7 +900,7 @@ test("channel-project bindings can be inspected and removed", async (t) => {
     },
     workspaceDir: workspaceRoot,
     sessionKey,
-    messageChannel: "discord",
+    messageChannel: "local",
     projectRoot,
     boundByAgent: "researcher",
   });
@@ -820,7 +912,7 @@ test("channel-project bindings can be inspected and removed", async (t) => {
     },
     workspaceDir: workspaceRoot,
     sessionKey,
-    messageChannel: "discord",
+    messageChannel: "local",
   });
   assert.equal(binding.binding?.projectRoot, projectRoot);
   assert.equal(
@@ -835,7 +927,7 @@ test("channel-project bindings can be inspected and removed", async (t) => {
     },
     workspaceDir: workspaceRoot,
     sessionKey,
-    messageChannel: "discord",
+    messageChannel: "local",
   });
   assert.equal(removed.removed, true);
 
@@ -846,7 +938,7 @@ test("channel-project bindings can be inspected and removed", async (t) => {
     },
     workspaceDir: workspaceRoot,
     sessionKey,
-    messageChannel: "discord",
+    messageChannel: "local",
   });
   assert.equal(after.binding, null);
 });
@@ -854,7 +946,7 @@ test("channel-project bindings can be inspected and removed", async (t) => {
 test("channel-project bindings default to the project-local store when projectRoot is known", async (t) => {
   const workspaceRoot = await makeTempWorkspace();
   const projectRoot = await makeTempProject(workspaceRoot, "birds-track");
-  const sessionKey = "agent:researcher:discord:group:cub-room";
+  const sessionKey = "agent:researcher:local:group:cub-room";
   const projectsRoot = path.join(workspaceRoot, "projects");
   delete process.env.OPENCLAW_PROJECT;
 
@@ -870,7 +962,7 @@ test("channel-project bindings default to the project-local store when projectRo
     },
     workspaceDir: workspaceRoot,
     sessionKey,
-    messageChannel: "discord",
+    messageChannel: "local",
     projectRoot,
     boundByAgent: "researcher",
   });
@@ -887,7 +979,7 @@ test("channel-project bindings default to the project-local store when projectRo
 test("channel-project bindings ignore custom store path overrides and stay under the project-local runtime dir", async (t) => {
   const workspaceRoot = await makeTempWorkspace();
   const projectRoot = await makeTempProject(workspaceRoot, "override-track");
-  const sessionKey = "agent:researcher:discord:group:override-room";
+  const sessionKey = "agent:researcher:local:group:override-room";
   const projectsRoot = path.join(workspaceRoot, "projects");
   const customStorePath = path.join(workspaceRoot, "custom", "bindings.json");
   delete process.env.OPENCLAW_PROJECT;
@@ -905,7 +997,7 @@ test("channel-project bindings ignore custom store path overrides and stay under
     },
     workspaceDir: workspaceRoot,
     sessionKey,
-    messageChannel: "discord",
+    messageChannel: "local",
     projectRoot,
     boundByAgent: "researcher",
   });
@@ -920,7 +1012,7 @@ test("channel-project bindings ignore custom store path overrides and stay under
 test("unresolved channel-project lookup stays under projectsRoot instead of falling back to workspace", async (t) => {
   const workspaceRoot = await makeTempWorkspace();
   const projectsRoot = path.join(workspaceRoot, "projects");
-  const sessionKey = "agent:researcher:discord:group:lookup-room";
+  const sessionKey = "agent:researcher:local:group:lookup-room";
   delete process.env.OPENCLAW_PROJECT;
 
   t.after(async () => {
@@ -935,7 +1027,7 @@ test("unresolved channel-project lookup stays under projectsRoot instead of fall
     },
     workspaceDir: workspaceRoot,
     sessionKey,
-    messageChannel: "discord",
+    messageChannel: "local",
   });
 
   assert.equal(
@@ -948,7 +1040,7 @@ test("research memory rejects OPENCLAW_PROJECT values outside the configured pro
   const workspaceRoot = await makeTempWorkspace();
   const projectsRoot = path.join(workspaceRoot, "projects");
   const strayProjectRoot = path.join(workspaceRoot, "..", "repo-like-location");
-  const sessionKey = "agent:researcher:discord:group:memory-room";
+  const sessionKey = "agent:researcher:local:group:memory-room";
   process.env.OPENCLAW_PROJECT = strayProjectRoot;
 
   t.after(async () => {
@@ -967,7 +1059,7 @@ test("research memory rejects OPENCLAW_PROJECT values outside the configured pro
         {
           workspaceDir: workspaceRoot,
           sessionKey,
-          messageChannel: "discord",
+          messageChannel: "local",
         }
       ),
     /must live under the configured projectsRoot/i
@@ -977,7 +1069,7 @@ test("research memory rejects OPENCLAW_PROJECT values outside the configured pro
 test("automatic channel binding creates the project-local file once a project is resolved", async (t) => {
   const workspaceRoot = await makeTempWorkspace();
   const projectRoot = await makeTempProject(workspaceRoot, "auto-bind-track");
-  const sessionKey = "agent:researcher:discord:group:auto-bind-room";
+  const sessionKey = "agent:researcher:local:group:auto-bind-room";
   const projectsRoot = path.join(workspaceRoot, "projects");
   delete process.env.OPENCLAW_PROJECT;
 
@@ -993,7 +1085,7 @@ test("automatic channel binding creates the project-local file once a project is
     },
     workspaceDir: workspaceRoot,
     sessionKey,
-    messageChannel: "discord",
+    messageChannel: "local",
     projectRoot,
     projectId: "auto-bind-track",
     boundByAgent: "researcher",
@@ -1011,7 +1103,7 @@ test("automatic channel binding creates the project-local file once a project is
     },
     workspaceDir: workspaceRoot,
     sessionKey,
-    messageChannel: "discord",
+    messageChannel: "local",
   });
   assert.equal(lookup.binding?.projectRoot, projectRoot);
 });
@@ -1020,7 +1112,7 @@ test("workflow bindings persist runtime session lineage metadata without breakin
   const workspaceRoot = await makeTempWorkspace();
   const projectRoot = await makeTempProject(workspaceRoot, "runtime-track");
   const sessionKey =
-    "agent:researcher:discord:group:runtime-room:subagent:workflow-stage";
+    "agent:researcher:local:group:runtime-room:subagent:workflow-stage";
   const projectsRoot = path.join(workspaceRoot, "projects");
   delete process.env.OPENCLAW_PROJECT;
 
@@ -1047,7 +1139,7 @@ test("workflow bindings persist runtime session lineage metadata without breakin
     workspaceDir: workspaceRoot,
     sessionKey,
     sessionId: "session-runtime-track",
-    messageChannel: "discord",
+    messageChannel: "local",
     projectRoot,
     projectId: "runtime-track",
     boundByAgent: "researcher",
@@ -1060,7 +1152,7 @@ test("workflow bindings persist runtime session lineage metadata without breakin
   assert.equal(result.binding.workflowSessionId, "session-runtime-track");
   assert.equal(
     result.binding.parentWorkflowSessionKey,
-    "agent:researcher:discord:group:runtime-room"
+    "agent:researcher:local:group:runtime-room"
   );
   assert.equal(result.binding.threadBindingKey, runtimeBinding.threadBindingKey);
   assert.equal(result.binding.depth, 1);
@@ -1072,7 +1164,7 @@ test("workflow bindings persist runtime session lineage metadata without breakin
     },
     workspaceDir: workspaceRoot,
     sessionKey,
-    messageChannel: "discord",
+    messageChannel: "local",
   });
   assert.equal(lookup.binding?.projectRoot, projectRoot);
   assert.equal(lookup.binding?.workflowSessionKey, sessionKey);
@@ -1081,8 +1173,8 @@ test("workflow bindings persist runtime session lineage metadata without breakin
 test("non-workflow rebinding preserves the workflow-owned broadcast session", async (t) => {
   const workspaceRoot = await makeTempWorkspace();
   const projectRoot = await makeTempProject(workspaceRoot, "workflow-ownership");
-  const researcherSessionKey = "agent:researcher:discord:group:runtime-room";
-  const designerSessionKey = "agent:designer:discord:group:runtime-room";
+  const researcherSessionKey = "agent:researcher:local:group:runtime-room";
+  const designerSessionKey = "agent:designer:local:group:runtime-room";
   delete process.env.OPENCLAW_PROJECT;
 
   t.after(async () => {
@@ -1097,7 +1189,7 @@ test("non-workflow rebinding preserves the workflow-owned broadcast session", as
     },
     workspaceDir: workspaceRoot,
     sessionKey: researcherSessionKey,
-    messageChannel: "discord",
+    messageChannel: "local",
     projectRoot,
     boundByAgent: "researcher",
   });
@@ -1109,7 +1201,7 @@ test("non-workflow rebinding preserves the workflow-owned broadcast session", as
     },
     workspaceDir: workspaceRoot,
     sessionKey: designerSessionKey,
-    messageChannel: "discord",
+    messageChannel: "local",
     projectRoot,
     boundByAgent: "designer",
   });
@@ -1126,7 +1218,7 @@ test("rebinding the same channel to a new project supersedes the older project b
   const projectRootA = await makeTempProject(workspaceRoot, "survey-a");
   const projectRootB = await makeTempProject(workspaceRoot, "survey-b");
   const projectsRoot = path.join(workspaceRoot, "projects");
-  const sessionKey = "agent:researcher:discord:group:survey-lab";
+  const sessionKey = "agent:researcher:local:group:survey-lab";
   delete process.env.OPENCLAW_PROJECT;
 
   t.after(async () => {
@@ -1141,7 +1233,7 @@ test("rebinding the same channel to a new project supersedes the older project b
     },
     workspaceDir: workspaceRoot,
     sessionKey,
-    messageChannel: "discord",
+    messageChannel: "local",
     projectRoot: projectRootA,
     projectId: "survey-a",
     boundByAgent: "researcher",
@@ -1154,7 +1246,7 @@ test("rebinding the same channel to a new project supersedes the older project b
     },
     workspaceDir: workspaceRoot,
     sessionKey,
-    messageChannel: "discord",
+    messageChannel: "local",
     projectRoot: projectRootB,
     projectId: "survey-b",
     boundByAgent: "researcher",
@@ -1168,7 +1260,7 @@ test("rebinding the same channel to a new project supersedes the older project b
     },
     workspaceDir: workspaceRoot,
     sessionKey,
-    messageChannel: "discord",
+    messageChannel: "local",
   });
 
   assert.equal(lookup.binding?.projectRoot, projectRootB);
@@ -1181,16 +1273,16 @@ test("rebinding the same channel to a new project supersedes the older project b
     )
   );
   assert.equal(
-    firstStore.bindings.some((entry) => entry.channelKey === "discord:group:survey-lab"),
+    firstStore.bindings.some((entry) => entry.channelKey === "local:group:survey-lab"),
     false
   );
 });
 
 test("nested workflow runtime bindings keep the immediate parent session while preserving the root thread binding", async () => {
   const parentSessionKey =
-    "agent:researcher:discord:group:runtime-room:subagent:workflow-stage";
+    "agent:researcher:local:group:runtime-room:subagent:workflow-stage";
   const nestedSessionKey =
-    "agent:researcher:discord:group:runtime-room:subagent:workflow-stage:subagent:code-review";
+    "agent:researcher:local:group:runtime-room:subagent:workflow-stage:subagent:code-review";
 
   assert.equal(
     deriveWorkflowSubagentImmediateParentSessionKey(nestedSessionKey),
@@ -1198,7 +1290,7 @@ test("nested workflow runtime bindings keep the immediate parent session while p
   );
   assert.equal(
     normalizeWorkflowSubagentParentSessionKey(nestedSessionKey),
-    "agent:researcher:discord:group:runtime-room"
+    "agent:researcher:local:group:runtime-room"
   );
 
   const binding = buildWorkflowRuntimeSessionBinding({
@@ -1209,7 +1301,7 @@ test("nested workflow runtime bindings keep the immediate parent session while p
   });
 
   assert.equal(binding.parentSessionKey, parentSessionKey);
-  assert.equal(binding.threadBindingKey, "agent:researcher:discord:group:runtime-room");
+  assert.equal(binding.threadBindingKey, "agent:researcher:local:group:runtime-room");
   assert.equal(binding.depth, 2);
   assert.equal(
     buildWorkflowSubagentSessionKey({
@@ -1224,8 +1316,8 @@ test("binding resolution reloads a freshly updated projects index instead of ser
   const workspaceRoot = await makeTempWorkspace();
   const projectsRoot = path.join(workspaceRoot, "projects");
   const projectRoot = await makeTempProject(workspaceRoot, "fresh-binding-track");
-  const sessionKey = "agent:researcher:discord:group:paper-lab";
-  const channelKey = "discord:group:paper-lab";
+  const sessionKey = "agent:researcher:local:group:paper-lab";
+  const channelKey = "local:group:paper-lab";
 
   t.after(async () => {
     await fs.rm(workspaceRoot, { recursive: true, force: true });
@@ -1239,7 +1331,7 @@ test("binding resolution reloads a freshly updated projects index instead of ser
     agentId: "researcher",
     workspaceDir: workspaceRoot,
     sessionKey,
-    messageChannel: "discord",
+    messageChannel: "local",
   });
   assert.equal(initialSnapshot.projectRoot, null);
   assert.equal(initialSnapshot.projectResolutionSource, "none");
@@ -1261,7 +1353,7 @@ test("binding resolution reloads a freshly updated projects index instead of ser
             channelKey,
             projectRoot,
             projectId: "fresh-binding-track",
-            messageChannel: "discord",
+            messageChannel: "local",
             sessionKeySample: sessionKey,
             sessionId: null,
             boundAt: "2026-04-11T09:00:00.000Z",
@@ -1301,7 +1393,7 @@ test("binding resolution reloads a freshly updated projects index instead of ser
             channelKey,
             projectRoot,
             projectId: "fresh-binding-track",
-            messageChannel: "discord",
+            messageChannel: "local",
             sessionKeySample: sessionKey,
             sessionId: null,
             boundAt: "2026-04-11T09:00:00.000Z",
@@ -1337,7 +1429,7 @@ test("binding resolution reloads a freshly updated projects index instead of ser
     agentId: "researcher",
     workspaceDir: workspaceRoot,
     sessionKey,
-    messageChannel: "discord",
+    messageChannel: "local",
   });
   assert.equal(refreshedSnapshot.projectRoot, projectRoot);
   assert.equal(refreshedSnapshot.projectId, "fresh-binding-track");

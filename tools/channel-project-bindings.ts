@@ -26,6 +26,7 @@ import {
   normalizeWorkflowBindingChannelKey,
   resolveBindingChannelKeyFromContext,
 } from "./workflow-commands/parsers.js";
+import { shouldUseChannelProjectBindingForWorkflow } from "./workflow-message-channels.js";
 import {
   readJsonIfExists,
   withAdvisoryLock,
@@ -1379,6 +1380,17 @@ export async function setChannelProjectBinding(params: {
   const channelKey = resolveChannelProjectKey(context);
   if (!channelKey) {
     throw new Error("Unable to resolve the current channel key for project binding.");
+  }
+  if (
+    !shouldUseChannelProjectBindingForWorkflow({
+      messageChannel: params.messageChannel ?? context.messageChannel,
+      channelKey,
+      sessionKey: context.sessionKey,
+    })
+  ) {
+    throw new Error(
+      "Discord is a workflow notification-only channel and cannot be written as a channel-project binding."
+    );
   }
   const projectRoot = path.resolve(expandHome(params.projectRoot));
   const projectsRoot = getProjectsRoot(policy);

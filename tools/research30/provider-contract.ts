@@ -2,13 +2,62 @@ import { asString } from "../workflow-guard-core/coercion";
 import type { PaperVenueType } from "../paper-source-contract";
 
 export type BroadPaperSearchDepth = "quick" | "default" | "deep";
+
+export const BROAD_PAPER_PROVIDER_NAMES = [
+  "openalex",
+  "semanticscholar",
+  "crossref",
+  "unpaywall",
+  "core",
+  "dblp",
+  "papers_cool",
+  "pasa",
+] as const;
+
 export type BroadPaperProviderName =
-  | "openalex"
-  | "semanticscholar"
-  | "crossref"
-  | "unpaywall"
-  | "core"
-  | "dblp";
+  (typeof BROAD_PAPER_PROVIDER_NAMES)[number];
+
+export const DEFAULT_BROAD_PAPER_PROVIDERS: BroadPaperProviderName[] = [
+  "openalex",
+  "semanticscholar",
+  "crossref",
+  "dblp",
+  "core",
+];
+
+const BROAD_PAPER_PROVIDER_ALIASES: Record<string, BroadPaperProviderName> = {
+  "semantic-scholar": "semanticscholar",
+  semantic_scholar: "semanticscholar",
+  "papers-cool": "papers_cool",
+  paperscool: "papers_cool",
+  "papers.cool": "papers_cool",
+  "pasa-paper-search": "pasa",
+};
+
+const BROAD_PAPER_PROVIDER_NAME_SET = new Set<string>(BROAD_PAPER_PROVIDER_NAMES);
+
+export function normalizeBroadPaperProviderName(value: unknown): BroadPaperProviderName | null {
+  const text = asString(value)?.toLowerCase().replace(/\s+/g, "_") ?? null;
+  if (!text) {
+    return null;
+  }
+  const aliased = BROAD_PAPER_PROVIDER_ALIASES[text] ?? text;
+  return BROAD_PAPER_PROVIDER_NAME_SET.has(aliased)
+    ? (aliased as BroadPaperProviderName)
+    : null;
+}
+
+export function normalizeBroadPaperProviderNames(value: unknown): BroadPaperProviderName[] {
+  const values = Array.isArray(value) ? value : [];
+  const providers: BroadPaperProviderName[] = [];
+  for (const entry of values) {
+    const normalized = normalizeBroadPaperProviderName(entry);
+    if (normalized && !providers.includes(normalized)) {
+      providers.push(normalized);
+    }
+  }
+  return providers;
+}
 
 export type BroadPaperProviderAvailability =
   | "available"
@@ -68,12 +117,13 @@ export type BroadPaperProviderHit = {
 export type BroadPaperProviderQueryResult = {
   provider: BroadPaperProviderName;
   queryId: string;
-  status: "ok" | "skipped" | "error";
+  status: "ok" | "skipped" | "error" | "degraded";
   capabilities: BroadPaperProviderCapabilities;
   totalHits: number;
   hits: BroadPaperProviderHit[];
   warnings: string[];
   error: string | null;
+  nonFatal?: boolean;
 };
 
 export type BroadPaperProviderSearchParams = {

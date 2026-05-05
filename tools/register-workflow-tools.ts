@@ -4,13 +4,11 @@ import * as path from "node:path";
 import {
   assembleWritePackage,
   acknowledgeWorkflowMailboxMessage,
-  bindChannelProjectForWorkflow,
   buildWorkflowSnapshot,
   canRoleContactInWorkflow,
   getBrainstormCycleStateSummary,
   checkGraphPresenceForWorkflow,
   getCitationCollectionStateSummary,
-  getChannelProjectBindingForWorkflow,
   getCitationIntegrityStateSummary,
   getIdeationContractStateSummary,
   getExperimentSearchStateSummary,
@@ -59,7 +57,6 @@ import {
   getWritingContractStateSummary,
   getWritingSessionStateSummary,
   inferTargetRoleFromToolParams,
-  listChannelProjectBindingsForWorkflow,
   materializeReviewPressurePacket,
   materializeSurveyReviewState,
   materializeTitleAbstractIntroWorkbenchState,
@@ -100,7 +97,6 @@ import {
   setWritePackageState,
   setWritingSessionState,
   setWritingContractState,
-  unbindChannelProjectForWorkflow,
   upsertExperimentLedgerEntry,
   upsertTheoryProofPacket,
   validatePaperIngestionRequest,
@@ -138,6 +134,10 @@ import {
 import { materializeExecutionProofState } from "./workflow-execution-proof-state";
 import { runCitationCalibration } from "./research-writing/citation-calibration";
 import { materializeCitationAudit } from "./research-intel/citation-audit";
+import {
+  normalizeBroadPaperProviderNames,
+  type BroadPaperProviderName,
+} from "./research30/provider-contract";
 import { stagePapernexusRemoteSources } from "./papernexus-remote-stage";
 import { runIdeaCatalystResearch30 } from "./research30/bridge";
 import { reconcileAuthoringCloseout } from "./authoring-closeout-reconcile";
@@ -187,6 +187,7 @@ import {
   type PluginRegistrationContext,
   type ToolContext,
 } from "./plugin-registration-shared";
+import { executeChannelProjectBindingActionShell } from "./workflow-action-shell";
 import { createWorkflowExecutionRuntimeFromApi } from "./workflow-execution-runtime.js";
 import { createWorkflowBroadcastRuntimeFromApi } from "./workflow-execution-runtime.js";
 import { readJsonIfExists, pathExists, writeJsonAtomicEnsured } from "./workflow-guard-core/fs";
@@ -394,133 +395,6 @@ function normalizePaperTitleForMatch(value: string | null | undefined): string |
   return normalized || null;
 }
 
-function normalizeComparableProjectRoot(value: string | null | undefined): string | null {
-  const normalized = readString(value);
-  return normalized ? path.resolve(normalized) : null;
-}
-
-function projectRootsMatch(
-  left: string | null | undefined,
-  right: string | null | undefined
-): boolean {
-  const normalizedLeft = normalizeComparableProjectRoot(left);
-  const normalizedRight = normalizeComparableProjectRoot(right);
-  return Boolean(normalizedLeft && normalizedRight && normalizedLeft === normalizedRight);
-}
-
-function projectIdsCompatible(
-  left: string | null | undefined,
-  right: string | null | undefined
-): boolean {
-  const normalizedLeft = readString(left);
-  const normalizedRight = readString(right);
-  return !normalizedLeft || !normalizedRight || normalizedLeft === normalizedRight;
-}
-
-function isLocalWorkflowTransport(
-  messageChannel: string | null | undefined,
-  channelKey: string | null | undefined,
-  sessionKey?: string | null | undefined
-): boolean {
-  const normalizedChannel = readString(messageChannel)?.toLowerCase() ?? null;
-  const normalizedKey = readString(channelKey)?.toLowerCase() ?? null;
-  const normalizedSessionKey = readString(sessionKey)?.toLowerCase() ?? null;
-  return (
-    normalizedChannel === "local" ||
-    normalizedKey?.startsWith("local:") === true ||
-    normalizedKey?.startsWith("binding:local:") === true ||
-    normalizedSessionKey?.startsWith("local:") === true ||
-    normalizedSessionKey?.includes(":local:") === true
-  );
-}
-
-function maybeResolveLocalWorkflowProjectContext(params: {
-  workflowPolicy: ReturnType<PluginRegistrationContext["getWorkflowPolicy"]>;
-  ctx: ToolContext;
-  channelBinding: Record<string, unknown> | null;
-  snapshot: WorkflowSnapshot;
-  requestedProjectRoot: string | null;
-  requestedProjectId: string | null;
-}) {
-  const channelKey =
-    readString(params.channelBinding?.channelKey) ?? readString(params.ctx.channelKey);
-  const localTransport = isLocalWorkflowTransport(
-    params.ctx.messageChannel,
-    channelKey,
-    params.ctx.sessionKey
-  );
-
-  const existing = getChannelProjectBindingForWorkflow({
-    policy: params.workflowPolicy,
-    workspaceDir: params.ctx.workspaceDir,
-    sessionKey: params.ctx.sessionKey,
-    sessionId: params.ctx.sessionId,
-    messageChannel: params.ctx.messageChannel,
-    channelKey,
-  });
-  const requestedProjectRoot =
-    params.requestedProjectRoot ??
-    params.snapshot.projectRoot ??
-    existing.binding?.projectRoot ??
-    null;
-  const requestedProjectId =
-    params.requestedProjectId ??
-    params.snapshot.projectId ??
-    existing.binding?.projectId ??
-    null;
-  const existingMatches =
-    existing.binding &&
-    projectRootsMatch(existing.binding.projectRoot, requestedProjectRoot) &&
-    projectIdsCompatible(existing.binding.projectId, requestedProjectId);
-  const snapshotMatches =
-    params.snapshot.projectRoot &&
-    projectRootsMatch(params.snapshot.projectRoot, requestedProjectRoot) &&
-    projectIdsCompatible(params.snapshot.projectId, requestedProjectId);
-  const workspaceMatches =
-    params.ctx.workspaceDir &&
-    projectRootsMatch(params.ctx.workspaceDir, requestedProjectRoot) &&
-    projectIdsCompatible(params.snapshot.projectId, requestedProjectId);
-  if (!requestedProjectRoot) {
-    return null;
-  }
-  const explicitProjectContext = Boolean(params.requestedProjectRoot);
-  if (
-    !existingMatches &&
-    !snapshotMatches &&
-    !workspaceMatches &&
-    !explicitProjectContext
-  ) {
-    return null;
-  }
-
-  return {
-    ...existing,
-    resolvedOnly: true,
-    reason: existingMatches
-      ? localTransport
-        ? "existing_local_workflow_context"
-        : "existing_channel_workflow_context"
-      : localTransport
-        ? "snapshot_local_workflow_context"
-        : snapshotMatches
-          ? "snapshot_workflow_context"
-          : workspaceMatches
-            ? "workspace_project_context"
-            : "explicit_project_context",
-    projectRoot: path.resolve(requestedProjectRoot),
-    projectId: readString(requestedProjectId) ?? path.basename(requestedProjectRoot),
-    binding:
-      existing.binding ??
-      {
-        channelKey: existing.channelKey,
-        projectRoot: path.resolve(requestedProjectRoot),
-        projectId: readString(requestedProjectId) ?? path.basename(requestedProjectRoot),
-        messageChannel: readString(params.ctx.messageChannel),
-        workflowRole: readString(params.ctx.agentId),
-      },
-  };
-}
-
 function inferTypedPaperIngestionSourceKind(
   sourcePath: string | null,
   explicit: string | null | undefined
@@ -667,26 +541,8 @@ const BROAD_PAPER_SEARCH_AUTO_IMPORT_ACTIVE_STATUSES = new Set([
   "running",
 ]);
 
-const BROAD_PAPER_SEARCH_PROVIDER_NAMES = new Set([
-  "openalex",
-  "semanticscholar",
-  "crossref",
-  "dblp",
-  "core",
-]);
-
-function normalizeBroadPaperSearchProviderNames(value: unknown) {
-  return (Array.isArray(value) ? value : [])
-    .map((entry) => readString(entry)?.toLowerCase())
-    .filter(
-      (entry): entry is
-        | "openalex"
-        | "semanticscholar"
-        | "crossref"
-        | "dblp"
-        | "core" =>
-        Boolean(entry && BROAD_PAPER_SEARCH_PROVIDER_NAMES.has(entry))
-    );
+function normalizeBroadPaperSearchProviderNames(value: unknown): BroadPaperProviderName[] {
+  return normalizeBroadPaperProviderNames(value);
 }
 
 function normalizeTypedPaperIngestionPaper(
@@ -3578,6 +3434,19 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
           };
 
           try {
+            const channelProjectBindingResponse =
+              await executeChannelProjectBindingActionShell({
+                action,
+                workflowPolicy,
+                ctx,
+                rawParams: params,
+                channelBinding,
+                snapshot,
+                bindingRole,
+              });
+            if (channelProjectBindingResponse) {
+              return channelProjectBindingResponse;
+            }
             switch (action) {
               case "get_snapshot":
                 return textResponse(JSON.stringify(snapshot, null, 2));
@@ -4078,94 +3947,6 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                   2
                 )
               );
-            }
-            case "get_channel_project_binding": {
-              const binding = getChannelProjectBindingForWorkflow({
-                policy: workflowPolicy,
-                workspaceDir: ctx.workspaceDir,
-                sessionKey: ctx.sessionKey,
-                sessionId: ctx.sessionId,
-                messageChannel: ctx.messageChannel,
-                channelKey:
-                  readString(channelBinding?.channelKey) ??
-                  readString(ctx.channelKey),
-              });
-              return textResponse(JSON.stringify(binding, null, 2));
-            }
-            case "list_channel_project_bindings": {
-              const bindings = listChannelProjectBindingsForWorkflow({
-                policy: workflowPolicy,
-                workspaceDir: ctx.workspaceDir,
-              });
-              return textResponse(JSON.stringify(bindings, null, 2));
-            }
-            case "bind_channel_project": {
-              const requestedProjectRoot =
-                readString(channelBinding?.projectRoot) ??
-                readString(channelBinding?.project_path) ??
-                readString(params.projectRoot) ??
-                readString(params.project_root) ??
-                process.env.OPENCLAW_PROJECT ??
-                snapshot.projectRoot;
-              const requestedProjectId =
-                readString(channelBinding?.projectId) ??
-                readString(channelBinding?.project_id) ??
-                readString(params.projectId) ??
-                readString(params.project_id) ??
-                snapshot.projectId;
-              if (bindingRole && bindingRole !== "researcher") {
-                const localContext = maybeResolveLocalWorkflowProjectContext({
-                  workflowPolicy,
-                  ctx,
-                  channelBinding,
-                  snapshot,
-                  requestedProjectRoot,
-                  requestedProjectId,
-                });
-                if (localContext) {
-                  return textResponse(JSON.stringify(localContext, null, 2));
-                }
-                throw new Error(
-                  "Only Researcher may create or rebind a channel session project binding in this workflow. Non-Researcher workflow sessions may only resolve an existing or snapshot-matched project context."
-                );
-              }
-              const bound = await bindChannelProjectForWorkflow({
-                policy: workflowPolicy,
-                workspaceDir: ctx.workspaceDir,
-                sessionKey: ctx.sessionKey,
-                sessionId: ctx.sessionId,
-                messageChannel: ctx.messageChannel,
-                channelKey:
-                  readString(channelBinding?.channelKey) ??
-                  readString(ctx.channelKey),
-                projectRoot: requestedProjectRoot,
-                projectId: requestedProjectId,
-                title:
-                  readString(channelBinding?.title) ??
-                  readString(channelBinding?.topic),
-                topic: readString(channelBinding?.topic),
-                boundByAgent: ctx.agentId,
-                notes: readString(channelBinding?.notes),
-              });
-              return textResponse(JSON.stringify(bound, null, 2));
-            }
-            case "unbind_channel_project": {
-              if (bindingRole && bindingRole !== "researcher") {
-                throw new Error(
-                  "Only Researcher may remove a Discord/channel session project binding in this workflow."
-                );
-              }
-              const result = await unbindChannelProjectForWorkflow({
-                policy: workflowPolicy,
-                workspaceDir: ctx.workspaceDir,
-                sessionKey: ctx.sessionKey,
-                sessionId: ctx.sessionId,
-                messageChannel: ctx.messageChannel,
-                channelKey:
-                  readString(channelBinding?.channelKey) ??
-                  readString(ctx.channelKey),
-              });
-              return textResponse(JSON.stringify(result, null, 2));
             }
             case "auto_iterator_tick": {
               const iterator = asObject(params.iterator);

@@ -5012,7 +5012,7 @@ test("research_workflow auto_iterator_tick follows the bound channel project eve
   const boundProjectRoot = path.join(projectsRoot, "gcd-confirmation-bias-mitigation");
   const workspaceProjectRoot = path.join(workspaceRoot, "gcd-part-manifold-2026");
   const previousProjectRoot = process.env.OPENCLAW_PROJECT;
-  const sessionKey = "agent:researcher:discord:group:paper-lab";
+  const sessionKey = "agent:researcher:local:group:paper-lab";
 
   t.after(async () => {
     if (previousProjectRoot === undefined) {
@@ -5042,7 +5042,7 @@ test("research_workflow auto_iterator_tick follows the bound channel project eve
     },
     workspaceDir: workspaceRoot,
     sessionKey,
-    messageChannel: "discord",
+    messageChannel: "local",
     projectRoot: boundProjectRoot,
     boundByAgent: "researcher",
   });
@@ -5050,7 +5050,7 @@ test("research_workflow auto_iterator_tick follows the bound channel project eve
   const tool = createResearchWorkflowTool({
     workspaceDir: workspaceProjectRoot,
     sessionKey,
-    messageChannel: "discord",
+    messageChannel: "local",
     pluginConfig: {
       enableChannelProjectBindings: true,
       projectsRoot,
@@ -5235,7 +5235,7 @@ test("research_workflow auto_iterator_tick follows an explicit dashboard channel
   const workspaceProjectRoot = path.join(workspaceRoot, "gcd-part-manifold-2026");
   const previousProjectRoot = process.env.OPENCLAW_PROJECT;
   const sessionKey = "agent:researcher:dashboard:main";
-  const reviewChannelKey = "binding:discord:default:channel:1491811255814586530";
+  const reviewChannelKey = "binding:local:default:channel:1491811255814586530";
 
   t.after(async () => {
     if (previousProjectRoot === undefined) {
@@ -5265,7 +5265,7 @@ test("research_workflow auto_iterator_tick follows an explicit dashboard channel
     },
     workspaceDir: workspaceRoot,
     sessionKey,
-    messageChannel: "discord",
+    messageChannel: "local",
     channelKey: reviewChannelKey,
     projectRoot: reviewProjectRoot,
     boundByAgent: "researcher",
@@ -5275,7 +5275,7 @@ test("research_workflow auto_iterator_tick follows an explicit dashboard channel
     workspaceDir: workspaceProjectRoot,
     sessionKey,
     sessionId: "session-dashboard-main",
-    messageChannel: "discord",
+    messageChannel: "local",
     channelKey: reviewChannelKey,
     pluginConfig: {
       enableChannelProjectBindings: true,
