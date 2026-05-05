@@ -371,7 +371,7 @@ test("before_prompt_build follows the explicit dashboard channel binding instead
   });
   const beforePromptBuild = harness.getHandler("before_prompt_build");
   const dashboardSessionKey = "agent:researcher:dashboard:main";
-  const reviewChannelKey = "binding:discord:default:channel:1491811255814586530";
+  const reviewChannelKey = "binding:local:default:channel:1491811255814586530";
 
   t.after(async () => {
     await fs.rm(workspaceRoot, { recursive: true, force: true });
@@ -403,7 +403,7 @@ test("before_prompt_build follows the explicit dashboard channel binding instead
     },
     workspaceDir: workspaceRoot,
     sessionKey: dashboardSessionKey,
-    messageChannel: "discord",
+    messageChannel: "local",
     channelKey: reviewChannelKey,
     projectRoot,
     boundByAgent: "researcher",
@@ -423,7 +423,7 @@ test("before_prompt_build follows the explicit dashboard channel binding instead
       workspaceDir: "/Users/iranb/.openclaw/workspace-researcher",
       sessionKey: dashboardSessionKey,
       sessionId: "session-researcher",
-      messageChannel: "discord",
+      messageChannel: "local",
       channelKey: reviewChannelKey,
       trigger: "user",
     }
@@ -431,7 +431,7 @@ test("before_prompt_build follows the explicit dashboard channel binding instead
 
   assert.match(result?.prependContext ?? "", /\[Workflow Guard\]/);
   assert.match(result?.prependContext ?? "", /Project:\s+gcd-survey-tpami-2026/);
-  assert.match(result?.prependContext ?? "", /channel_binding_key=binding:discord:default:channel:1491811255814586530/);
+  assert.match(result?.prependContext ?? "", /channel_binding_key=binding:local:default:channel:1491811255814586530/);
   assert.match(result?.prependContext ?? "", /Survey review: status=synthesizing/i);
   assert.match(result?.prependContext ?? "", /Survey gates: coverage=partial, taxonomy=unstable/i);
 });

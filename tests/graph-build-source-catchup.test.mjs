@@ -440,7 +440,29 @@ test("graph presence treats missing planned staging paths as missing sources", a
   const result = await checkGraphPresenceForWorkflow({ projectRoot });
   assert.equal(result.status, "missing_sources");
   assert.equal(result.repairRequired, false);
+  assert.equal(result.graphBuildWorkflowStatus, "blocked");
+  assert.equal(result.graphBuildCanContinue, false);
+  assert.equal(result.graphBuildRequiresSourceRepair, true);
   assert.match(result.refreshReason ?? "", /PDF\/Markdown source/i);
+
+  const manifest = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "PROJECT_MANIFEST.json"), "utf8")
+  );
+  assert.equal(manifest.paper_ingestion.graph_build_workflow_status, "blocked");
+  assert.equal(manifest.paper_ingestion.graph_build_can_continue, false);
+  assert.equal(manifest.paper_ingestion.graph_build_requires_source_repair, true);
+
+  const papernexusStatus = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "graph", "PAPERNEXUS_STATUS.json"), "utf8")
+  );
+  assert.equal(papernexusStatus.graph_build_workflow_status, "blocked");
+  assert.equal(papernexusStatus.graph_build_can_continue, false);
+
+  const graphBuildReport = await fs.readFile(
+    path.join(projectRoot, "graph", "GRAPH_BUILD_REPORT.md"),
+    "utf8"
+  );
+  assert.match(graphBuildReport, /Graph Build Workflow Status: blocked/);
 });
 
 test("graph presence ignores metadata-only source-index candidates when source-backed papers exist", async (t) => {

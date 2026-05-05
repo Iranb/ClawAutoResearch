@@ -848,7 +848,7 @@ test("ensureWorkflowProjectRoot backfills idle_research for an existing legacy m
 test("bindChannelProjectForWorkflow can auto-create and bind a missing project", async (t) => {
   const workspaceRoot = await makeTempWorkspace();
   const projectsRoot = path.join(workspaceRoot, "projects");
-  const sessionKey = "agent:researcher:discord:group:gcd-room";
+  const sessionKey = "agent:researcher:local:group:gcd-room";
 
   t.after(async () => {
     await fs.rm(workspaceRoot, { recursive: true, force: true });
@@ -861,7 +861,7 @@ test("bindChannelProjectForWorkflow can auto-create and bind a missing project",
     },
     workspaceDir: workspaceRoot,
     sessionKey,
-    messageChannel: "discord",
+    messageChannel: "local",
     projectId: "gcd-confirmation-bias",
     topic: "GCD confirmation bias",
     boundByAgent: "researcher",
@@ -878,7 +878,7 @@ test("bindChannelProjectForWorkflow can auto-create and bind a missing project",
     },
     workspaceDir: workspaceRoot,
     sessionKey,
-    messageChannel: "discord",
+    messageChannel: "local",
   });
   assert.equal(lookup.binding?.projectRoot, bound.binding.projectRoot);
 });

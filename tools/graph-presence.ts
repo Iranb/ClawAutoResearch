@@ -25,6 +25,10 @@ import {
   resolveWorkflowSharedPapernexusCorpus,
   shouldAutodiscoverRemotePapernexusCorpus,
 } from "./papernexus-shared-corpus";
+import {
+  evaluateGraphBuildStatusContract,
+  type GraphBuildWorkflowStatus,
+} from "./graph-build-status-contract";
 
 export type GraphPresenceStatus =
   | "ready"
@@ -117,6 +121,11 @@ export type GraphPresenceCheckResult = {
   repairTargetCorpus: string | null;
   presentPapers: GraphPresenceMatch[];
   missingPapers: GraphPresenceMissingPaper[];
+  graphBuildWorkflowStatus: GraphBuildWorkflowStatus;
+  graphBuildCanContinue: boolean;
+  graphBuildRequiresImport: boolean;
+  graphBuildRequiresSourceRepair: boolean;
+  graphBuildStatusReason: string | null;
   manifestUpdated: boolean;
 };
 
@@ -133,6 +142,30 @@ type ResolvedExpectedPapers = {
   } | null;
   sourceIndexUpdatedAt: string | null;
 };
+
+function attachGraphBuildStatusContract(params: {
+  result: GraphPresenceCheckResult;
+  ingestionInFlight: boolean;
+}): GraphPresenceCheckResult {
+  const contract = evaluateGraphBuildStatusContract({
+    graphPresenceStatus: params.result.status,
+    expectedPaperCount: params.result.expectedPaperCount,
+    presentPaperCount: params.result.presentPaperCount,
+    missingPaperCount: params.result.missingPaperCount,
+    repairRequired: params.result.repairRequired,
+    refreshRequired: params.result.refreshRequired,
+    ingestionInFlight: params.ingestionInFlight,
+    blockingReason: params.result.blockingReason,
+  });
+  return {
+    ...params.result,
+    graphBuildWorkflowStatus: contract.workflowStatus,
+    graphBuildCanContinue: contract.canContinue,
+    graphBuildRequiresImport: contract.requiresImport,
+    graphBuildRequiresSourceRepair: contract.requiresSourceRepair,
+    graphBuildStatusReason: contract.reason,
+  };
+}
 
 const PAPER_SOURCE_INDEX_CANDIDATE_KEYS = [
   "papers",
@@ -675,6 +708,11 @@ function buildStatusRecordFromPresenceResult(params: {
     repair_required: params.result.repairRequired,
     repair_reason: params.result.repairReason,
     repair_target_corpus: params.result.repairTargetCorpus,
+    graph_build_workflow_status: params.result.graphBuildWorkflowStatus,
+    graph_build_can_continue: params.result.graphBuildCanContinue,
+    graph_build_requires_import: params.result.graphBuildRequiresImport,
+    graph_build_requires_source_repair: params.result.graphBuildRequiresSourceRepair,
+    graph_build_status_reason: params.result.graphBuildStatusReason,
     missing_papers: serializeMissingPapers(params.result.missingPapers),
     present_papers: serializePresentPapers(params.result.presentPapers),
   };
@@ -693,9 +731,14 @@ function renderGraphBuildReport(result: GraphPresenceCheckResult): string {
     `Expected Papers: ${result.expectedPaperCount}`,
     `Present Papers: ${result.presentPaperCount}`,
     `Missing Papers: ${result.missingPaperCount}`,
+    `Graph Build Workflow Status: ${result.graphBuildWorkflowStatus}`,
+    `Graph Build Can Continue: ${result.graphBuildCanContinue ? "yes" : "no"}`,
     `Refresh Required: ${result.refreshRequired ? "yes" : "no"}`,
     `Repair Required: ${result.repairRequired ? "yes" : "no"}`,
   ];
+  if (result.graphBuildStatusReason) {
+    lines.push(`Graph Build Status Reason: ${result.graphBuildStatusReason}`);
+  }
   if (result.blockingReason) {
     lines.push(`Blocking Reason: ${result.blockingReason}`);
   }
@@ -2749,13 +2792,21 @@ async function checkGraphPresenceViaRemoteStatus(params: {
     repairTargetCorpus: repairRequired ? repairTargetCorpus : null,
     presentPapers,
     missingPapers: status === "ready" ? [] : missingPapers,
+    graphBuildWorkflowStatus: "blocked",
+    graphBuildCanContinue: false,
+    graphBuildRequiresImport: false,
+    graphBuildRequiresSourceRepair: false,
+    graphBuildStatusReason: null,
     manifestUpdated: false,
   };
 
-  const finalizedResult = applyPaperSourceIndexGraphPresenceOverride({
-    result,
-    expected: params.expected,
-    allowOverride: !paperIngestionProgress.inFlight,
+  const finalizedResult = attachGraphBuildStatusContract({
+    result: applyPaperSourceIndexGraphPresenceOverride({
+      result,
+      expected: params.expected,
+      allowOverride: !paperIngestionProgress.inFlight,
+    }),
+    ingestionInFlight: paperIngestionProgress.inFlight,
   });
 
   await writeJsonEnsured(params.reportPath, {
@@ -2776,6 +2827,11 @@ async function checkGraphPresenceViaRemoteStatus(params: {
     repair_required: finalizedResult.repairRequired,
     repair_reason: finalizedResult.repairReason,
     repair_target_corpus: finalizedResult.repairTargetCorpus,
+    graph_build_workflow_status: finalizedResult.graphBuildWorkflowStatus,
+    graph_build_can_continue: finalizedResult.graphBuildCanContinue,
+    graph_build_requires_import: finalizedResult.graphBuildRequiresImport,
+    graph_build_requires_source_repair: finalizedResult.graphBuildRequiresSourceRepair,
+    graph_build_status_reason: finalizedResult.graphBuildStatusReason,
     missing_papers: serializeMissingPapers(finalizedResult.missingPapers),
     present_papers: serializePresentPapers(finalizedResult.presentPapers),
   });
@@ -2853,6 +2909,11 @@ export async function checkGraphPresenceForWorkflow(params: {
         repair_required: result.repairRequired ? true : false,
         repair_reason: result.repairRequired ? result.repairReason : null,
         repair_target_corpus: result.repairRequired ? result.repairTargetCorpus : null,
+        graph_build_workflow_status: result.graphBuildWorkflowStatus,
+        graph_build_can_continue: result.graphBuildCanContinue,
+        graph_build_requires_import: result.graphBuildRequiresImport,
+        graph_build_requires_source_repair: result.graphBuildRequiresSourceRepair,
+        graph_build_status_reason: result.graphBuildStatusReason,
         papernexus_certification_status: certification.status,
         papernexus_claim_level: certification.claim_level,
         papernexus_source_backed_graph_claim:
@@ -3010,13 +3071,21 @@ export async function checkGraphPresenceForWorkflow(params: {
     repairTargetCorpus: repairRequired ? repairTargetCorpus : null,
     presentPapers,
     missingPapers,
+    graphBuildWorkflowStatus: "blocked",
+    graphBuildCanContinue: false,
+    graphBuildRequiresImport: false,
+    graphBuildRequiresSourceRepair: false,
+    graphBuildStatusReason: null,
     manifestUpdated: false,
   };
 
-  const finalizedResult = applyPaperSourceIndexGraphPresenceOverride({
-    result,
-    expected,
-    allowOverride: !paperIngestionProgress.inFlight,
+  const finalizedResult = attachGraphBuildStatusContract({
+    result: applyPaperSourceIndexGraphPresenceOverride({
+      result,
+      expected,
+      allowOverride: !paperIngestionProgress.inFlight,
+    }),
+    ingestionInFlight: paperIngestionProgress.inFlight,
   });
 
   await writeJsonEnsured(reportPath, {
@@ -3037,6 +3106,11 @@ export async function checkGraphPresenceForWorkflow(params: {
     repair_required: finalizedResult.repairRequired,
     repair_reason: finalizedResult.repairReason,
     repair_target_corpus: finalizedResult.repairTargetCorpus,
+    graph_build_workflow_status: finalizedResult.graphBuildWorkflowStatus,
+    graph_build_can_continue: finalizedResult.graphBuildCanContinue,
+    graph_build_requires_import: finalizedResult.graphBuildRequiresImport,
+    graph_build_requires_source_repair: finalizedResult.graphBuildRequiresSourceRepair,
+    graph_build_status_reason: finalizedResult.graphBuildStatusReason,
     missing_papers: serializeMissingPapers(finalizedResult.missingPapers),
     present_papers: serializePresentPapers(finalizedResult.presentPapers),
   });
@@ -3081,6 +3155,11 @@ export async function checkGraphPresenceForWorkflow(params: {
       repair_required: finalizedResult.repairRequired ? true : false,
       repair_reason: finalizedResult.repairRequired ? finalizedResult.repairReason : null,
       repair_target_corpus: finalizedResult.repairRequired ? finalizedResult.repairTargetCorpus : null,
+      graph_build_workflow_status: finalizedResult.graphBuildWorkflowStatus,
+      graph_build_can_continue: finalizedResult.graphBuildCanContinue,
+      graph_build_requires_import: finalizedResult.graphBuildRequiresImport,
+      graph_build_requires_source_repair: finalizedResult.graphBuildRequiresSourceRepair,
+      graph_build_status_reason: finalizedResult.graphBuildStatusReason,
       papernexus_certification_status: certification.status,
       papernexus_claim_level: certification.claim_level,
       papernexus_source_backed_graph_claim:

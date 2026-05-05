@@ -50,6 +50,11 @@ import {
   type ChannelProjectBindingPolicy,
   type ChannelProjectBindingRecord,
 } from "./channel-project-bindings";
+import { shouldUseChannelProjectBindingForWorkflow } from "./workflow-message-channels.js";
+import {
+  getWorkflowNotificationChannelsPath,
+  recordWorkflowNotificationChannelForProject,
+} from "./workflow-notification-channels.js";
 import {
   checkGraphPresenceForWorkflow,
   type GraphPresenceCheckResult,
@@ -10029,6 +10034,32 @@ export function listChannelProjectBindingsForWorkflow(params: {
   });
 }
 
+async function recordNotificationOnlyChannelForWorkflow(params: {
+  projectRoot: string;
+  projectId?: string | null;
+  messageChannel?: string | null;
+  channelKey?: string | null;
+  sessionKey?: string | null;
+  source: string;
+  notes?: string | null;
+}) {
+  const notificationChannel = await recordWorkflowNotificationChannelForProject({
+    projectRoot: params.projectRoot,
+    projectId: params.projectId,
+    messageChannel: params.messageChannel,
+    channelKey: params.channelKey,
+    sessionKey: params.sessionKey,
+    source: params.source,
+    notes: params.notes,
+  });
+  return {
+    notificationOnly: true,
+    reason: "notification_only_channel",
+    notificationStorePath: getWorkflowNotificationChannelsPath(params.projectRoot),
+    notificationChannel,
+  };
+}
+
 export async function bindChannelProjectForWorkflow(params: {
   policy?: WorkflowGuardPolicy;
   workspaceDir?: string;
@@ -10057,6 +10088,33 @@ export async function bindChannelProjectForWorkflow(params: {
     title: params.title,
     topic: params.topic,
   });
+  if (
+    !shouldUseChannelProjectBindingForWorkflow({
+      messageChannel: params.messageChannel,
+      channelKey: params.channelKey,
+      sessionKey: params.sessionKey,
+    })
+  ) {
+    const notificationOnly = await recordNotificationOnlyChannelForWorkflow({
+      projectRoot: ensuredProject.projectRoot,
+      projectId: params.projectId ?? ensuredProject.projectId,
+      messageChannel: params.messageChannel,
+      channelKey: params.channelKey,
+      sessionKey: params.sessionKey,
+      source: "bind_channel_project",
+      notes:
+        params.notes ??
+        "Channel is notification-only for workflow project binding.",
+    });
+    return {
+      enabled: false,
+      storePath: notificationOnly.notificationStorePath,
+      binding: null,
+      projectRoot: ensuredProject.projectRoot,
+      projectId: params.projectId ?? ensuredProject.projectId,
+      ...notificationOnly,
+    };
+  }
   return setChannelProjectBinding({
     policy: params.policy,
     context: {
@@ -10088,6 +10146,50 @@ export async function ensureChannelProjectBindingForWorkflow(params: {
   notes?: string | null;
   runtimeSession?: WorkflowRuntimeSessionBinding | null;
 }) {
+  if (
+    !shouldUseChannelProjectBindingForWorkflow({
+      messageChannel: params.messageChannel,
+      channelKey: params.channelKey,
+      sessionKey: params.sessionKey,
+    })
+  ) {
+    const projectRoot =
+      params.projectRoot ??
+      getProjectRoot({
+        workspaceDir: params.workspaceDir,
+        sessionKey: params.sessionKey,
+        sessionId: params.sessionId,
+        messageChannel: params.messageChannel,
+        channelKey: undefined,
+        policy: params.policy,
+      });
+    if (!projectRoot) {
+      return {
+        autoBound: false,
+        reason: "notification_only_channel_without_project_root",
+        storePath: "",
+        binding: null,
+        notificationOnly: true,
+      };
+    }
+    const notificationOnly = await recordNotificationOnlyChannelForWorkflow({
+      projectRoot,
+      projectId: params.projectId,
+      messageChannel: params.messageChannel,
+      channelKey: params.channelKey,
+      sessionKey: params.sessionKey,
+      source: "ensure_channel_project_binding",
+      notes:
+        params.notes ??
+        "Channel is notification-only for workflow project binding.",
+    });
+    return {
+      autoBound: false,
+      storePath: notificationOnly.notificationStorePath,
+      binding: null,
+      ...notificationOnly,
+    };
+  }
   const existing = getChannelProjectBinding({
     policy: params.policy,
     context: {

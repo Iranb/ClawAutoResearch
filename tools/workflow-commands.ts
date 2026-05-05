@@ -1731,7 +1731,7 @@ function createBindProjectCommandHandler(
         text:
           `Bound this channel to workflow project ${projectId}.\n` +
           `project_root=${projectRoot}\n` +
-          `channel_key=${result.binding.channelKey ?? channelKey}`,
+          `channel_key=${result.binding?.channelKey ?? channelKey}`,
       };
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown error";

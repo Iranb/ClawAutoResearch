@@ -23,6 +23,10 @@ test("deriveWorkflowGraphContext resolves ready state from durable paper_ingesti
         refresh_required: false,
         repair_required: false,
         runtime_status: "ready",
+        graph_build_workflow_status: "ready",
+        graph_build_can_continue: true,
+        graph_build_requires_import: false,
+        graph_build_requires_source_repair: false,
       },
     },
     stage: "graph_build",
@@ -36,6 +40,40 @@ test("deriveWorkflowGraphContext resolves ready state from durable paper_ingesti
   assert.equal(context.refreshRequired, false);
   assert.equal(context.recentlyChecked, true);
   assert.equal(context.runtimeStatus, "ready");
+  assert.equal(context.graphBuildWorkflowStatus, "ready");
+  assert.equal(context.graphBuildCanContinue, true);
+  assert.equal(context.graphBuildRequiresImport, false);
+  assert.equal(context.graphBuildRequiresSourceRepair, false);
+});
+
+test("deriveWorkflowGraphContext exposes durable graph-build workflow contracts", () => {
+  const context = deriveWorkflowGraphContext({
+    manifest: {
+      paper_ingestion: {
+        graph_presence_status: "missing_papers",
+        graph_presence_checked_at: "2026-04-11T08:00:00.000Z",
+        refresh_required: false,
+        runtime_status: "ready",
+        graph_build_workflow_status: "degraded",
+        graph_build_can_continue: true,
+        graph_build_requires_import: false,
+        graph_build_requires_source_repair: false,
+        graph_build_status_reason:
+          "Graph is partially populated; workflow may continue with degraded coverage.",
+      },
+    },
+    stage: "frontier_mapping",
+    nowIso: "2026-04-11T08:00:20.000Z",
+    minRefreshIntervalMs: 15_000,
+  });
+
+  assert.equal(context.status, "stale");
+  assert.equal(context.graphPresenceStatus, "missing_papers");
+  assert.equal(context.graphBuildWorkflowStatus, "degraded");
+  assert.equal(context.graphBuildCanContinue, true);
+  assert.equal(context.graphBuildRequiresImport, false);
+  assert.equal(context.graphBuildRequiresSourceRepair, false);
+  assert.match(context.graphBuildStatusReason ?? "", /partially populated/i);
 });
 
 test("deriveWorkflowGraphContext treats missing corpus checks as unavailable graph context", () => {

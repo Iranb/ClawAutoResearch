@@ -41,7 +41,7 @@ async function makeProject(workspaceRoot, projectId = "demo-project") {
 test("project context resolves a channel binding and loads project state", async (t) => {
   const workspaceRoot = await makeWorkspace();
   const projectRoot = await makeProject(workspaceRoot, "nlp-track");
-  const sessionKey = "agent:researcher:discord:group:paper-lab";
+  const sessionKey = "agent:researcher:local:group:paper-lab";
 
   t.after(async () => {
     await fs.rm(workspaceRoot, { recursive: true, force: true });
@@ -55,12 +55,12 @@ test("project context resolves a channel binding and loads project state", async
     context: {
       workspaceDir: workspaceRoot,
       sessionKey,
-      messageChannel: "discord",
+      messageChannel: "local",
       role: "researcher",
     },
     projectRoot,
     projectId: "nlp-track",
-    messageChannel: "discord",
+    messageChannel: "local",
     boundByAgent: "researcher",
   });
 
@@ -72,7 +72,7 @@ test("project context resolves a channel binding and loads project state", async
     context: {
       workspaceDir: workspaceRoot,
       sessionKey,
-      messageChannel: "discord",
+      messageChannel: "local",
       role: "researcher",
     },
   });
@@ -80,7 +80,7 @@ test("project context resolves a channel binding and loads project state", async
   assert.equal(resolved.projectRoot, projectRoot);
   assert.equal(resolved.projectId, "nlp-track");
   assert.equal(resolved.source, "channel_binding");
-  assert.equal(resolved.channelKey, "discord:group:paper-lab");
+  assert.equal(resolved.channelKey, "local:group:paper-lab");
 
   const state = await loadWorkflowProjectState({
     policy: {
@@ -89,14 +89,14 @@ test("project context resolves a channel binding and loads project state", async
     },
     workspaceDir: workspaceRoot,
     sessionKey,
-    messageChannel: "discord",
+    messageChannel: "local",
     role: "researcher",
   });
 
   assert.equal(state.projectRoot, projectRoot);
   assert.equal(state.projectId, "nlp-track");
   assert.equal(state.projectResolutionSource, "channel_binding");
-  assert.equal(state.channelBindingKey, "discord:group:paper-lab");
+  assert.equal(state.channelBindingKey, "local:group:paper-lab");
   assert.equal(state.mailbox.messages.length, 0);
 });
 

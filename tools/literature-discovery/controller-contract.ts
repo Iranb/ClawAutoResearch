@@ -33,6 +33,10 @@ import type {
   BroadPaperSearchQuery,
 } from "../research30/provider-contract";
 import {
+  DEFAULT_BROAD_PAPER_PROVIDERS,
+  normalizeBroadPaperProviderName,
+} from "../research30/provider-contract";
+import {
   serializeMergedPaperCandidate,
   type MergedPaperCandidate,
 } from "../research30/merge";
@@ -861,16 +865,12 @@ function buildLiteratureQueryPlan(params: {
 
 const CONTROLLER_PROVIDER_MAP: Record<string, BroadPaperProviderName | null> = {
   research30_openalex: "openalex",
-  openalex: "openalex",
   research30_semanticscholar: "semanticscholar",
-  semanticscholar: "semanticscholar",
-  "semantic-scholar": "semanticscholar",
   research30_crossref: "crossref",
-  crossref: "crossref",
   research30_dblp: "dblp",
-  dblp: "dblp",
   research30_core: "core",
-  core: "core",
+  research30_papers_cool: "papers_cool",
+  research30_pasa: "pasa",
   papernexus_corpus_lookup: null,
   "papernexus-corpus": null,
   citation_expansion: null,
@@ -882,7 +882,7 @@ function normalizeControllerProviderName(value: string): BroadPaperProviderName 
     .trim()
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "_");
-  return CONTROLLER_PROVIDER_MAP[key] ?? null;
+  return CONTROLLER_PROVIDER_MAP[key] ?? normalizeBroadPaperProviderName(value);
 }
 
 function normalizeControllerQueryFamily(intent: string | null): BroadPaperSearchQuery["family"] {
@@ -958,7 +958,7 @@ export function buildBroadPaperSearchQueriesFromControllerPlan(
     providerNames:
       seenProviders.size > 0
         ? [...seenProviders]
-        : ["openalex", "semanticscholar", "crossref", "dblp", "core"],
+        : DEFAULT_BROAD_PAPER_PROVIDERS,
     preferredVenuePacks,
   };
 }
