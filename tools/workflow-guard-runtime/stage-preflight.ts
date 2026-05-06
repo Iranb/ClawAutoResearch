@@ -624,6 +624,50 @@ async function hasCompleteExperimentBundle(projectRoot: string): Promise<boolean
   return false;
 }
 
+async function hasExperimentResultSummaryNeedingProof(projectRoot: string): Promise<boolean> {
+  const proof =
+    (await readJsonIfExists<Record<string, unknown>>(
+      resolveProjectArtifactPath(projectRoot, "researcher/EXECUTION_PROOF.json") ?? ""
+    )) ?? {};
+  if (normalizeStageValue(proof.status) === "ready") {
+    return false;
+  }
+
+  const coderRoot = resolveProjectArtifactPath(projectRoot, "coder") ?? `${projectRoot}/coder`;
+  const queue: Array<{ dir: string; depth: number }> = [{ dir: coderRoot, depth: 0 }];
+  while (queue.length > 0) {
+    const current = queue.shift();
+    if (!current) {
+      continue;
+    }
+    let entries: Array<{ name: string; isDirectory: () => boolean }>;
+    try {
+      entries = await fs.readdir(current.dir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    if (
+      (await pathExists(resolveProjectArtifactPath(current.dir, "EXPERIMENT_MANIFEST.json") ?? "")) &&
+      (await pathExists(resolveProjectArtifactPath(current.dir, "RESULT_SUMMARY.json") ?? ""))
+    ) {
+      return true;
+    }
+    if (current.depth >= 3) {
+      continue;
+    }
+    for (const entry of entries) {
+      if (!entry.isDirectory() || entry.name.startsWith(".") || entry.name === "__pycache__") {
+        continue;
+      }
+      queue.push({
+        dir: resolveProjectArtifactPath(current.dir, entry.name) ?? `${current.dir}/${entry.name}`,
+        depth: current.depth + 1,
+      });
+    }
+  }
+  return false;
+}
+
 function localCodeReviewFallbackConfigured(): boolean {
   const raw = process.env.OPENCLAW_CODE_REVIEW_LOCAL_FALLBACK_AFTER_MS;
   if (raw == null || raw.trim().length === 0) {
@@ -690,10 +734,14 @@ async function shouldMaterializeLocalExperimentExecution(params: {
     params.manifest.experiment_search && typeof params.manifest.experiment_search === "object"
       ? (params.manifest.experiment_search as Record<string, unknown>)
       : {};
+  const hasResultSummaryNeedingProof = await hasExperimentResultSummaryNeedingProof(
+    params.projectRoot
+  );
   if (
     normalizeStageValue(experimentSearch.status) === "ready_for_analysis" &&
     typeof experimentSearch.evaluation_summary_path === "string" &&
-    typeof experimentSearch.plot_pack_path === "string"
+    typeof experimentSearch.plot_pack_path === "string" &&
+    !hasResultSummaryNeedingProof
   ) {
     return false;
   }
@@ -724,7 +772,7 @@ async function shouldMaterializeLocalExperimentExecution(params: {
       isTerminalExperimentStatus(entry.status)
     )
   ) {
-    return false;
+    return hasResultSummaryNeedingProof;
   }
   return await hasCompleteExperimentBundle(params.projectRoot);
 }

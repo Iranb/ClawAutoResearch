@@ -1122,7 +1122,7 @@ async function seedProjectReadyForSubmit(projectRoot) {
     ),
     {
       experiment_id: experimentId,
-      metrics: { acc: 0.9 },
+      metrics: { acc: 0.9, h_score: 0.91, baseline_h_score: 0.86 },
       result_paths: ["researcher/artifacts/results/metrics.json"],
       stage_run_id: stageRunId,
     }
@@ -1138,6 +1138,19 @@ async function seedProjectReadyForSubmit(projectRoot) {
   ]) {
     await writeText(path.join(projectRoot, "analyzer", fileName));
   }
+  await writeText(
+    path.join(projectRoot, "analyzer", "CLAIM_EVIDENCE_MATRIX.md"),
+    [
+      "# Claim Evidence Matrix",
+      "",
+      "- claim-1 SUPPORTED by researcher/artifacts/results/metrics.json.",
+      "",
+    ].join("\n")
+  );
+  await writeText(
+    path.join(projectRoot, "analyzer", "UNSUPPORTED_CLAIMS.md"),
+    ["# Unsupported Claims", "", "None.", ""].join("\n")
+  );
   await writeJson(path.join(projectRoot, "analyzer", "THEORY_STATE.json"), {
     schema_version: 1,
     status: "draft",
@@ -6802,8 +6815,13 @@ test("workflow runtime rewrite E2E migrates a legacy project and walks setup thr
     mode: "test",
     queueMailbox: false,
   });
+  manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
   assert.equal(result.stageBefore, "review");
-  assert.equal(result.stageAfter, "write");
+  assert.equal(
+    result.stageAfter,
+    "write",
+    `Unexpected review transition: stageAfter=${result.stageAfter}; regressed=${result.regressed}; missing=${JSON.stringify(result.missingStageSignals)}; storySupport=${manifest.paper_story_state?.claim_support_status ?? "unset"}; storyGap=${manifest.story_gap_search_requisition?.status ?? "unset"}; graphPresence=${manifest.paper_ingestion?.graph_presence_status ?? "unset"}`
+  );
 
   await activatePreparedHandoff(projectRoot, "academic_writer");
 
@@ -7311,6 +7329,238 @@ test("auto iterator repairs stale coder bundles even when another bundle is alre
   assert.equal(
     repairedStaleManifest.novelty_basis,
     "It couples frontier packets with section drafting."
+  );
+});
+
+test("auto iterator repairs recoverable active-track code bundle proof before leaving code", async (t) => {
+  const projectRoot = await makeTempProject();
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  const { trackId } = await seedProjectReadyForCode(projectRoot);
+  await writeText(path.join(projectRoot, "coder", "EXPERIMENT_INDEX.md"));
+  const bundleDir = path.join(
+    projectRoot,
+    "coder",
+    "experiments",
+    trackId,
+    "exp-2__old_generated_bundle"
+  );
+  await writeText(path.join(bundleDir, "train.py"), "print('ok')\n");
+  await writeText(path.join(bundleDir, "README.md"), "# old generated bundle\n");
+  await writeJson(
+    path.join(bundleDir, "EXPERIMENT_MANIFEST.json"),
+    buildAlignedExperimentManifest(trackId, {
+      experiment_id: "exp-2",
+      hypothesis:
+        "[Track: track-1] Tune an older generated variant before the active contract was finalized.",
+      novelty_basis:
+        "Generated preflight bundle for an earlier active-track wording.",
+      validation_steps: [
+        {
+          step_id: "partial-validation",
+          objective: "Validate the first implementation hook only.",
+          covers: ["Graph-grounded support routing"],
+        },
+      ],
+      ablation_plan: [],
+      implementation_proof: {
+        changed_files: ["coder/experiments/track-1/exp-2__old_generated_bundle/train.py"],
+        integration_points: [
+          {
+            point_id: "partial",
+            path: "coder/experiments/track-1/exp-2__old_generated_bundle/train.py",
+            summary: "Only covers the first implementation hook.",
+            covers: ["Graph-grounded support routing"],
+          },
+        ],
+      },
+    })
+  );
+
+  const result = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+  });
+  const repairedManifest = JSON.parse(
+    await fs.readFile(path.join(bundleDir, "EXPERIMENT_MANIFEST.json"), "utf8")
+  );
+
+  assert.equal(result.stageBefore, "code");
+  assert.equal(result.stageAfter, "experiment");
+  assert.equal(repairedManifest.hypothesis, "Graph grounding improves support precision.");
+  assert.equal(
+    repairedManifest.novelty_basis,
+    "It couples frontier packets with section drafting."
+  );
+  assert.ok(
+    repairedManifest.implementation_proof.integration_points.some((entry) =>
+      entry.covers?.includes("Frontier-packet-conditioned section drafting")
+    )
+  );
+  assert.ok(
+    repairedManifest.validation_steps.some((entry) =>
+      entry.covers?.includes("Frontier-packet-conditioned section drafting")
+    )
+  );
+  assert.ok(repairedManifest.ablation_plan.length > 0);
+  assert.match(
+    repairedManifest.implementation_proof.execution_command,
+    /exp-2__old_generated_bundle\/train\.py/
+  );
+});
+
+test("auto iterator repairs recoverable bundles on secondary active tracks", async (t) => {
+  const projectRoot = await makeTempProject();
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  const { trackId } = await seedProjectReadyForCode(projectRoot);
+  const secondaryTrackId = "track-2";
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.research_program.tracks.push({
+    track_id: secondaryTrackId,
+    priority: 2,
+    status: "active",
+    hypothesis: "Secondary graph routing improves reviewer traceability.",
+    novelty_basis: "It reuses the graph-grounded routing contract for a second active track.",
+    main_metric: "traceability",
+  });
+  await writeJson(manifestPath, manifest);
+  await writeJson(path.join(projectRoot, "TRACK_REGISTRY.json"), {
+    tracks: [
+      {
+        track_id: trackId,
+        status: "active",
+        hypothesis: "Graph grounding improves support precision.",
+        novelty_basis: "It couples frontier packets with section drafting.",
+      },
+      {
+        track_id: secondaryTrackId,
+        status: "active",
+        hypothesis: "Secondary graph routing improves reviewer traceability.",
+        novelty_basis:
+          "It reuses the graph-grounded routing contract for a second active track.",
+      },
+    ],
+    active_tracks: 2,
+  });
+
+  await writeText(path.join(projectRoot, "coder", "EXPERIMENT_INDEX.md"));
+  const primaryBundleDir = path.join(
+    projectRoot,
+    "coder",
+    "experiments",
+    trackId,
+    "exp-1__baseline"
+  );
+  await writeText(path.join(primaryBundleDir, "train.py"), "print('ok')\n");
+  await writeText(path.join(primaryBundleDir, "README.md"));
+  await writeJson(
+    path.join(primaryBundleDir, "EXPERIMENT_MANIFEST.json"),
+    buildAlignedExperimentManifest(trackId)
+  );
+
+  const secondaryBundleDir = path.join(
+    projectRoot,
+    "coder",
+    "experiments",
+    secondaryTrackId,
+    "exp-1__old_secondary"
+  );
+  await writeText(path.join(secondaryBundleDir, "train.py"), "print('ok')\n");
+  await writeText(path.join(secondaryBundleDir, "README.md"));
+  await writeJson(
+    path.join(secondaryBundleDir, "EXPERIMENT_MANIFEST.json"),
+    buildAlignedExperimentManifest(secondaryTrackId, {
+      hypothesis:
+        "[Track: track-2] Secondary bundle still carries the old generated wording.",
+      novelty_basis: "Old generated secondary-track wording.",
+      implementation_proof: {
+        changed_files: ["coder/experiments/track-2/exp-1__old_secondary/train.py"],
+        integration_points: [],
+      },
+    })
+  );
+
+  const result = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+  });
+  const secondaryManifest = JSON.parse(
+    await fs.readFile(path.join(secondaryBundleDir, "EXPERIMENT_MANIFEST.json"), "utf8")
+  );
+
+  assert.equal(result.stageBefore, "code");
+  assert.equal(result.stageAfter, "experiment");
+  assert.equal(
+    secondaryManifest.hypothesis,
+    "Secondary graph routing improves reviewer traceability."
+  );
+  assert.equal(
+    secondaryManifest.novelty_basis,
+    "It reuses the graph-grounded routing contract for a second active track."
+  );
+  assert.ok(secondaryManifest.implementation_proof.activation_signals.length > 0);
+});
+
+test("auto iterator ignores superseded historical code bundles during active code readiness", async (t) => {
+  const projectRoot = await makeTempProject();
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  const { trackId } = await seedProjectReadyForCode(projectRoot);
+  await writeText(path.join(projectRoot, "coder", "EXPERIMENT_INDEX.md"));
+  const activeBundleDir = path.join(
+    projectRoot,
+    "coder",
+    "experiments",
+    trackId,
+    "exp-1__baseline"
+  );
+  await writeText(path.join(activeBundleDir, "train.py"), "print('ok')\n");
+  await writeText(path.join(activeBundleDir, "README.md"));
+  await writeJson(
+    path.join(activeBundleDir, "EXPERIMENT_MANIFEST.json"),
+    buildAlignedExperimentManifest(trackId)
+  );
+
+  const oldBundleDir = path.join(
+    projectRoot,
+    "coder",
+    "experiments",
+    "old-track",
+    "exp-0__superseded"
+  );
+  await writeText(path.join(oldBundleDir, "train.py"), "print('old')\n");
+  await writeText(path.join(oldBundleDir, "README.md"), "# old\n");
+  await writeJson(path.join(oldBundleDir, "EXPERIMENT_MANIFEST.json"), {
+    experiment_id: "exp-0",
+    project_id: "demo-project",
+    track_id: "old-track",
+    status: "superseded",
+    stage: "superseded",
+  });
+
+  const result = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+  });
+
+  assert.equal(result.stageBefore, "code");
+  assert.equal(result.stageAfter, "experiment");
+  assert.equal(
+    result.missingStageSignals.some((signal) =>
+      /not aligned|baseline and validation contracts|implementation proof/i.test(signal)
+    ),
+    false
   );
 });
 
@@ -8285,6 +8535,118 @@ test("auto iterator points experiment stage at monitor-experiment while remote r
       /\/monitor-experiment/i.test(action.command ?? "")
     )
   );
+});
+
+test("auto iterator reconciles completed result summaries before treating stale active ledger entries as blocking", async (t) => {
+  const projectRoot = await makeTempProject();
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  const { now, trackId } = await seedProjectReadyForCode(projectRoot);
+  const completedRelativeDir = `coder/experiments/${trackId}/zzz_completed`;
+  const completedDir = path.join(projectRoot, completedRelativeDir);
+  await writeText(path.join(projectRoot, "researcher", "EXPERIMENT_REGISTRY.md"));
+  await writeText(path.join(projectRoot, "coder", "EXPERIMENT_INDEX.md"));
+  await writeText(path.join(completedDir, "train.py"), "print('completed')\n");
+  await writeText(path.join(completedDir, "README.md"), "# completed\n");
+  await writeJson(
+    path.join(completedDir, "EXPERIMENT_MANIFEST.json"),
+    buildAlignedExperimentManifest(trackId, {
+      experiment_id: "bundle-completed",
+      status: "completed",
+    })
+  );
+  await writeJson(path.join(completedDir, "RESULT_SUMMARY.json"), {
+    experiment_id: "bundle-completed",
+    status: "completed",
+    primary_metric: {
+      name: "All ACC",
+      value: 54.34,
+      unit: "%",
+    },
+    key_metrics: {
+      simGCD_paper: 53.4,
+    },
+    verdict: "PASS - completed against SimGCD baseline (53.4%).",
+  });
+
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.current_stage = "experiment";
+  manifest.owner_agent = "researcher";
+  manifest.current_micro_stage = "experiment_launch_requested";
+  manifest.experiment_memory = {
+    ledger_path: "researcher/EXPERIMENT_LEDGER.json",
+    last_ledger_update_at: now,
+    last_completed_experiment_id: "ledger-completed",
+    papernexus_sync_required: true,
+  };
+  manifest.experiment_search = {
+    status: "launching",
+    track_id: trackId,
+    incumbent_experiment_id: "ledger-completed",
+    multi_seed_status: "debugging_required",
+    plot_pack_status: "pending",
+    baseline_fairness_status: "unknown",
+    implementation_confidence: "unknown",
+    ablation_status: "pending",
+  };
+  await writeJson(manifestPath, manifest);
+  await writeJson(path.join(projectRoot, "researcher", "EXPERIMENT_LEDGER.json"), {
+    schemaVersion: 1,
+    projectId: "demo-project",
+    updatedAt: now,
+    summary: {
+      activeExperimentIds: ["stale-running"],
+      lastCompletedExperimentId: "ledger-completed",
+      papernexusSyncRequired: true,
+    },
+    experiments: [
+      {
+        experimentId: "stale-running",
+        trackId,
+        status: "running",
+        stage: "training",
+      },
+      {
+        experimentId: "ledger-completed",
+        trackId,
+        status: "completed",
+        configRef: `${completedRelativeDir}/EXPERIMENT_MANIFEST.json`,
+        keyMetric: {
+          name: "All ACC",
+          value: 54.34,
+        },
+      },
+    ],
+  });
+
+  const result = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+    policy: {
+      autoMode: "aggressive",
+      autoGate: {
+        enabled: false,
+      },
+    },
+  });
+
+  assert.equal(result.stageBefore, "experiment");
+  assert.ok(
+    result.materializedArtifacts.some(
+      (entry) => entry.artifactPath === "researcher/EXECUTION_PROOF.json"
+    )
+  );
+  const remoteRun = JSON.parse(
+    await fs.readFile(path.join(completedDir, "REMOTE_RUN.json"), "utf8")
+  );
+  assert.equal(remoteRun.experiment_id, "ledger-completed");
+  const repairedManifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  assert.equal(repairedManifest.experiment_search.status, "ready_for_analysis");
+  assert.equal(repairedManifest.execution_proof.status, "ready");
 });
 
 test("auto iterator hands experiment implementation repair back to coder when baseline fairness is not ready", async (t) => {

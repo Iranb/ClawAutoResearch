@@ -15,6 +15,11 @@ async function writeJson(targetPath, value) {
   await fs.writeFile(targetPath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
 }
 
+async function writeText(targetPath, value = "") {
+  await fs.mkdir(path.dirname(targetPath), { recursive: true });
+  await fs.writeFile(targetPath, value, "utf8");
+}
+
 test("local experiment execution materializer runs and reconciles a code bundle for analysis", async (t) => {
   const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-local-experiment-"));
   t.after(async () => {
@@ -354,4 +359,131 @@ test("local experiment execution repairs raw ready_for_analysis artifacts into e
   });
   assert.equal(proof.ready, true);
   assert.equal(proof.receipts[0].hasResultMetrics, true);
+});
+
+test("local experiment execution reconciles completed result summaries despite stale active ledger entries", async (t) => {
+  const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-local-experiment-stale-"));
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "local-exp-stale",
+    current_stage: "experiment",
+    topic: "Use frequency debiasing to improve GCD",
+    experiment_search: {
+      status: "launching",
+      track_id: "track-main",
+      incumbent_experiment_id: "ledger-completed",
+    },
+    research_program: {
+      status: "approved",
+      goal: "Improve generalized category discovery.",
+      primary_metric: "All ACC",
+      datasets: ["Cars"],
+      tracks: [
+        {
+          track_id: "track-main",
+          status: "active",
+          hypothesis: "Frequency debiasing improves generalized category discovery.",
+          novelty_basis: "Frequency-aware pseudo-label debiasing.",
+          main_metric: "All ACC",
+        },
+      ],
+      plan_selection: {
+        selected_track_id: "track-main",
+      },
+    },
+  });
+
+  const staleDir = path.join(
+    projectRoot,
+    "coder",
+    "experiments",
+    "track-main",
+    "aaa_stale_running"
+  );
+  await writeText(path.join(staleDir, "train.py"), "print('stale')\n");
+  await writeText(path.join(staleDir, "README.md"), "# stale\n");
+  await writeJson(path.join(staleDir, "EXPERIMENT_MANIFEST.json"), {
+    experiment_id: "stale-running",
+    track_id: "track-main",
+    status: "running",
+  });
+
+  const completedRelativeDir = "coder/experiments/track-main/zzz_completed";
+  const completedDir = path.join(projectRoot, completedRelativeDir);
+  await writeText(path.join(completedDir, "train.py"), "print('completed')\n");
+  await writeText(path.join(completedDir, "README.md"), "# completed\n");
+  await writeJson(path.join(completedDir, "EXPERIMENT_MANIFEST.json"), {
+    experiment_id: "bundle-completed",
+    track_id: "track-main",
+    status: "completed",
+    hypothesis: "Frequency debiasing improves generalized category discovery.",
+    implementation_proof: {
+      execution_command: "python train.py --seed 42",
+    },
+  });
+  await writeJson(path.join(completedDir, "RESULT_SUMMARY.json"), {
+    experiment_id: "bundle-completed",
+    status: "completed",
+    primary_metric: {
+      name: "All ACC",
+      value: 54.34,
+      unit: "%",
+    },
+    key_metrics: {
+      simGCD_paper: 53.4,
+    },
+    verdict: "PASS - completed against SimGCD baseline (53.4%).",
+  });
+  await writeJson(path.join(projectRoot, "researcher", "EXPERIMENT_LEDGER.json"), {
+    schema_version: 1,
+    project_id: "local-exp-stale",
+    experiments: [
+      {
+        experiment_id: "stale-running",
+        track_id: "track-main",
+        status: "running",
+      },
+      {
+        experiment_id: "ledger-completed",
+        track_id: "track-main",
+        status: "completed",
+        config_ref: `${completedRelativeDir}/EXPERIMENT_MANIFEST.json`,
+        key_metric: {
+          name: "All ACC",
+          value: 54.34,
+        },
+      },
+    ],
+  });
+
+  const result = await materializeLocalExperimentExecutionImpl({
+    projectRoot,
+    trigger: "test-stale-reconcile",
+    agentId: "researcher",
+  });
+
+  assert.equal(result.experimentId, "ledger-completed");
+  assert.equal(result.bundleDir, completedRelativeDir);
+  assert.ok(result.generatedFiles.includes(`${completedRelativeDir}/REMOTE_RUN.json`));
+  assert.ok(result.generatedFiles.includes("researcher/EXECUTION_PROOF.json"));
+
+  const remoteRun = JSON.parse(
+    await fs.readFile(path.join(completedDir, "REMOTE_RUN.json"), "utf8")
+  );
+  assert.equal(remoteRun.experiment_id, "ledger-completed");
+  assert.equal(remoteRun.key_metric.name, "All ACC");
+  assert.equal(remoteRun.key_metric.delta, 0.94);
+
+  const proof = await collectExecutionProofReceipts({
+    projectRoot,
+    manifest: JSON.parse(await fs.readFile(path.join(projectRoot, "PROJECT_MANIFEST.json"), "utf8")),
+    experimentLedger: JSON.parse(
+      await fs.readFile(path.join(projectRoot, "researcher", "EXPERIMENT_LEDGER.json"), "utf8")
+    ),
+  });
+  assert.equal(proof.ready, true);
+  assert.equal(proof.receipts[0].ledgerMatched, true);
 });
