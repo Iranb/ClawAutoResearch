@@ -13,6 +13,17 @@ function asRecord(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
+function normalizeArtifactRef(value: string | null | undefined): string | null {
+  const trimmed = typeof value === "string" ? value.trim() : "";
+  if (!trimmed) {
+    return null;
+  }
+  return trimmed
+    .replaceAll("\\", "/")
+    .replace(/^\.\//u, "")
+    .replace(/\/+$/u, "");
+}
+
 async function findFilesByName(rootDir: string, fileName: string): Promise<string[]> {
   const entries = await fs.readdir(rootDir, { withFileTypes: true }).catch(() => []);
   const results: string[] = [];
@@ -109,7 +120,20 @@ export async function collectExecutionProofReceipts(params: {
       (await readJsonIfExists<Record<string, unknown>>(resultSummaryPath)) ?? null;
     const terminal =
       (await readJsonIfExists<Record<string, unknown>>(terminalPath)) ?? null;
-    const ledgerEntry = ledgerByExperimentId.get(experimentId) ?? null;
+    const runRelativeDir = normalizeArtifactRef(path.relative(params.projectRoot, runDir));
+    const manifestRelativePath = normalizeArtifactRef(path.relative(params.projectRoot, manifestPath));
+    const ledgerEntry =
+      ledgerByExperimentId.get(experimentId) ??
+      ledgerExperiments.find((entry) => {
+        const configRef = normalizeArtifactRef(
+          readString(entry.config_ref) ?? readString(entry.configRef)
+        );
+        return Boolean(
+          configRef &&
+            (configRef === runRelativeDir || configRef === manifestRelativePath)
+        );
+      }) ??
+      null;
     const ledgerMetadata = asRecord(ledgerEntry?.metadata) ?? {};
     const ledgerExecution = asRecord(
       ledgerMetadata.execution ?? ledgerMetadata.execution_proof
@@ -122,7 +146,11 @@ export async function collectExecutionProofReceipts(params: {
     const hasResultMetrics =
       resultSummary?.metrics != null ||
       resultSummary?.key_metric != null ||
-      resultSummary?.keyMetric != null;
+      resultSummary?.keyMetric != null ||
+      resultSummary?.primary_metric != null ||
+      resultSummary?.primaryMetric != null ||
+      resultSummary?.key_metrics != null ||
+      resultSummary?.keyMetrics != null;
     const hasLedgerResultPaths = Array.isArray(ledgerEntry?.result_paths)
       ? (ledgerEntry?.result_paths as unknown[]).length > 0
       : Array.isArray(ledgerEntry?.resultPaths)

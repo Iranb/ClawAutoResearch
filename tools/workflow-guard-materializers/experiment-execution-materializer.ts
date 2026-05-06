@@ -52,6 +52,15 @@ const DEFAULT_PLOT_PACK_PATH = "researcher/plot_pack.json";
 const DEFAULT_STAGE_PROGRESS_PATH = "researcher/EXPERIMENT_STAGE_PROGRESS.json";
 const DEFAULT_KARPATHY_LOOP_PATH = "researcher/KARPATHY_EXPERIMENT_LOOP.json";
 
+type ExperimentBundle = {
+  bundleDir: string;
+  bundleRelativeDir: string;
+  manifestPath: string;
+  trainPath: string;
+  readmePath: string;
+  manifest: Record<string, unknown>;
+};
+
 function nowIso(): string {
   return new Date().toISOString();
 }
@@ -72,15 +81,75 @@ function readMetric(record: Record<string, unknown> | null, key: string): number
   return pickNumber(record ?? {}, [key]);
 }
 
+function readMetricByKeys(
+  record: Record<string, unknown> | null,
+  keys: string[]
+): number | null {
+  return pickNumber(record ?? {}, keys);
+}
+
+function readPrimaryMetricValue(resultSummary: Record<string, unknown>): number | null {
+  const primaryMetric =
+    asRecord(resultSummary.primary_metric) ??
+    asRecord(resultSummary.primaryMetric) ??
+    asRecord(resultSummary.key_metric) ??
+    asRecord(resultSummary.keyMetric);
+  return pickNumber(primaryMetric ?? {}, ["value"]);
+}
+
+function readBaselineMetricFromVerdict(resultSummary: Record<string, unknown>): number | null {
+  const verdict = pickString(resultSummary, ["verdict", "summary"]);
+  const match = verdict?.match(/\bbaseline\b[^0-9]{0,40}([0-9]+(?:\.[0-9]+)?)/iu);
+  if (!match) {
+    return null;
+  }
+  const parsed = Number(match[1]);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
 function deriveMetrics(resultSummary: Record<string, unknown>): Record<string, number> {
   const proposed = asRecord(resultSummary.proposed) ?? {};
   const baseline = asRecord(resultSummary.baseline) ?? {};
-  const hScore = readMetric(proposed, "h_score") ?? readMetric(resultSummary, "h_score") ?? 0;
-  const baselineHScore = readMetric(baseline, "h_score") ?? 0;
+  const metricsRecord = asRecord(resultSummary.metrics) ?? {};
+  const keyMetrics = asRecord(resultSummary.key_metrics ?? resultSummary.keyMetrics) ?? {};
+  const hScore =
+    readMetricByKeys(proposed, ["h_score", "hScore", "all_acc", "allAcc", "All_ACC"]) ??
+    readMetricByKeys(resultSummary, ["h_score", "hScore", "all_acc", "allAcc", "All_ACC"]) ??
+    readPrimaryMetricValue(resultSummary) ??
+    readMetricByKeys(metricsRecord, ["h_score", "hScore", "all_acc", "allAcc", "All_ACC"]) ??
+    readMetricByKeys(keyMetrics, ["h_score", "hScore", "all_acc", "allAcc", "All_ACC"]) ??
+    0;
+  const baselineHScore =
+    readMetricByKeys(baseline, ["h_score", "hScore", "all_acc", "allAcc", "All_ACC"]) ??
+    readMetricByKeys(resultSummary, [
+      "baseline_h_score",
+      "baselineHScore",
+      "baseline_all_acc",
+      "baselineAllAcc",
+    ]) ??
+    readMetricByKeys(metricsRecord, [
+      "baseline_h_score",
+      "baselineHScore",
+      "baseline_all_acc",
+      "baselineAllAcc",
+    ]) ??
+    readMetricByKeys(keyMetrics, [
+      "baseline_h_score",
+      "baselineHScore",
+      "baseline_all_acc",
+      "baselineAllAcc",
+      "simGCD_paper",
+      "simgcd_paper",
+      "SimGCD_paper",
+    ]) ??
+    readBaselineMetricFromVerdict(resultSummary) ??
+    0;
   return {
     h_score: hScore,
-    known_accuracy: readMetric(proposed, "known_accuracy") ?? 0,
-    novel_accuracy: readMetric(proposed, "novel_accuracy") ?? 0,
+    known_accuracy:
+      readMetricByKeys(proposed, ["known_accuracy", "knownAccuracy", "old_acc", "oldAcc"]) ?? 0,
+    novel_accuracy:
+      readMetricByKeys(proposed, ["novel_accuracy", "novelAccuracy", "new_acc", "newAcc"]) ?? 0,
     baseline_h_score: baselineHScore,
     delta_h_score: Number((hScore - baselineHScore).toFixed(4)),
   };
@@ -170,6 +239,8 @@ function buildLocalReferenceFallbackResultSummary(params: {
     minus_class_balance_debiasing_h_score: 0.6482,
     minus_consistency_filtering_h_score: 0.6347,
   };
+  const primaryMetricName = "h_score";
+  const primaryMetricValue = metrics.h_score;
   return {
     run_id: params.runId,
     experiment_id: params.experimentId,
@@ -205,8 +276,8 @@ function buildLocalReferenceFallbackResultSummary(params: {
     },
     metrics,
     key_metric: {
-      name: "h_score",
-      value: metrics.h_score,
+      name: primaryMetricName,
+      value: primaryMetricValue,
       baseline: metrics.baseline_h_score,
       delta: metrics.delta_h_score,
       direction: "higher_is_better",
@@ -229,24 +300,10 @@ async function hasReconciledExecutionProof(projectRoot: string): Promise<boolean
   );
 }
 
-async function findExperimentBundles(projectRoot: string): Promise<Array<{
-  bundleDir: string;
-  bundleRelativeDir: string;
-  manifestPath: string;
-  trainPath: string;
-  readmePath: string;
-  manifest: Record<string, unknown>;
-}>> {
+async function findExperimentBundles(projectRoot: string): Promise<ExperimentBundle[]> {
   const coderRoot = path.join(projectRoot, "coder");
   const queue: Array<{ dir: string; depth: number }> = [{ dir: coderRoot, depth: 0 }];
-  const bundles: Array<{
-    bundleDir: string;
-    bundleRelativeDir: string;
-    manifestPath: string;
-    trainPath: string;
-    readmePath: string;
-    manifest: Record<string, unknown>;
-  }> = [];
+  const bundles: ExperimentBundle[] = [];
 
   while (queue.length > 0) {
     const current = queue.shift();
@@ -300,6 +357,97 @@ async function exists(targetPath: string): Promise<boolean> {
     }
     throw error;
   }
+}
+
+function normalizeArtifactRef(value: string | null | undefined): string | null {
+  const trimmed = typeof value === "string" ? value.trim() : "";
+  if (!trimmed) {
+    return null;
+  }
+  return trimmed
+    .replaceAll("\\", "/")
+    .replace(/^\.\//u, "")
+    .replace(/\/+$/u, "");
+}
+
+function bundleReferenceSet(bundle: ExperimentBundle): Set<string> {
+  return new Set(
+    [
+      bundle.bundleRelativeDir,
+      `${bundle.bundleRelativeDir}/EXPERIMENT_MANIFEST.json`,
+    ]
+      .map((entry) => normalizeArtifactRef(entry))
+      .filter((entry): entry is string => Boolean(entry))
+  );
+}
+
+function findLedgerEntryForBundle(params: {
+  ledger: ReturnType<typeof normalizeExperimentLedger>;
+  bundle: ExperimentBundle;
+}): ReturnType<typeof normalizeExperimentLedger>["experiments"][number] | null {
+  const manifestExperimentId = pickString(params.bundle.manifest, [
+    "experiment_id",
+    "experimentId",
+  ]);
+  const bundleRefs = bundleReferenceSet(params.bundle);
+  return (
+    params.ledger.experiments.find((entry) => {
+      if (manifestExperimentId && entry.experimentId === manifestExperimentId) {
+        return true;
+      }
+      const configRef = normalizeArtifactRef(entry.configRef);
+      return Boolean(configRef && bundleRefs.has(configRef));
+    }) ?? null
+  );
+}
+
+async function selectExperimentBundleForExecution(params: {
+  bundles: ExperimentBundle[];
+  ledger: ReturnType<typeof normalizeExperimentLedger>;
+  searchState: ReturnType<typeof normalizeExperimentSearchState>;
+}): Promise<{
+  bundle: ExperimentBundle | null;
+  hasResultSummary: boolean;
+  ledgerEntry: ReturnType<typeof normalizeExperimentLedger>["experiments"][number] | null;
+}> {
+  let best: {
+    bundle: ExperimentBundle;
+    hasResultSummary: boolean;
+    ledgerEntry: ReturnType<typeof normalizeExperimentLedger>["experiments"][number] | null;
+    score: number;
+  } | null = null;
+  const preferredIds = uniqueStrings([
+    params.searchState.incumbentExperimentId,
+    params.searchState.lastCandidateExperimentId,
+    params.ledger.summary.lastCompletedExperimentId,
+  ].filter((entry): entry is string => Boolean(entry)));
+  const bestKnownConfigRef = normalizeArtifactRef(params.ledger.summary.bestKnownConfigRef);
+
+  for (const bundle of params.bundles) {
+    const manifestExperimentId = pickString(bundle.manifest, [
+      "experiment_id",
+      "experimentId",
+    ]);
+    const trackId = pickString(bundle.manifest, ["track_id", "trackId"]);
+    const status = normalizeStage(bundle.manifest.status);
+    const hasResultSummary = await exists(path.join(bundle.bundleDir, "RESULT_SUMMARY.json"));
+    const ledgerEntry = findLedgerEntryForBundle({ ledger: params.ledger, bundle });
+    const bundleRefs = bundleReferenceSet(bundle);
+    let score = 0;
+    if (hasResultSummary) score += 1_000;
+    if (status && isTerminalExperimentStatus(status)) score += 120;
+    if (status && !isTerminalExperimentStatus(status)) score += 160;
+    if (params.searchState.trackId && trackId === params.searchState.trackId) score += 220;
+    if (manifestExperimentId && preferredIds.includes(manifestExperimentId)) score += 80;
+    if (ledgerEntry && preferredIds.includes(ledgerEntry.experimentId)) score += 120;
+    if (ledgerEntry && isTerminalExperimentStatus(ledgerEntry.status)) score += 80;
+    if (bestKnownConfigRef && bundleRefs.has(bestKnownConfigRef)) score += 80;
+    if (!best || score > best.score) {
+      best = { bundle, hasResultSummary, ledgerEntry, score };
+    }
+  }
+
+  return best ?? { bundle: null, hasResultSummary: false, ledgerEntry: null };
 }
 
 async function runBundleTrainScript(params: {
@@ -442,8 +590,14 @@ export async function materializeLocalExperimentExecutionImpl(params: {
   const hasTerminalExperiment = ledger.experiments.some((entry) =>
     isTerminalExperimentStatus(entry.status)
   );
+  const bundles = await findExperimentBundles(projectRoot);
+  const selected = await selectExperimentBundleForExecution({
+    bundles,
+    ledger,
+    searchState,
+  });
   if (
-    hasBlockingActiveExperiment ||
+    (hasBlockingActiveExperiment && !selected.hasResultSummary) ||
     (hasTerminalExperiment && (await hasReconciledExecutionProof(projectRoot)))
   ) {
     return {
@@ -454,8 +608,7 @@ export async function materializeLocalExperimentExecutionImpl(params: {
     };
   }
 
-  const bundles = await findExperimentBundles(projectRoot);
-  const bundle = bundles[0] ?? null;
+  const bundle = selected.bundle;
   if (!bundle) {
     return {
       generatedFiles: [],
@@ -468,7 +621,8 @@ export async function materializeLocalExperimentExecutionImpl(params: {
   const generatedFiles: string[] = [];
   const now = nowIso();
   const experimentId = safeSegment(
-    pickString(bundle.manifest, ["experiment_id", "experimentId"]),
+    selected.ledgerEntry?.experimentId ??
+      pickString(bundle.manifest, ["experiment_id", "experimentId"]),
     "exp-1"
   );
   const trackId = pickString(bundle.manifest, ["track_id", "trackId"]);
@@ -523,6 +677,13 @@ export async function materializeLocalExperimentExecutionImpl(params: {
     (await readJsonIfExists<Record<string, unknown>>(resultSummaryPath)) ??
     buildLocalReferenceFallbackResultSummary({ experimentId, runId, seed });
   const metrics = deriveMetrics(rawSummary);
+  const rawPrimaryMetric =
+    asRecord(rawSummary.primary_metric) ??
+    asRecord(rawSummary.primaryMetric) ??
+    asRecord(rawSummary.key_metric) ??
+    asRecord(rawSummary.keyMetric);
+  const primaryMetricName = pickString(rawPrimaryMetric ?? {}, ["name"]) ?? "h_score";
+  const primaryMetricValue = pickNumber(rawPrimaryMetric ?? {}, ["value"]) ?? metrics.h_score;
   const lastTrialOutcome = metrics.delta_h_score >= 0 ? "keep" : "discard";
   const measuredTrialDurationMinutes =
     deriveMeasuredTrialDurationMinutes({
@@ -583,8 +744,10 @@ export async function materializeLocalExperimentExecutionImpl(params: {
     seed,
     metrics,
     key_metric: {
-      name: "h_score",
-      value: metrics.h_score,
+      name: primaryMetricName,
+      value: primaryMetricValue,
+      baseline: metrics.baseline_h_score,
+      delta: metrics.delta_h_score,
       direction: "higher_is_better",
     },
     karpathy_inner_loop: {
@@ -800,8 +963,8 @@ export async function materializeLocalExperimentExecutionImpl(params: {
     result_paths: resultPaths,
     metrics,
     key_metric: {
-      name: "h_score",
-      value: metrics.h_score,
+      name: primaryMetricName,
+      value: primaryMetricValue,
       baseline: metrics.baseline_h_score,
       delta: metrics.delta_h_score,
       direction: "higher_is_better",
@@ -850,8 +1013,8 @@ export async function materializeLocalExperimentExecutionImpl(params: {
       last_updated_by: params.agentId ?? "workflow_local_experiment_materializer",
       decision: metrics.delta_h_score >= 0 ? "advance" : "needs_repair",
       key_metric: {
-        name: "h_score",
-        value: metrics.h_score,
+        name: primaryMetricName,
+        value: primaryMetricValue,
         baseline: metrics.baseline_h_score,
         delta: metrics.delta_h_score,
         direction: "higher_is_better",
@@ -999,31 +1162,36 @@ export async function materializeLocalExperimentExecutionImpl(params: {
     papernexus_sync_status: "not_required",
     papernexus_sync_required: false,
   };
-  manifest.benchmark_protocol = {
-    ...(asRecord(manifest.benchmark_protocol) ?? {}),
-    status: "ready",
-    locked: true,
-    drift_status: "pass",
-    fair_compare_status: "pass",
-    allowed_deviation_status: "ok",
-    source: "local_no_discord_experiment_materializer",
-    last_updated_at: now,
-  };
-  manifest.statistical_evidence = {
-    ...(asRecord(manifest.statistical_evidence) ?? {}),
-    status: "ready",
-    claim_strength_status: "local_reference",
-    summary:
-      "Local deterministic reference benchmark completed; claims should stay bounded to this evidence envelope until external benchmarks are added.",
-    last_updated_at: now,
-  };
-  manifest.ablation_evidence = {
-    ...(asRecord(manifest.ablation_evidence) ?? {}),
-    status: "ready",
-    sufficiency_status: "local_reference_complete",
-    completed_ablations: completedAblations,
-    last_updated_at: now,
-  };
+  const isTopTierBet =
+    normalizeStage(pickString(asRecord(manifest.opportunity_scorecard) ?? {}, ["verdict"])) ===
+    "worth_top_tier_bet";
+  if (!isTopTierBet) {
+    manifest.benchmark_protocol = {
+      ...(asRecord(manifest.benchmark_protocol) ?? {}),
+      status: "ready",
+      locked: true,
+      drift_status: "pass",
+      fair_compare_status: "pass",
+      allowed_deviation_status: "ok",
+      source: "local_no_discord_experiment_materializer",
+      last_updated_at: now,
+    };
+    manifest.statistical_evidence = {
+      ...(asRecord(manifest.statistical_evidence) ?? {}),
+      status: "ready",
+      claim_strength_status: "local_reference",
+      summary:
+        "Local deterministic reference benchmark completed; claims should stay bounded to this evidence envelope until external benchmarks are added.",
+      last_updated_at: now,
+    };
+    manifest.ablation_evidence = {
+      ...(asRecord(manifest.ablation_evidence) ?? {}),
+      status: "ready",
+      sufficiency_status: "local_reference_complete",
+      completed_ablations: completedAblations,
+      last_updated_at: now,
+    };
+  }
   manifest.updated_at = now;
   await writeJsonEnsured(manifestPath, manifest);
   generatedFiles.push("PROJECT_MANIFEST.json");

@@ -21,6 +21,7 @@ import {
   hasBlockingReviewIssues,
   hasUnwaivedMediumOrHigherReviewIssues,
 } from "../workflow-guard-writing/paper-quality-eval";
+import { isWorkflowRuntimeTrackingMissError } from "../workflow-background-run-reconcile.js";
 
 export const DEFAULT_REVISION_CONTROL_PACKET_JSON_PATH =
   "reviewer/REVISION_CONTROL_PACKET.json";
@@ -124,6 +125,12 @@ async function isResolvedBuiltinAutoModeRiskSource(params: {
     return false;
   }
   const summary = params.source.summary ?? "";
+  if (
+    isWorkflowRuntimeTrackingMissError(summary) &&
+    params.source.artifactPaths.length === 0
+  ) {
+    return true;
+  }
   if (/results_storyline\.status/i.test(summary)) {
     return readRecord(params.manifest.results_storyline)?.status === "ready";
   }

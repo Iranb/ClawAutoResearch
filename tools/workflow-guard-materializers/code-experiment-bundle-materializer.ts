@@ -66,6 +66,91 @@ function normalizeContractText(value: string | null | undefined): string | null 
   return normalized.length > 0 ? normalized : null;
 }
 
+function listStructuredAlignmentStrings(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.flatMap((entry) => {
+    if (typeof entry === "string" && entry.trim()) {
+      return [entry.trim()];
+    }
+    const record = asRecord(entry);
+    if (!record) {
+      return [];
+    }
+    const primary =
+      pickString(record, [
+        "id",
+        "step_id",
+        "ablation_id",
+        "title",
+        "label",
+        "objective",
+        "summary",
+      ]) ?? null;
+    const coversSource =
+      record.covers ??
+      record.cover ??
+      record.innovation_point ??
+      record.innovationPoint ??
+      record.innovation_point_id ??
+      record.innovationPointId ??
+      record.targets;
+    const covers = Array.isArray(coversSource)
+      ? coversSource.flatMap((item) =>
+          typeof item === "string" && item.trim() ? [item.trim()] : []
+        )
+      : typeof coversSource === "string" && coversSource.trim()
+        ? [coversSource.trim()]
+        : [];
+    return [primary, ...covers].filter((item): item is string => Boolean(item));
+  });
+}
+
+function listImplementationProofStrings(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.flatMap((entry) => {
+    if (typeof entry === "string" && entry.trim()) {
+      return [entry.trim()];
+    }
+    const record = asRecord(entry);
+    if (!record) {
+      return [];
+    }
+    const primary =
+      pickString(record, [
+        "id",
+        "point_id",
+        "step_id",
+        "hook",
+        "symbol",
+        "path",
+        "file",
+        "entry_point",
+        "objective",
+        "summary",
+      ]) ?? null;
+    const coversSource =
+      record.covers ??
+      record.cover ??
+      record.innovation_point ??
+      record.innovationPoint ??
+      record.innovation_point_id ??
+      record.innovationPointId ??
+      record.targets;
+    const covers = Array.isArray(coversSource)
+      ? coversSource.flatMap((item) =>
+          typeof item === "string" && item.trim() ? [item.trim()] : []
+        )
+      : typeof coversSource === "string" && coversSource.trim()
+        ? [coversSource.trim()]
+        : [];
+    return [primary, ...covers].filter((item): item is string => Boolean(item));
+  });
+}
+
 function inferTopic(params: {
   manifest: ManifestLike;
   researchProgram: ResearchProgramState;
@@ -96,6 +181,22 @@ function selectActiveTrack(
     }
   }
   return activeTracks[0] ?? null;
+}
+
+function selectActiveTracksForMaterialization(
+  state: ResearchProgramState
+): ResearchProgramTrack[] {
+  const selectedTrack = selectActiveTrack(state);
+  const activeTracks = state.tracks.filter(
+    (track) => normalizeStage(track.status) === "active"
+  );
+  if (!selectedTrack) {
+    return activeTracks;
+  }
+  return [
+    selectedTrack,
+    ...activeTracks.filter((track) => track.trackId !== selectedTrack.trackId),
+  ];
 }
 
 async function pathExists(filePath: string): Promise<boolean> {
@@ -195,6 +296,145 @@ function isAlignedToTrackContract(params: {
   );
 }
 
+function bundleTextReferencesTrack(params: {
+  bundleManifest: Record<string, unknown>;
+  track: ResearchProgramTrack;
+}): boolean {
+  const text = normalizeContractText(
+    [
+      pickString(params.bundleManifest, ["question", "experiment_question", "objective"]),
+      pickString(params.bundleManifest, ["hypothesis", "track_hypothesis", "trackHypothesis"]),
+      pickString(params.bundleManifest, ["novelty_basis", "noveltyBasis"]),
+      pickString(params.bundleManifest, ["name", "title"]),
+    ]
+      .filter((item): item is string => Boolean(item))
+      .join(" ")
+  );
+  if (!text) {
+    return false;
+  }
+  const trackToken = normalizeContractText(params.track.trackId);
+  const expectedHypothesis = normalizeContractText(params.track.hypothesis);
+  const expectedNoveltyBasis = normalizeContractText(params.track.noveltyBasis);
+  return Boolean(
+    (trackToken && text.includes(trackToken)) ||
+      (expectedHypothesis && text.includes(expectedHypothesis)) ||
+      (expectedNoveltyBasis && text.includes(expectedNoveltyBasis))
+  );
+}
+
+function bundleTextHasTrackMarker(params: {
+  bundleManifest: Record<string, unknown>;
+  track: ResearchProgramTrack;
+}): boolean {
+  const text = normalizeContractText(
+    [
+      pickString(params.bundleManifest, ["question", "experiment_question", "objective"]),
+      pickString(params.bundleManifest, ["hypothesis", "track_hypothesis", "trackHypothesis"]),
+      pickString(params.bundleManifest, ["novelty_basis", "noveltyBasis"]),
+      pickString(params.bundleManifest, ["name", "title"]),
+    ]
+      .filter((item): item is string => Boolean(item))
+      .join(" ")
+  );
+  const trackToken = normalizeContractText(params.track.trackId);
+  return Boolean(trackToken && text?.includes(trackToken));
+}
+
+function implementationProofNeedsRepair(record: Record<string, unknown>): boolean {
+  const innovationPoints = listStructuredAlignmentStrings(
+    record.innovation_points ?? record.innovationPoints
+  );
+  const implementationProof =
+    asRecord(record.implementation_proof ?? record.implementationProof) ?? {};
+  const rawChangedFiles =
+    implementationProof.changed_files ?? implementationProof.changedFiles;
+  const changedFiles = Array.isArray(rawChangedFiles)
+    ? rawChangedFiles.flatMap((item: unknown) =>
+        typeof item === "string" && item.trim() ? [item.trim()] : []
+      )
+    : [];
+  const integrationPoints = listImplementationProofStrings(
+    implementationProof.integration_points ?? implementationProof.integrationPoints
+  );
+  const activationSignals = listImplementationProofStrings(
+    implementationProof.activation_signals ?? implementationProof.activationSignals
+  );
+  const executionCommand =
+    pickString(implementationProof, [
+      "execution_command",
+      "executionCommand",
+      "run_command",
+      "runCommand",
+    ]) ?? null;
+  if (
+    changedFiles.length === 0 ||
+    integrationPoints.length === 0 ||
+    activationSignals.length === 0 ||
+    !executionCommand
+  ) {
+    return true;
+  }
+
+  const implementationCoverage = normalizeContractText(
+    [...integrationPoints, ...changedFiles, executionCommand].join(" ")
+  );
+  return innovationPoints.some((point) => {
+    const normalizedPoint = normalizeContractText(point);
+    return Boolean(
+      normalizedPoint &&
+        (!implementationCoverage || !implementationCoverage.includes(normalizedPoint))
+    );
+  });
+}
+
+function validationCoverageNeedsRepair(record: Record<string, unknown>): boolean {
+  const innovationPoints = listStructuredAlignmentStrings(
+    record.innovation_points ?? record.innovationPoints
+  );
+  if (innovationPoints.length === 0) {
+    return false;
+  }
+  const validationSteps = listStructuredAlignmentStrings(
+    record.validation_steps ?? record.validationSteps
+  );
+  const ablationPlan = listStructuredAlignmentStrings(
+    record.ablation_plan ?? record.ablationPlan
+  );
+  const coverageText = normalizeContractText([...validationSteps, ...ablationPlan].join(" "));
+  return innovationPoints.some((point) => {
+    const normalizedPoint = normalizeContractText(point);
+    return Boolean(normalizedPoint && (!coverageText || !coverageText.includes(normalizedPoint)));
+  });
+}
+
+function isRecoverableActiveTrackBundle(params: {
+  bundleManifest: Record<string, unknown> | null;
+  track: ResearchProgramTrack;
+}): boolean {
+  if (!params.bundleManifest) {
+    return false;
+  }
+  const trackId = pickString(params.bundleManifest, ["track_id", "trackId"]);
+  if (trackId !== params.track.trackId) {
+    return false;
+  }
+  if (!bundleTextReferencesTrack({ bundleManifest: params.bundleManifest, track: params.track })) {
+    return false;
+  }
+  if (!isAlignedToTrackContract({ bundleManifest: params.bundleManifest, track: params.track })) {
+    return true;
+  }
+  return (
+    bundleTextHasTrackMarker({
+      bundleManifest: params.bundleManifest,
+      track: params.track,
+    }) &&
+      (implementationProofNeedsRepair(params.bundleManifest) ||
+        validationCoverageNeedsRepair(params.bundleManifest))
+  );
+}
+
 function isRepairableStaleContract(params: {
   bundleManifest: Record<string, unknown> | null;
   track: ResearchProgramTrack;
@@ -254,7 +494,25 @@ function selectRepairableBundles(params: {
       track: params.track,
       registryTrack: params.registryTrack,
       manifest: params.manifest,
+    }) ||
+    isRecoverableActiveTrackBundle({
+      bundleManifest: bundle.manifest,
+      track: params.track,
     })
+  );
+}
+
+function isCompleteAlignedCodeBundle(
+  bundle: ExistingCodeBundle,
+  track: ResearchProgramTrack
+): boolean {
+  return (
+    bundle.hasTrain &&
+    bundle.hasReadme &&
+    bundle.hasProtocol &&
+    bundle.hasDataset &&
+    !bundle.legacyLocalProxy &&
+    isAlignedToTrackContract({ bundleManifest: bundle.manifest, track })
   );
 }
 
@@ -264,8 +522,11 @@ export async function shouldMaterializeCodeExperimentBundleImpl(params: {
 }): Promise<boolean> {
   const projectRoot = path.resolve(params.projectRoot);
   const researchProgram = normalizeResearchProgramState(params.manifest.research_program);
-  const track = selectActiveTrack(researchProgram);
-  if (!track || !isSafePathSegment(track.trackId)) {
+  const tracks = selectActiveTracksForMaterialization(researchProgram).filter((track) =>
+    isSafePathSegment(track.trackId)
+  );
+  const track = tracks[0] ?? null;
+  if (!track) {
     return false;
   }
   const indexPath = path.join(projectRoot, CODE_EXPERIMENT_ARTIFACTS.index);
@@ -289,16 +550,20 @@ export async function shouldMaterializeCodeExperimentBundleImpl(params: {
   if (repairableBundles.length > 0) {
     return true;
   }
+  for (const additionalTrack of tracks.slice(1)) {
+    const additionalBundles = await listExistingCodeBundles(projectRoot, additionalTrack.trackId);
+    const additionalRepairableBundles = selectRepairableBundles({
+      bundles: additionalBundles,
+      track: additionalTrack,
+      registryTrack: getRegistryTrack(trackRegistry, additionalTrack.trackId),
+      manifest: params.manifest,
+    });
+    if (additionalRepairableBundles.length > 0) {
+      return true;
+    }
+  }
   if (
-    bundles.some(
-      (bundle) =>
-        bundle.hasTrain &&
-        bundle.hasReadme &&
-        bundle.hasProtocol &&
-        bundle.hasDataset &&
-        !bundle.legacyLocalProxy &&
-        isAlignedToTrackContract({ bundleManifest: bundle.manifest, track })
-    )
+    bundles.some((bundle) => isCompleteAlignedCodeBundle(bundle, track))
   ) {
     return false;
   }
@@ -440,6 +705,147 @@ function buildExperimentManifest(params: {
     },
     entry_point: "train.py",
     expected_outputs: ["RESULT_SUMMARY.json"],
+  };
+}
+
+function appendMissingProofCoverage(params: {
+  proof: Record<string, unknown>;
+  manifest: Record<string, unknown>;
+  bundleRelativeDir: string;
+  defaultProof: Record<string, unknown>;
+}): Record<string, unknown> {
+  const innovationPoints = listStructuredAlignmentStrings(
+    params.manifest.innovation_points ?? params.manifest.innovationPoints
+  );
+  const defaultChangedFiles = Array.isArray(params.defaultProof.changed_files)
+    ? params.defaultProof.changed_files.flatMap((item) =>
+        typeof item === "string" && item.trim() ? [item.trim()] : []
+      )
+    : [];
+  const rawChangedFiles = params.proof.changed_files ?? params.proof.changedFiles;
+  const changedFiles = uniqueStrings([
+    ...(Array.isArray(rawChangedFiles)
+      ? rawChangedFiles.flatMap((item) =>
+          typeof item === "string" && item.trim() ? [item.trim()] : []
+        )
+      : []),
+    ...defaultChangedFiles,
+    `${params.bundleRelativeDir}/${CODE_EXPERIMENT_ARTIFACTS.train}`,
+    `${params.bundleRelativeDir}/${CODE_EXPERIMENT_ARTIFACTS.readme}`,
+    `${params.bundleRelativeDir}/${CODE_EXPERIMENT_ARTIFACTS.manifest}`,
+  ]);
+
+  const integrationPoints = Array.isArray(params.proof.integration_points)
+    ? [...params.proof.integration_points]
+    : Array.isArray(params.proof.integrationPoints)
+      ? [...params.proof.integrationPoints]
+      : [];
+  const activationSignals = Array.isArray(params.proof.activation_signals)
+    ? [...params.proof.activation_signals]
+    : Array.isArray(params.proof.activationSignals)
+      ? [...params.proof.activationSignals]
+      : [];
+  const executionCommand =
+    pickString(params.proof, [
+      "execution_command",
+      "executionCommand",
+      "run_command",
+      "runCommand",
+    ]) ??
+    pickString(params.defaultProof, [
+      "execution_command",
+      "executionCommand",
+      "run_command",
+      "runCommand",
+    ]) ??
+    `python ${params.bundleRelativeDir}/${CODE_EXPERIMENT_ARTIFACTS.train} --seed 42`;
+
+  const coveredByIntegration = normalizeContractText(
+    listImplementationProofStrings(integrationPoints).join(" ")
+  );
+  const coveredByActivation = normalizeContractText(
+    listImplementationProofStrings(activationSignals).join(" ")
+  );
+  for (const [index, point] of innovationPoints.entries()) {
+    const normalizedPoint = normalizeContractText(point);
+    if (!normalizedPoint) {
+      continue;
+    }
+    if (!coveredByIntegration?.includes(normalizedPoint)) {
+      integrationPoints.push({
+        point_id: `repaired-integration-${index + 1}`,
+        path: `${params.bundleRelativeDir}/${CODE_EXPERIMENT_ARTIFACTS.train}`,
+        summary: `The active code-stage bundle wires ${point} into the experiment runner and manifest contract.`,
+        covers: [point],
+      });
+    }
+    if (!coveredByActivation?.includes(normalizedPoint)) {
+      activationSignals.push({
+        point_id: `repaired-activation-${index + 1}`,
+        summary: `Execution logs or RESULT_SUMMARY.json must show ${point} was activated for this bundle.`,
+        covers: [point],
+      });
+    }
+  }
+
+  return {
+    ...params.proof,
+    changed_files: changedFiles,
+    integration_points: integrationPoints,
+    activation_signals: activationSignals,
+    execution_command: executionCommand,
+  };
+}
+
+function appendMissingValidationCoverage(
+  manifest: Record<string, unknown>
+): Record<string, unknown> {
+  const innovationPoints = listStructuredAlignmentStrings(
+    manifest.innovation_points ?? manifest.innovationPoints
+  );
+  if (innovationPoints.length === 0) {
+    return manifest;
+  }
+  const validationSteps = Array.isArray(manifest.validation_steps)
+    ? [...manifest.validation_steps]
+    : Array.isArray(manifest.validationSteps)
+      ? [...manifest.validationSteps]
+      : [];
+  const ablationPlan = Array.isArray(manifest.ablation_plan)
+    ? [...manifest.ablation_plan]
+    : Array.isArray(manifest.ablationPlan)
+      ? [...manifest.ablationPlan]
+      : [];
+  const coverageText = normalizeContractText(
+    [
+      ...listStructuredAlignmentStrings(validationSteps),
+      ...listStructuredAlignmentStrings(ablationPlan),
+    ].join(" ")
+  );
+  for (const [index, point] of innovationPoints.entries()) {
+    const normalizedPoint = normalizeContractText(point);
+    if (!normalizedPoint || coverageText?.includes(normalizedPoint)) {
+      continue;
+    }
+    validationSteps.push({
+      step_id: `repaired-validation-${index + 1}`,
+      objective: `Validate ${point} against the active track baseline and fixed evaluation protocol.`,
+      covers: [point],
+    });
+  }
+  if (ablationPlan.length === 0) {
+    for (const [index, point] of innovationPoints.entries()) {
+      ablationPlan.push({
+        ablation_id: `repaired-ablation-${index + 1}`,
+        objective: `Disable ${point} to isolate its contribution to the active track metric.`,
+        covers: [point],
+      });
+    }
+  }
+  return {
+    ...manifest,
+    validation_steps: validationSteps,
+    ablation_plan: ablationPlan,
   };
 }
 
@@ -784,6 +1190,120 @@ function buildExperimentIndex(params: {
 `;
 }
 
+async function repairExistingCodeBundleForTrack(params: {
+  projectRoot: string;
+  manifest: ManifestLike;
+  researchProgram: ResearchProgramState;
+  track: ResearchProgramTrack;
+  bundle: ExistingCodeBundle;
+  generatedFiles: string[];
+}): Promise<void> {
+  const topic = inferTopic({
+    manifest: params.manifest,
+    researchProgram: params.researchProgram,
+    track: params.track,
+  });
+  const experimentId =
+    pickString(params.bundle.manifest ?? {}, ["experiment_id", "experimentId"]) ?? "exp-1";
+  const defaultExperimentManifest = buildExperimentManifest({
+    projectRoot: params.projectRoot,
+    manifest: params.manifest,
+    researchProgram: params.researchProgram,
+    track: params.track,
+    experimentId,
+    bundleRelativeDir: params.bundle.relativeDir,
+    topic,
+  });
+  const repairedManifest: Record<string, unknown> = {
+    ...defaultExperimentManifest,
+    ...(params.bundle.manifest ?? {}),
+    experiment_id: experimentId,
+    project_id:
+      pickString(params.bundle.manifest ?? {}, ["project_id", "projectId"]) ??
+      pickString(defaultExperimentManifest, ["project_id", "projectId"]),
+    track_id: params.track.trackId,
+    question:
+      params.track.hypothesis ??
+      pickString(defaultExperimentManifest, ["question", "experiment_question"]),
+    hypothesis:
+      params.track.hypothesis ??
+      pickString(defaultExperimentManifest, ["hypothesis", "track_hypothesis"]),
+    novelty_basis:
+      params.track.noveltyBasis ??
+      pickString(defaultExperimentManifest, ["novelty_basis", "noveltyBasis"]),
+  };
+  repairedManifest.implementation_type =
+    pickString(defaultExperimentManifest, ["implementation_type", "implementationType"]) ??
+    "local_reference_gcd_benchmark";
+  repairedManifest.datasets = defaultExperimentManifest.datasets;
+  repairedManifest.reference_dataset = defaultExperimentManifest.reference_dataset;
+  repairedManifest.benchmark_protocol_path =
+    defaultExperimentManifest.benchmark_protocol_path;
+  repairedManifest.dataset_path = defaultExperimentManifest.dataset_path;
+  Object.assign(repairedManifest, appendMissingValidationCoverage(repairedManifest));
+  repairedManifest.implementation_proof = appendMissingProofCoverage({
+    proof:
+      asRecord(
+        params.bundle.manifest?.implementation_proof ??
+          params.bundle.manifest?.implementationProof
+      ) ??
+      (asRecord(defaultExperimentManifest.implementation_proof) ?? {}),
+    manifest: repairedManifest,
+    bundleRelativeDir: params.bundle.relativeDir,
+    defaultProof: asRecord(defaultExperimentManifest.implementation_proof) ?? {},
+  });
+  const status = pickString(params.bundle.manifest ?? {}, ["status"]);
+  if (status) {
+    repairedManifest.status = status;
+  }
+
+  if (params.bundle.legacyLocalProxy || !params.bundle.hasTrain) {
+    await writeTextEnsured(
+      path.join(params.bundle.dir, CODE_EXPERIMENT_ARTIFACTS.train),
+      buildTrainPy()
+    );
+    params.generatedFiles.push(`${params.bundle.relativeDir}/${CODE_EXPERIMENT_ARTIFACTS.train}`);
+  }
+  await writeJsonEnsured(
+    path.join(params.bundle.dir, CODE_EXPERIMENT_ARTIFACTS.protocol),
+    buildGcdProtocol({ topic, track: params.track, manifest: repairedManifest })
+  );
+  params.generatedFiles.push(`${params.bundle.relativeDir}/${CODE_EXPERIMENT_ARTIFACTS.protocol}`);
+  await writeTextEnsured(
+    path.join(params.bundle.dir, CODE_EXPERIMENT_ARTIFACTS.dataset),
+    buildGcdReferenceDatasetJsonl()
+  );
+  params.generatedFiles.push(`${params.bundle.relativeDir}/${CODE_EXPERIMENT_ARTIFACTS.dataset}`);
+  await writeJsonEnsured(params.bundle.manifestPath, repairedManifest);
+  params.generatedFiles.push(`${params.bundle.relativeDir}/${CODE_EXPERIMENT_ARTIFACTS.manifest}`);
+
+  const readme = await readTextIfExists(
+    path.join(params.bundle.dir, CODE_EXPERIMENT_ARTIFACTS.readme)
+  );
+  if (
+    !params.bundle.hasReadme ||
+    readme?.includes("local no-Discord implementation fallback") === true ||
+    isLegacyLocalProxyText(readme)
+  ) {
+    const executionCommand =
+      pickString(asRecord(repairedManifest.implementation_proof) ?? {}, [
+        "execution_command",
+      ]) ?? `python ${params.bundle.relativeDir}/train.py --seed 42`;
+    await writeTextEnsured(
+      path.join(params.bundle.dir, CODE_EXPERIMENT_ARTIFACTS.readme),
+      buildReadme({
+        topic,
+        track: params.track,
+        experimentId,
+        bundleRelativeDir: params.bundle.relativeDir,
+        command: executionCommand,
+        manifest: repairedManifest,
+      })
+    );
+    params.generatedFiles.push(`${params.bundle.relativeDir}/${CODE_EXPERIMENT_ARTIFACTS.readme}`);
+  }
+}
+
 export async function materializeCodeExperimentBundleImpl(params: {
   projectRoot: string;
   codeMaterialization?: Record<string, unknown>;
@@ -804,12 +1324,15 @@ export async function materializeCodeExperimentBundleImpl(params: {
       path.join(projectRoot, "TRACK_REGISTRY.json")
     )) ?? {};
   const researchProgram = normalizeResearchProgramState(manifest.research_program);
-  const track = selectActiveTrack(researchProgram);
-  if (!track || !isSafePathSegment(track.trackId)) {
+  const tracks = selectActiveTracksForMaterialization(researchProgram).filter((candidate) =>
+    isSafePathSegment(candidate.trackId)
+  );
+  const track = tracks[0] ?? null;
+  if (!track) {
     return {
       generatedFiles: [],
       experimentId: null,
-      trackId: track?.trackId ?? null,
+      trackId: null,
       bundleDir: null,
     };
   }
@@ -828,8 +1351,11 @@ export async function materializeCodeExperimentBundleImpl(params: {
     manifest,
   });
   const repairableBundle = repairableBundles[0] ?? null;
+  const readyBundle =
+    existingBundles.find((bundle) => isCompleteAlignedCodeBundle(bundle, track)) ?? null;
+  const primaryBundle = repairableBundle ?? readyBundle;
   const bundleRelativeDir =
-    repairableBundle?.relativeDir ??
+    primaryBundle?.relativeDir ??
     path.posix.join(
       "coder",
       "experiments",
@@ -837,7 +1363,7 @@ export async function materializeCodeExperimentBundleImpl(params: {
       `${experimentId}__${slug}`
     );
   const bundleDir =
-    repairableBundle?.dir ??
+    primaryBundle?.dir ??
     path.join(projectRoot, bundleRelativeDir);
   const defaultExperimentManifest = buildExperimentManifest({
     projectRoot,
@@ -848,7 +1374,7 @@ export async function materializeCodeExperimentBundleImpl(params: {
     bundleRelativeDir,
     topic,
   });
-  const existingManifest = repairableBundle?.manifest ?? null;
+  const existingManifest = primaryBundle?.manifest ?? null;
   const experimentManifest: Record<string, unknown> = {
     ...defaultExperimentManifest,
     ...(existingManifest ?? {}),
@@ -881,9 +1407,15 @@ export async function materializeCodeExperimentBundleImpl(params: {
   }
   experimentManifest.benchmark_protocol_path = defaultExperimentManifest.benchmark_protocol_path;
   experimentManifest.dataset_path = defaultExperimentManifest.dataset_path;
-  experimentManifest.implementation_proof =
-    asRecord(existingManifest?.implementation_proof ?? existingManifest?.implementationProof) ??
-    defaultExperimentManifest.implementation_proof;
+  Object.assign(experimentManifest, appendMissingValidationCoverage(experimentManifest));
+  experimentManifest.implementation_proof = appendMissingProofCoverage({
+    proof:
+      asRecord(existingManifest?.implementation_proof ?? existingManifest?.implementationProof) ??
+      (asRecord(defaultExperimentManifest.implementation_proof) ?? {}),
+    manifest: experimentManifest,
+    bundleRelativeDir,
+    defaultProof: asRecord(defaultExperimentManifest.implementation_proof) ?? {},
+  });
   const status = pickString(existingManifest ?? {}, ["status"]);
   if (status) {
     experimentManifest.status = status;
@@ -898,9 +1430,9 @@ export async function materializeCodeExperimentBundleImpl(params: {
     path.join(bundleDir, CODE_EXPERIMENT_ARTIFACTS.train)
   );
   const shouldRewriteTrain =
-    !repairableBundle ||
-    !repairableBundle.hasTrain ||
-    repairableBundle.legacyLocalProxy ||
+    !primaryBundle ||
+    !primaryBundle.hasTrain ||
+    primaryBundle.legacyLocalProxy ||
     isLegacyLocalProxyText(existingTrain);
   if (shouldRewriteTrain) {
     await writeTextEnsured(path.join(bundleDir, CODE_EXPERIMENT_ARTIFACTS.train), buildTrainPy());
@@ -928,8 +1460,8 @@ export async function materializeCodeExperimentBundleImpl(params: {
     path.join(bundleDir, CODE_EXPERIMENT_ARTIFACTS.readme)
   );
   const shouldRewriteReadme =
-    !repairableBundle ||
-    !repairableBundle.hasReadme ||
+    !primaryBundle ||
+    !primaryBundle.hasReadme ||
     existingReadme?.includes("local no-Discord implementation fallback") === true ||
     isLegacyLocalProxyText(existingReadme);
   if (shouldRewriteReadme) {
@@ -977,9 +1509,17 @@ export async function materializeCodeExperimentBundleImpl(params: {
     staleManifest.reference_dataset = defaultExperimentManifest.reference_dataset;
     staleManifest.benchmark_protocol_path = defaultExperimentManifest.benchmark_protocol_path;
     staleManifest.dataset_path = defaultExperimentManifest.dataset_path;
-    staleManifest.implementation_proof =
-      asRecord(staleBundle.manifest?.implementation_proof ?? staleBundle.manifest?.implementationProof) ??
-      defaultExperimentManifest.implementation_proof;
+    Object.assign(staleManifest, appendMissingValidationCoverage(staleManifest));
+    staleManifest.implementation_proof = appendMissingProofCoverage({
+      proof:
+        asRecord(
+          staleBundle.manifest?.implementation_proof ?? staleBundle.manifest?.implementationProof
+        ) ??
+        (asRecord(defaultExperimentManifest.implementation_proof) ?? {}),
+      manifest: staleManifest,
+      bundleRelativeDir: staleBundle.relativeDir,
+      defaultProof: asRecord(defaultExperimentManifest.implementation_proof) ?? {},
+    });
     const staleStatus = pickString(staleBundle.manifest ?? {}, ["status"]);
     if (staleStatus) {
       staleManifest.status = staleStatus;
@@ -1026,6 +1566,29 @@ export async function materializeCodeExperimentBundleImpl(params: {
         })
       );
       generatedFiles.push(`${staleBundle.relativeDir}/${CODE_EXPERIMENT_ARTIFACTS.readme}`);
+    }
+  }
+
+  for (const additionalTrack of tracks.slice(1)) {
+    const additionalBundles = await listExistingCodeBundles(
+      projectRoot,
+      additionalTrack.trackId
+    );
+    const additionalRepairableBundles = selectRepairableBundles({
+      bundles: additionalBundles,
+      track: additionalTrack,
+      registryTrack: getRegistryTrack(trackRegistry, additionalTrack.trackId),
+      manifest,
+    });
+    for (const additionalBundle of additionalRepairableBundles) {
+      await repairExistingCodeBundleForTrack({
+        projectRoot,
+        manifest,
+        researchProgram,
+        track: additionalTrack,
+        bundle: additionalBundle,
+        generatedFiles,
+      });
     }
   }
 

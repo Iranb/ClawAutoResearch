@@ -5537,6 +5537,23 @@ async function getCodeStageBundleMissingSignals(params: {
       continue;
     }
 
+    const bundleStatus = normalizeStage(
+      pickString(record, [
+        "status",
+        "stage",
+        "lifecycle_status",
+        "lifecycleStatus",
+      ])
+    );
+    if (
+      bundleStatus &&
+      ["parked", "superseded", "archived", "cancelled", "canceled", "abandoned"].includes(
+        bundleStatus
+      )
+    ) {
+      continue;
+    }
+
     const trackId = pickString(record, ["track_id", "trackId"]);
     if (!trackId) {
       missing.push(`${relativeDir} missing track_id in EXPERIMENT_MANIFEST.json`);

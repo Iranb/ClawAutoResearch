@@ -170,7 +170,7 @@ test("materializeRevisionControlState includes blocked paragraph logic audit as 
   assert.equal(result.state.nextReviewerRole, "cross-reviewer");
 });
 
-test("materializeRevisionControlState drops stale resolved hook sources and runtime-only pending audits", async (t) => {
+test("materializeRevisionControlState drops stale resolved hook sources and runtime-only hook failures", async (t) => {
   const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-revision-control-stale-"));
   t.after(async () => {
     await fs.rm(projectRoot, { recursive: true, force: true });
@@ -229,6 +229,14 @@ test("materializeRevisionControlState drops stale resolved hook sources and runt
         blocked_reason:
           "PROJECT_MANIFEST.json.paragraph_logic_audit.status must be ready before REVIEW closeout (current: pending)",
         updated_at: "2026-04-27T16:40:00.000Z",
+      },
+      "builtin.auto-mode-risk:setup": {
+        hook_id: "builtin.auto-mode-risk:setup",
+        stage: "setup",
+        hook_point: "before_stage_handoff",
+        status: "failed",
+        blocked_reason: "Embedded workflow run is not tracked in the local registry.",
+        updated_at: "2026-04-25T07:18:04.195Z",
       },
       "paper-plan-figure-anchor-audit": {
         hook_id: "paper-plan-figure-anchor-audit",
