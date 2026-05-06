@@ -487,11 +487,67 @@ async function seedReadyIdeationContract(
     ),
     {
       project_id: "demo-project",
+      target_domain: "Computer Science",
       challenge_clusters: ["cluster:challenge-1"],
       insight_clusters: ["cluster:insight-1"],
       novelty_zones: ["zone:1"],
       occupied_zones: [],
-      transfer_bridges: ["bridge:1"],
+      transfer_bridges: ["Psychology:metacontrol"],
+      bridge_retrieval: {
+        candidate_bridge_paths: [
+          {
+            path_id: "bridge-psych-1",
+            source_domain: "Psychology",
+            candidate_node_name: "metacontrol support routing",
+            mechanism: "metacontrol",
+            matched_challenges: ["cluster:challenge-1"],
+            path_completeness: 0.82,
+            evidence_density: 0.72,
+            mechanism_support_density: 0.68,
+            evidence_refs: [
+              { ref_id: "chain-psych-1", node_id: "node-psych-1" },
+            ],
+            source_spans: [
+              { span_id: "span-psych-1", snippet_node_id: "snippet-psych-1" },
+            ],
+            path_trace: [{ from: "Psychology", to: "Computer Science" }],
+          },
+        ],
+      },
+      source_domain_analyses: [
+        {
+          source_domain: "Psychology",
+          shared_mechanisms: ["metacontrol"],
+          supporting_papers: ["Catalyst Bridge Paper"],
+          takeaways: [
+            {
+              concept: "metacontrol",
+              mechanism: "metacontrol",
+              kg_node_id: "node-psych-1",
+              source_domain_formulation:
+                "Metacontrol balances preservation and adaptation under uncertainty.",
+              mechanism_explanation:
+                "A controller chooses when to preserve support evidence versus adapt to new signals.",
+              relevance_to_challenge: "cluster:challenge-1",
+              bridge_path_ids: ["bridge-psych-1"],
+              evidence_chain_refs: [
+                { ref_id: "chain-psych-1", node_id: "node-psych-1" },
+              ],
+              source_spans: [
+                { span_id: "span-psych-1", snippet_node_id: "snippet-psych-1" },
+              ],
+              path_trace: [{ from: "Psychology", to: "Computer Science" }],
+              path_completeness: 0.82,
+              evidence_density: 0.72,
+              mechanism_support_density: 0.68,
+              evidence_tier: "strong",
+            },
+          ],
+          path_completeness: 0.82,
+          evidence_density: 0.72,
+          mechanism_support_density: 0.68,
+        },
+      ],
     }
   );
 
@@ -522,7 +578,7 @@ async function seedReadyIdeationContract(
       challenge_clusters: ["cluster:challenge-1"],
       insight_clusters: ["cluster:insight-1"],
       occupied_solution_zones: [],
-      transfer_bridges: ["bridge:1"],
+      transfer_bridges: ["Psychology:metacontrol"],
       last_refresh_at: "2026-03-22T12:00:00.000Z",
     },
     novelty_tree_path: "researcher/ideation/NOVELTY_TREE.md",

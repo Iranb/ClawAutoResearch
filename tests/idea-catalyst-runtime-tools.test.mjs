@@ -290,6 +290,44 @@ async function makeCatalystProjectRoot() {
     target_domain: "Computer Science",
     challenge_clusters: ["memory preservation"],
     transfer_bridges: ["psychology:metacontrol", "control theory:adaptive regulation"],
+    bridge_retrieval: {
+      candidate_bridge_paths: [
+        {
+          path_id: "bridge-psych-1",
+          source_domain: "Psychology",
+          candidate_node_name: "metacontrol",
+          mechanism: "metacontrol",
+          matched_challenges: ["memory preservation"],
+          path_completeness: 0.82,
+          evidence_density: 0.74,
+          mechanism_support_density: 0.7,
+          evidence_refs: [
+            { ref_id: "chain-psych-1", node_id: "node-psych-1" },
+          ],
+          source_spans: [
+            { span_id: "span-psych-1", snippet_node_id: "snippet-psych-1" },
+          ],
+          path_trace: [{ from: "psychology", to: "computer-science" }],
+        },
+        {
+          path_id: "bridge-control-1",
+          source_domain: "Control Theory",
+          candidate_node_name: "adaptive regulation",
+          mechanism: "adaptive regulation",
+          matched_challenges: ["memory preservation"],
+          path_completeness: 0.78,
+          evidence_density: 0.68,
+          mechanism_support_density: 0.66,
+          evidence_refs: [
+            { ref_id: "chain-control-1", node_id: "node-control-1" },
+          ],
+          source_spans: [
+            { span_id: "span-control-1", snippet_node_id: "snippet-control-1" },
+          ],
+          path_trace: [{ from: "control-theory", to: "computer-science" }],
+        },
+      ],
+    },
   });
   await writeJson(path.join(projectRoot, "researcher", "ideation", "CANDIDATE_POOL.json"), {
     candidates: [
