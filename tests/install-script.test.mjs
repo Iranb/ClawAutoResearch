@@ -13,6 +13,15 @@ async function writeExecutable(filePath, content) {
   await fs.writeFile(filePath, content, { encoding: "utf8", mode: 0o755 });
 }
 
+function installTestEnv(overrides = {}) {
+  const env = { ...process.env };
+  delete env.OPENCLAW_CONFIG_PATH;
+  delete env.OPENCLAW_CONFIG;
+  delete env.OPENCLAW_RUNTIME_PACKAGE_DIR;
+  delete env.PLUGIN_DIR;
+  return { ...env, ...overrides };
+}
+
 async function spawnInstallScript(args, { cwd, env, input = "" }) {
   return await new Promise((resolve, reject) => {
     const child = spawn("bash", ["install.sh", ...args], {
@@ -82,13 +91,12 @@ exit 1
   const repoRoot = process.cwd();
   const { stdout, stderr } = await execFileAsync("bash", ["install.sh", "--dry-run", "--skip-agent-create"], {
     cwd: repoRoot,
-    env: {
-      ...process.env,
+    env: installTestEnv({
       PATH: `${mockBin}:${process.env.PATH ?? ""}`,
       OPENCLAW_HOME: path.join(tempRoot, ".openclaw"),
       PAPERNEXUS_DIR: path.join(tempRoot, "missing-papernexus"),
       HOME: path.join(tempRoot, "home"),
-    },
+    }),
   });
 
   assert.match(stdout, /Installation Preview Complete/);
@@ -124,14 +132,13 @@ exit 1
   const startedAt = Date.now();
   const { code, stdout, stderr } = await spawnInstallScript(["--dry-run", "--yes"], {
     cwd: repoRoot,
-    env: {
-      ...process.env,
+    env: installTestEnv({
       PATH: `${mockBin}:${process.env.PATH ?? ""}`,
       OPENCLAW_HOME: path.join(tempRoot, ".openclaw"),
       PAPERNEXUS_DIR: path.join(tempRoot, "missing-papernexus"),
       OPENCLAW_AGENTS_LIST_TIMEOUT_SECONDS: "1",
       HOME: path.join(tempRoot, "home"),
-    },
+    }),
   });
   const elapsedMs = Date.now() - startedAt;
 
@@ -171,14 +178,13 @@ exit 1
   const repoRoot = process.cwd();
   const { code, stdout, stderr } = await spawnInstallScript(["--dry-run"], {
     cwd: repoRoot,
-    env: {
-      ...process.env,
+    env: installTestEnv({
       OPENCLAW_INSTALL_FORCE_MENU: "1",
       PATH: `${mockBin}:${process.env.PATH ?? ""}`,
       OPENCLAW_HOME: path.join(tempRoot, ".openclaw"),
       PAPERNEXUS_DIR: path.join(tempRoot, "missing-papernexus"),
       HOME: path.join(tempRoot, "home"),
-    },
+    }),
     input: "2\n",
   });
 
@@ -312,15 +318,14 @@ exit 1
   const repoRoot = process.cwd();
   const { code, stdout, stderr } = await spawnInstallScript(["--skip-build"], {
     cwd: repoRoot,
-    env: {
-      ...process.env,
+    env: installTestEnv({
       OPENCLAW_INSTALL_FORCE_MENU: "1",
       PATH: `${mockBin}:${process.env.PATH ?? ""}`,
       OPENCLAW_HOME: openclawHome,
       PAPERNEXUS_DIR: paperNexusDir,
       PLUGIN_DIR: pluginDir,
       HOME: path.join(tempRoot, "home"),
-    },
+    }),
     input: "2\n",
   });
 
@@ -402,13 +407,12 @@ exit 1
 
   const { code, stdout, stderr } = await spawnInstallScript(["--dry-run", "--yes"], {
     cwd: repoRoot,
-    env: {
-      ...process.env,
+    env: installTestEnv({
       PATH: `${mockBin}:${process.env.PATH ?? ""}`,
       OPENCLAW_HOME: path.join(tempRoot, ".openclaw"),
       PAPERNEXUS_DIR: path.join(tempRoot, "missing-papernexus"),
       HOME: path.join(tempRoot, "home"),
-    },
+    }),
   });
 
   assert.equal(code, 0, stderr);
@@ -459,13 +463,12 @@ exit 1
     ["--dry-run", "--yes", "--preserve-role-files"],
     {
       cwd: repoRoot,
-      env: {
-        ...process.env,
+      env: installTestEnv({
         PATH: `${mockBin}:${process.env.PATH ?? ""}`,
         OPENCLAW_HOME: path.join(tempRoot, ".openclaw"),
         PAPERNEXUS_DIR: path.join(tempRoot, "missing-papernexus"),
         HOME: path.join(tempRoot, "home"),
-      },
+      }),
     }
   );
 
@@ -606,13 +609,12 @@ exit 0
     ["--yes", "--skip-build", "--skip-extra-agents"],
     {
       cwd: repoRoot,
-      env: {
-        ...process.env,
+      env: installTestEnv({
         PATH: `${mockBin}:${process.env.PATH ?? ""}`,
         OPENCLAW_HOME: openclawHome,
         PAPERNEXUS_DIR: path.join(tempRoot, "missing-papernexus"),
         HOME: path.join(tempRoot, "home"),
-      },
+      }),
     }
   );
 
@@ -752,14 +754,13 @@ exit 1
     {
       cwd: repoRoot,
       input: "2\n",
-      env: {
-        ...process.env,
+      env: installTestEnv({
         PATH: `${mockBin}:${process.env.PATH ?? ""}`,
         OPENCLAW_HOME: openclawHome,
         OPENCLAW_INSTALL_FORCE_MENU: "1",
         PAPERNEXUS_DIR: path.join(tempRoot, "missing-papernexus"),
         HOME: path.join(tempRoot, "home"),
-      },
+      }),
     }
   );
 
