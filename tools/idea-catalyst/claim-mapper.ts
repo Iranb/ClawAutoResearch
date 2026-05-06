@@ -7,9 +7,19 @@ type RankedFragmentEntry = {
 
 type IdeaFragmentEntry = {
   fragment_id?: string | null;
+  candidate_id?: string | null;
   title?: string | null;
   source_domain?: string | null;
   target_domain?: string | null;
+  transferred_mechanism?: string | null;
+  evidence_chain_refs?: unknown[] | null;
+  source_spans?: unknown[] | null;
+  bridge_path_ids?: string[] | null;
+  baseline_to_compare?: string | null;
+  primary_metric?: string | null;
+  falsifier_pilot?: string | null;
+  weakest_assumption?: string | null;
+  claim_cap?: string | null;
   challenge_resolution?: {
     addresses_target_challenge?: string | null;
     addresses_research_problem?: string | null;
@@ -32,6 +42,10 @@ function uniqueStrings(values: string[]) {
     result.push(value);
   }
   return result;
+}
+
+function objectList(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : [];
 }
 
 export function buildIdeaToClaimMap(params: {
@@ -67,7 +81,7 @@ export function buildIdeaToClaimMap(params: {
     const fragmentId = String(entry.fragment_id ?? `fragment-${index + 1}`);
     const fragment = fragmentsById.get(fragmentId);
     const storyArcPosition = arcOrder[index] ?? "contribution";
-    const expectedClaims = uniqueStrings([
+      const expectedClaims = uniqueStrings([
       fragment?.challenge_resolution?.addresses_target_challenge ?? "",
       fragment?.challenge_resolution?.addresses_research_problem ?? "",
       fragment?.concrete_realization?.proposed_approach ?? "",
@@ -86,12 +100,25 @@ export function buildIdeaToClaimMap(params: {
 
     return {
       fragment_id: fragmentId,
+      candidate_id: fragment?.candidate_id ?? null,
       title: String(entry.title ?? fragment?.title ?? `Idea Fragment ${index + 1}`),
       source_domain: String(
         entry.source_domain ?? fragment?.source_domain ?? "unknown"
       ),
+      transferred_mechanism: fragment?.transferred_mechanism ?? null,
       story_arc_position: storyArcPosition,
       selected_track_id: params.selectedTrackId ?? null,
+      claim_cap: fragment?.claim_cap ?? "hypothesis",
+      baseline_to_compare:
+        fragment?.baseline_to_compare ?? params.baselineReference ?? null,
+      primary_metric: fragment?.primary_metric ?? params.primaryMetric ?? null,
+      falsifier_pilot: fragment?.falsifier_pilot ?? null,
+      weakest_assumption: fragment?.weakest_assumption ?? null,
+      bridge_path_ids: Array.isArray(fragment?.bridge_path_ids)
+        ? fragment?.bridge_path_ids
+        : [],
+      source_spans: objectList(fragment?.source_spans),
+      evidence_chain_refs: objectList(fragment?.evidence_chain_refs),
       expected_claims:
         expectedClaims.length > 0
           ? expectedClaims
@@ -109,10 +136,20 @@ export function buildIdeaToClaimMap(params: {
     ]).slice(0, 3);
     mappings.push({
       fragment_id: params.selectedTrackId ?? "track-main",
+      candidate_id: null,
       title: params.trackHypothesis ?? "Selected research direction",
       source_domain: "target-domain",
+      transferred_mechanism: null,
       story_arc_position: "insight",
       selected_track_id: params.selectedTrackId ?? null,
+      claim_cap: "hypothesis",
+      baseline_to_compare: params.baselineReference ?? null,
+      primary_metric: params.primaryMetric ?? null,
+      falsifier_pilot: null,
+      weakest_assumption: null,
+      bridge_path_ids: [],
+      source_spans: [],
+      evidence_chain_refs: [],
       expected_claims:
         fallbackClaims.length > 0
           ? fallbackClaims

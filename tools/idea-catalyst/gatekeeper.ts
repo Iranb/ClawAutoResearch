@@ -5,6 +5,14 @@ type ScoutingDomain = {
   pruned?: boolean | null;
   retrieved_nodes?: unknown[] | null;
   takeaways?: unknown[] | null;
+  bridge_path_ids?: string[] | null;
+  source_spans?: unknown[] | null;
+  source_span_count?: number | null;
+  path_completeness?: number | null;
+  evidence_density?: number | null;
+  mechanism_support_density?: number | null;
+  evidence_tier?: string | null;
+  claim_cap?: string | null;
   relevance_ratio?: number | null;
   bridge_quality?: number | null;
   search_queries?: Array<{
@@ -19,6 +27,13 @@ type ScoutingReportLike = {
   challenge_clusters?: string[] | null;
   candidate_domains?: ScoutingDomain[] | null;
   bridge_nodes?: Array<{ domain?: string | null }> | null;
+  evidence_summary?: {
+    source_span_count?: number | null;
+    bridge_path_count?: number | null;
+    max_path_completeness?: number | null;
+    max_evidence_density?: number | null;
+    max_mechanism_support_density?: number | null;
+  } | null;
 };
 
 type DecompositionQuestion = {
@@ -36,12 +51,126 @@ function countEvidence(entry: ScoutingDomain, scoutingReport: ScoutingReportLike
     ? entry.retrieved_nodes.length
     : 0;
   const takeawayCount = Array.isArray(entry?.takeaways) ? entry.takeaways.length : 0;
+  const bridgePathCount = Array.isArray(entry?.bridge_path_ids)
+    ? entry.bridge_path_ids.length
+    : 0;
+  const sourceSpanCount = countSourceSpans(entry);
   const bridgeCount = Array.isArray(scoutingReport.bridge_nodes)
     ? scoutingReport.bridge_nodes.filter(
         (node) => String(node?.domain ?? "").trim() === String(entry?.domain ?? "").trim()
       ).length
     : 0;
-  return Math.max(retrievedCount, takeawayCount, bridgeCount);
+  return Math.max(retrievedCount, takeawayCount, bridgePathCount, sourceSpanCount, bridgeCount);
+}
+
+function normalizeScore(value: unknown): number {
+  const numeric = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(numeric)) {
+    return 0;
+  }
+  return Number(Math.max(0, Math.min(1, numeric)).toFixed(4));
+}
+
+function objectCount(value: unknown): number {
+  return Array.isArray(value) ? value.length : 0;
+}
+
+function countTakeawayField(entry: ScoutingDomain, field: string): number {
+  if (!Array.isArray(entry.takeaways)) {
+    return 0;
+  }
+  return entry.takeaways.reduce<number>((sum, takeaway) => {
+    const record = takeaway && typeof takeaway === "object"
+      ? (takeaway as Record<string, unknown>)
+      : {};
+    return sum + objectCount(record[field]);
+  }, 0);
+}
+
+function countSourceSpans(entry: ScoutingDomain): number {
+  return Math.max(
+    Math.floor(Number(entry.source_span_count ?? 0)),
+    objectCount(entry.source_spans),
+    countTakeawayField(entry, "source_spans")
+  );
+}
+
+function domainEvidenceMetrics(entry: ScoutingDomain, scoutingReport: ScoutingReportLike) {
+  const bridgePathCount = Math.max(
+    objectCount(entry.bridge_path_ids),
+    objectCount(entry.retrieved_nodes),
+    countTakeawayField(entry, "bridge_path_ids")
+  );
+  const sourceSpanCount = countSourceSpans(entry);
+  const pathCompleteness = Math.max(
+    normalizeScore(entry.path_completeness),
+    bridgePathCount > 0 ? 0.5 : 0
+  );
+  const evidenceDensity = Math.max(
+    normalizeScore(entry.evidence_density),
+    sourceSpanCount > 0 ? 0.5 : 0
+  );
+  const mechanismSupportDensity = Math.max(
+    normalizeScore(entry.mechanism_support_density),
+    objectCount(entry.takeaways) > 0 ? 0.5 : 0
+  );
+  const evidenceTier =
+    String(entry.evidence_tier ?? "").trim() ||
+    (bridgePathCount > 0 && sourceSpanCount > 0 && pathCompleteness >= 0.75
+      ? "strong"
+      : bridgePathCount > 0 && sourceSpanCount > 0
+        ? "moderate"
+        : "weak");
+  const claimCap =
+    String(entry.claim_cap ?? "").trim() ||
+    (evidenceTier === "strong" ? "confirmatory" : evidenceTier === "moderate" ? "exploratory" : "hypothesis");
+  return {
+    evidenceCount: countEvidence(entry, scoutingReport),
+    bridgePathCount,
+    sourceSpanCount,
+    pathCompleteness,
+    evidenceDensity,
+    mechanismSupportDensity,
+    evidenceTier,
+    claimCap,
+    evidenceChainSufficient:
+      bridgePathCount > 0 &&
+      sourceSpanCount > 0 &&
+      pathCompleteness >= 0.5 &&
+      evidenceDensity > 0 &&
+      evidenceTier !== "weak",
+  };
+}
+
+function collectMissingEvidenceTypes(params: {
+  candidateDomains: ScoutingDomain[];
+  totalSourceSpanCount: number;
+  totalBridgePathCount: number;
+  bridgeNodeCount: number;
+  maxPathCompleteness: number;
+  maxEvidenceDensity: number;
+  maxMechanismSupportDensity: number;
+}) {
+  const missing = new Set<string>();
+  if (params.candidateDomains.length === 0) {
+    missing.add("domain_coverage");
+  }
+  if (params.totalBridgePathCount === 0 && params.bridgeNodeCount === 0) {
+    missing.add("bridge_path");
+  }
+  if (params.totalSourceSpanCount === 0) {
+    missing.add("source_span");
+  }
+  if (params.maxPathCompleteness < 0.5) {
+    missing.add("path_completeness");
+  }
+  if (params.maxEvidenceDensity <= 0) {
+    missing.add("evidence_density");
+  }
+  if (params.maxMechanismSupportDensity <= 0) {
+    missing.add("mechanism_support");
+  }
+  return [...missing].sort();
 }
 
 function sanitizeQuestionGaps(decompositionPacket: DecompositionPacketLike) {
@@ -115,7 +244,10 @@ export function buildIdeaCatalystGateDecision(
       const evidenceCount = countEvidence(entry, scoutingReport);
       const relevanceRatio = Number(entry?.relevance_ratio ?? 0);
       const bridgeQuality = Number(entry?.bridge_quality ?? 0);
-      return evidenceCount >= 1 && relevanceRatio >= 0.34 && bridgeQuality >= 0.5;
+      const metrics = domainEvidenceMetrics(entry, scoutingReport);
+      const legacyHypothesisReady =
+        evidenceCount >= 1 && relevanceRatio >= 0.34 && bridgeQuality >= 0.5;
+      return metrics.evidenceChainSufficient || legacyHypothesisReady;
     })
     .map((entry) => String(entry?.domain ?? "").trim())
     .filter(Boolean);
@@ -129,12 +261,57 @@ export function buildIdeaCatalystGateDecision(
   const bridgeNodeCount = Array.isArray(scoutingReport.bridge_nodes)
     ? scoutingReport.bridge_nodes.length
     : 0;
+  const domainMetrics = candidateDomains.map((entry) =>
+    domainEvidenceMetrics(entry, scoutingReport)
+  );
+  const totalSourceSpanCount = domainMetrics.reduce(
+    (sum, entry) => sum + entry.sourceSpanCount,
+    Number(scoutingReport.evidence_summary?.source_span_count ?? 0)
+  );
+  const totalBridgePathCount = domainMetrics.reduce(
+    (sum, entry) => sum + entry.bridgePathCount,
+    Number(scoutingReport.evidence_summary?.bridge_path_count ?? 0)
+  );
+  const maxPathCompleteness = Math.max(
+    Number(scoutingReport.evidence_summary?.max_path_completeness ?? 0),
+    ...domainMetrics.map((entry) => entry.pathCompleteness),
+    0
+  );
+  const maxEvidenceDensity = Math.max(
+    Number(scoutingReport.evidence_summary?.max_evidence_density ?? 0),
+    ...domainMetrics.map((entry) => entry.evidenceDensity),
+    0
+  );
+  const maxMechanismSupportDensity = Math.max(
+    Number(scoutingReport.evidence_summary?.max_mechanism_support_density ?? 0),
+    ...domainMetrics.map((entry) => entry.mechanismSupportDensity),
+    0
+  );
+  const missingEvidenceTypes = collectMissingEvidenceTypes({
+    candidateDomains,
+    totalSourceSpanCount,
+    totalBridgePathCount,
+    bridgeNodeCount,
+    maxPathCompleteness,
+    maxEvidenceDensity,
+    maxMechanismSupportDensity,
+  });
+  const claimCap =
+    domainMetrics.some((entry) => entry.claimCap === "confirmatory")
+      ? "confirmatory"
+      : domainMetrics.some((entry) => entry.claimCap === "exploratory")
+        ? "exploratory"
+        : "hypothesis";
   const thresholdMet =
-    (sufficientDomains.length >= 1 && totalRelevantNodes >= 1) ||
-    (sufficientDomains.length >= 1 && bridgeNodeCount >= 1);
+    sufficientDomains.length >= 1 &&
+    totalRelevantNodes >= 1 &&
+    (totalBridgePathCount > 0 || bridgeNodeCount > 0);
   const llmJudgment = options?.llmJudgment ?? null;
+  const hardEvidenceBlocked = totalRelevantNodes === 0 || (totalBridgePathCount === 0 && bridgeNodeCount === 0);
   const llmOverride =
-    llmJudgment && llmJudgment.confidence >= 0.8 ? llmJudgment : null;
+    llmJudgment && llmJudgment.confidence >= 0.8 && !hardEvidenceBlocked
+      ? llmJudgment
+      : null;
   const decision =
     llmOverride?.preferredDecision ?? (thresholdMet ? "brainstorm" : "requisition");
 
@@ -189,10 +366,17 @@ export function buildIdeaCatalystGateDecision(
       total_relevant_nodes: totalRelevantNodes,
       threshold_met: thresholdMet,
       bridge_node_count: bridgeNodeCount,
+      bridge_path_count: totalBridgePathCount,
+      source_span_count: totalSourceSpanCount,
+      path_completeness: maxPathCompleteness,
+      evidence_density: maxEvidenceDensity,
+      mechanism_support_density: maxMechanismSupportDensity,
+      missing_evidence_types: missingEvidenceTypes,
+      claim_cap: claimCap,
       coverage_summary: coverageSummary,
       gating_mode: llmOverride
         ? "graph-bridge-sufficiency+llm"
-        : "graph-bridge-sufficiency",
+        : "evidence-chain-sufficiency",
       llm_confidence: llmOverride?.confidence ?? null,
       llm_reasoning: llmOverride?.reasoning ?? null,
     },
@@ -203,6 +387,7 @@ export function buildIdeaCatalystGateDecision(
           requisition_id: requisitionId,
           target_domain: targetDomain,
           missing_domains: requisitionMissingDomains,
+          missing_evidence_types: missingEvidenceTypes,
           challenge_clusters: challengeClusters,
           coverage_gap_questions: questionGaps.map((entry) => ({
             question_id: entry.question_id,

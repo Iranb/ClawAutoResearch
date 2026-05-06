@@ -12,6 +12,7 @@ import {
   serializeIdeationGraphIndicesState,
 } from "../workflow-guard-state/ideation-contract";
 import { normalizeResearchProgramState } from "../workflow-guard-state/research-program";
+import { buildIdeaCatalystCandidatePool } from "./candidate-pool";
 import { buildIdeaCatalystDecompositionPacket } from "./decomposer";
 import { buildIdeaCatalystGateDecision } from "./gatekeeper";
 import { buildIdeaCatalystIdeaFragments } from "./integrator";
@@ -31,9 +32,20 @@ import {
   serializeIdeaCatalystState,
 } from "./state";
 import { deriveIdeaCatalystScoutReport } from "./scout-adapter";
+import { buildIdeaCatalystTournament } from "./tournament";
 import { buildIdeaCatalystAbstractionPacket } from "./translator";
 
-type IdeaCatalystCandidate = {
+const PAPER_NEXUS_IDEA_CATALYST_BUNDLE_PATH =
+  "researcher/papernexus/IDEA_CATALYST_PACKET_BUNDLE.json";
+const CANDIDATE_POOL_PATH = "researcher/idea-catalyst/CANDIDATE_POOL.json";
+const CANDIDATE_SCORECARD_PATH =
+  "researcher/idea-catalyst/CANDIDATE_SCORECARD.json";
+const CANDIDATE_TOURNAMENT_PATH =
+  "researcher/idea-catalyst/CANDIDATE_TOURNAMENT.json";
+const SELECTED_IDEAS_PATH = "researcher/idea-catalyst/SELECTED_IDEAS.json";
+const REJECTED_IDEAS_PATH = "researcher/idea-catalyst/REJECTED_IDEAS.json";
+
+type LegacyIdeaCatalystCandidate = {
   direction_id?: string | null;
   track_id?: string | null;
   title?: string | null;
@@ -103,6 +115,170 @@ function normalizePairwiseJudgments(value: unknown): PairwiseJudgment[] {
     });
 }
 
+function unwrapPacketBundle(value: unknown): Record<string, unknown> | null {
+  const record = asRecord(value);
+  if (!record) {
+    return null;
+  }
+  return asRecord(record.packet_bundle) ?? asRecord(record.packetBundle) ?? record;
+}
+
+function objectList(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : [];
+}
+
+function traceIdFromRecord(record: Record<string, unknown>, fallback: string) {
+  return (
+    pickString(record, [
+      "ref_id",
+      "refId",
+      "span_id",
+      "spanId",
+      "node_id",
+      "nodeId",
+      "snippet_node_id",
+      "snippetNodeId",
+      "paper_id",
+      "paperId",
+    ]) ?? fallback
+  );
+}
+
+function buildSelectedIdeaGraphEvidence(selectedIdea: Record<string, unknown>) {
+  const candidateId =
+    pickString(selectedIdea, ["candidate_id", "candidateId"]) ?? "selected-idea";
+  const sourceDomain =
+    pickString(selectedIdea, ["source_domain", "sourceDomain"]) ?? "source-domain";
+  const mechanism =
+    pickString(selectedIdea, [
+      "transferred_mechanism",
+      "transferredMechanism",
+    ]) ?? "transferred-mechanism";
+  const bridgePathIds = uniqueStrings(
+    (Array.isArray(selectedIdea.bridge_path_ids)
+      ? selectedIdea.bridge_path_ids
+      : []
+    ).map((entry) => String(entry ?? ""))
+  );
+  const evidenceRefs = objectList(
+    selectedIdea.evidence_chain_refs ?? selectedIdea.evidenceChainRefs
+  )
+    .map((entry, index) => {
+      const record = asRecord(entry) ?? {};
+      return traceIdFromRecord(record, `evidence-ref-${index + 1}`);
+    })
+    .filter(Boolean);
+  const sourceSpans = objectList(selectedIdea.source_spans ?? selectedIdea.sourceSpans)
+    .map((entry, index) => {
+      const record = asRecord(entry) ?? {};
+      return traceIdFromRecord(record, `source-span-${index + 1}`);
+    })
+    .filter(Boolean);
+  const linkedGraphNodes = uniqueStrings(
+    objectList(selectedIdea.evidence_chain_refs ?? selectedIdea.evidenceChainRefs)
+      .map((entry) => {
+        const record = asRecord(entry) ?? {};
+        return pickString(record, ["node_id", "nodeId", "snippet_node_id", "snippetNodeId"]);
+      })
+      .filter((entry): entry is string => Boolean(entry))
+  );
+  return {
+    idea_id: candidateId,
+    source_domain: sourceDomain,
+    transferred_mechanism: mechanism,
+    evidence_pointers: uniqueStrings([
+      ...bridgePathIds.map((entry) => `paper_nexus:bridge_path:${entry}`),
+      ...evidenceRefs.map((entry) => `paper_nexus:evidence_ref:${entry}`),
+      ...sourceSpans.map((entry) => `paper_nexus:source_span:${entry}`),
+    ]),
+    linked_graph_nodes: linkedGraphNodes,
+    relation_patterns: uniqueStrings([
+      `paper_nexus_bridge:${sourceDomain}->${mechanism}`,
+      ...bridgePathIds.map((entry) => `bridge_path:${entry}`),
+    ]),
+    bridge_path_ids: bridgePathIds,
+    source_spans: selectedIdea.source_spans ?? [],
+    evidence_chain_refs: selectedIdea.evidence_chain_refs ?? [],
+    claim_cap: pickString(selectedIdea, ["claim_cap", "claimCap"]) ?? "hypothesis",
+    baseline_reference:
+      pickString(selectedIdea, ["baseline_to_compare", "baselineToCompare"]) ??
+      null,
+    primary_metric:
+      pickString(selectedIdea, ["primary_metric", "primaryMetric"]) ?? null,
+    falsifier_pilot:
+      pickString(selectedIdea, ["falsifier_pilot", "falsifierPilot"]) ?? null,
+  };
+}
+
+async function syncSelectedIdeaTraceToTrackRegistry(params: {
+  projectRoot: string;
+  selectedIdeasPacket: Record<string, unknown> | null;
+  selectedTrackId: string | null;
+}) {
+  const selectedIdeas = Array.isArray(params.selectedIdeasPacket?.selected_ideas)
+    ? params.selectedIdeasPacket?.selected_ideas
+        .map((entry) => asRecord(entry))
+        .filter((entry): entry is Record<string, unknown> => Boolean(entry))
+    : [];
+  const primaryIdea = selectedIdeas[0];
+  if (!primaryIdea || !params.selectedTrackId) {
+    return false;
+  }
+  const registryPath = path.join(params.projectRoot, "TRACK_REGISTRY.json");
+  const registry = (await readJsonIfExists<Record<string, unknown>>(registryPath)) ?? null;
+  const tracks = Array.isArray(registry?.tracks) ? registry?.tracks : [];
+  let changed = false;
+  const nextTracks = tracks.map((entry) => {
+    const track = asRecord(entry) ?? {};
+    const trackId = pickString(track, ["track_id", "trackId"]);
+    if (trackId !== params.selectedTrackId) {
+      return entry;
+    }
+    changed = true;
+    const graphEvidence = buildSelectedIdeaGraphEvidence(primaryIdea);
+    return {
+      ...track,
+      idea_id: graphEvidence.idea_id,
+      source_domain: graphEvidence.source_domain,
+      transferred_mechanism: graphEvidence.transferred_mechanism,
+      baseline_reference: graphEvidence.baseline_reference,
+      primary_metric: graphEvidence.primary_metric,
+      falsifier_pilot: graphEvidence.falsifier_pilot,
+      claim_cap: graphEvidence.claim_cap,
+      graph_backed_innovation_evidence: graphEvidence,
+      evidence_pointers: uniqueStrings([
+        ...((Array.isArray(track.evidence_pointers)
+          ? track.evidence_pointers
+          : []
+        ).map((value) => String(value ?? ""))),
+        ...graphEvidence.evidence_pointers,
+      ]),
+      linked_graph_nodes: uniqueStrings([
+        ...((Array.isArray(track.linked_graph_nodes)
+          ? track.linked_graph_nodes
+          : []
+        ).map((value) => String(value ?? ""))),
+        ...graphEvidence.linked_graph_nodes,
+      ]),
+      relation_patterns: uniqueStrings([
+        ...((Array.isArray(track.relation_patterns)
+          ? track.relation_patterns
+          : []
+        ).map((value) => String(value ?? ""))),
+        ...graphEvidence.relation_patterns,
+      ]),
+    };
+  });
+  if (!changed || !registry) {
+    return false;
+  }
+  await writeJsonEnsured(registryPath, {
+    ...registry,
+    tracks: nextTracks,
+  });
+  return true;
+}
+
 function resolveRequiredProjectArtifactPath(
   projectRoot: string,
   relativePath: string | null
@@ -154,6 +330,10 @@ export async function materializeIdeaCatalystState(params: {
     projectRoot,
     "researcher/papernexus/MECHANISM_BRIDGE_PACKET.json"
   );
+  const ideaCatalystPacketBundlePath = resolveProjectArtifactPath(
+    projectRoot,
+    PAPER_NEXUS_IDEA_CATALYST_BUNDLE_PATH
+  );
   const challengeInsightPacketPath = resolveProjectArtifactPath(
     projectRoot,
     "researcher/papernexus/CHALLENGE_INSIGHT_PACKET.json"
@@ -173,6 +353,7 @@ export async function materializeIdeaCatalystState(params: {
 
   const [
     graphPacket,
+    rawIdeaCatalystPacketBundle,
     mechanismBridgePacket,
     challengeInsightPacket,
     topicSummary,
@@ -181,15 +362,18 @@ export async function materializeIdeaCatalystState(params: {
   ] =
     await Promise.all([
       readJsonIfExists<Record<string, unknown>>(graphPacketPath ?? ""),
+      readJsonIfExists<Record<string, unknown>>(ideaCatalystPacketBundlePath ?? ""),
       readJsonIfExists<Record<string, unknown>>(mechanismBridgePacketPath ?? ""),
       readJsonIfExists<Record<string, unknown>>(challengeInsightPacketPath ?? ""),
       readJsonIfExists<Record<string, unknown>>(topicSummaryPath ?? ""),
       readJsonIfExists<Record<string, unknown>>(candidatePoolPath ?? ""),
       readTextIfExists(problemDecompositionPath),
     ]);
+  const ideaCatalystPacketBundle = unwrapPacketBundle(rawIdeaCatalystPacketBundle);
 
   const mergedGraphPacket: Record<string, unknown> = {
     ...(graphPacket ?? {}),
+    ...(ideaCatalystPacketBundle ?? {}),
     ...(challengeInsightPacket ?? {}),
     ...(mechanismBridgePacket ?? {}),
     challenge_clusters:
@@ -226,8 +410,64 @@ export async function materializeIdeaCatalystState(params: {
     bridge_evidence_tier:
       mechanismBridgePacket?.bridge_evidence_tier ??
       mechanismBridgePacket?.bridgeEvidenceTier ??
+      ideaCatalystPacketBundle?.bridge_evidence_tier ??
+      ideaCatalystPacketBundle?.bridgeEvidenceTier ??
       graphPacket?.bridge_evidence_tier ??
       graphPacket?.bridgeEvidenceTier,
+    bridge_retrieval:
+      ideaCatalystPacketBundle?.bridge_retrieval ??
+      ideaCatalystPacketBundle?.bridgeRetrieval ??
+      mechanismBridgePacket?.bridge_retrieval ??
+      mechanismBridgePacket?.bridgeRetrieval ??
+      graphPacket?.bridge_retrieval ??
+      graphPacket?.bridgeRetrieval,
+    structural_analogy:
+      ideaCatalystPacketBundle?.structural_analogy ??
+      ideaCatalystPacketBundle?.structuralAnalogy ??
+      mechanismBridgePacket?.structural_analogy ??
+      mechanismBridgePacket?.structuralAnalogy ??
+      graphPacket?.structural_analogy ??
+      graphPacket?.structuralAnalogy,
+    interdisciplinary_potential_ranking:
+      ideaCatalystPacketBundle?.interdisciplinary_potential_ranking ??
+      ideaCatalystPacketBundle?.interdisciplinaryPotentialRanking ??
+      mechanismBridgePacket?.interdisciplinary_potential_ranking ??
+      mechanismBridgePacket?.interdisciplinaryPotentialRanking ??
+      graphPacket?.interdisciplinary_potential_ranking ??
+      graphPacket?.interdisciplinaryPotentialRanking,
+    domain_distance_policy:
+      ideaCatalystPacketBundle?.domain_distance_policy ??
+      ideaCatalystPacketBundle?.domainDistancePolicy ??
+      mechanismBridgePacket?.domain_distance_policy ??
+      mechanismBridgePacket?.domainDistancePolicy ??
+      graphPacket?.domain_distance_policy ??
+      graphPacket?.domainDistancePolicy,
+    source_domain_analyses:
+      ideaCatalystPacketBundle?.source_domain_analyses ??
+      ideaCatalystPacketBundle?.sourceDomainAnalyses ??
+      mechanismBridgePacket?.source_domain_analyses ??
+      mechanismBridgePacket?.sourceDomainAnalyses ??
+      graphPacket?.source_domain_analyses ??
+      graphPacket?.sourceDomainAnalyses,
+    cross_domain_analysis:
+      ideaCatalystPacketBundle?.cross_domain_analysis ??
+      ideaCatalystPacketBundle?.crossDomainAnalysis ??
+      mechanismBridgePacket?.cross_domain_analysis ??
+      mechanismBridgePacket?.crossDomainAnalysis ??
+      graphPacket?.cross_domain_analysis ??
+      graphPacket?.crossDomainAnalysis,
+    idea_fragments:
+      ideaCatalystPacketBundle?.idea_fragments ??
+      ideaCatalystPacketBundle?.ideaFragments ??
+      mechanismBridgePacket?.idea_fragments ??
+      mechanismBridgePacket?.ideaFragments ??
+      graphPacket?.idea_fragments ??
+      graphPacket?.ideaFragments,
+    requisition_report:
+      ideaCatalystPacketBundle?.requisition_report ??
+      ideaCatalystPacketBundle?.requisitionReport ??
+      mechanismBridgePacket?.requisition_report ??
+      mechanismBridgePacket?.requisitionReport,
   };
 
   const targetDomain =
@@ -384,8 +624,27 @@ export async function materializeIdeaCatalystState(params: {
     })
     .filter((entry): entry is string => Boolean(entry));
 
-  const candidates: IdeaCatalystCandidate[] = Array.isArray(candidatePool?.candidates)
-    ? (candidatePool.candidates as IdeaCatalystCandidate[])
+  const candidatePoolPacket = buildIdeaCatalystCandidatePool({
+    graphPacket: mergedGraphPacket,
+    candidatePool,
+    scoutingReport,
+    targetDomain,
+    selectedTrackId: ideationContract.selectedTrackId,
+    baselineReference: researchProgram.baselineReference,
+    primaryMetric: researchProgram.primaryMetric,
+  });
+  const candidateTournament = buildIdeaCatalystTournament({
+    candidatePool: candidatePoolPacket,
+    topK: 3,
+  });
+  const candidateScorecardPacket = candidateTournament.scorecard;
+  const candidateTournamentPacket = candidateTournament.tournament;
+  const selectedIdeasPacket = candidateTournament.selectedIdeas;
+  const rejectedIdeasPacket = candidateTournament.rejectedIdeas;
+  const selectedIdeaCandidates: LegacyIdeaCatalystCandidate[] = Array.isArray(
+    selectedIdeasPacket.selected_ideas
+  )
+    ? (selectedIdeasPacket.selected_ideas as LegacyIdeaCatalystCandidate[])
     : [];
   const sourceDomains = uniqueStrings(
     selectedSourceDomains.length > 0
@@ -400,14 +659,17 @@ export async function materializeIdeaCatalystState(params: {
     unknown
   >;
   const requisitionActionable = requisitionRecord.actionable !== false;
-  const shouldIntegrateFragments = gateDecision.decision === "brainstorm";
+  const shouldIntegrateFragments =
+    gateDecision.decision === "brainstorm" && selectedIdeaCandidates.length > 0;
   const ideaFragmentsPacket = shouldIntegrateFragments
     ? buildIdeaCatalystIdeaFragments({
-        candidates,
+        candidates: selectedIdeaCandidates,
         sourceDomains,
         targetDomain,
         selectedTrackId: ideationContract.selectedTrackId,
         problemStatement: researchProgram.problemStatement,
+        baselineReference: researchProgram.baselineReference,
+        primaryMetric: researchProgram.primaryMetric,
         decompositionPacket,
         scoutingReport,
       })
@@ -485,6 +747,11 @@ export async function materializeIdeaCatalystState(params: {
     [next.abstractionPacketPath, abstractionPacket],
     [next.scoutingReportPath, scoutingReport],
     [next.gateDecisionPath, gateDecision],
+    [CANDIDATE_POOL_PATH, candidatePoolPacket],
+    [CANDIDATE_SCORECARD_PATH, candidateScorecardPacket],
+    [CANDIDATE_TOURNAMENT_PATH, candidateTournamentPacket],
+    [SELECTED_IDEAS_PATH, selectedIdeasPacket],
+    [REJECTED_IDEAS_PATH, rejectedIdeasPacket],
     [next.ideaFragmentsPath, ideaFragmentsPacket],
     [next.rankedFragmentsPath, rankedFragmentsPacket],
     [
@@ -510,6 +777,9 @@ export async function materializeIdeaCatalystState(params: {
         selected_source_domains: selectedSourceDomains,
         pruned_source_domains: prunedSourceDomains,
         top_fragment_id: rankedFragmentsPacket?.ranking?.[0]?.fragment_id ?? null,
+        candidate_pool_size: candidatePoolPacket.candidate_pool_size,
+        selected_idea_count: selectedIdeasPacket.selected_count,
+        rejected_idea_count: rejectedIdeasPacket.rejected_count,
         updated_at: next.lastUpdatedAt,
       },
     ],
@@ -521,6 +791,14 @@ export async function materializeIdeaCatalystState(params: {
     const resolvedPath = resolveRequiredProjectArtifactPath(projectRoot, relativePath);
     await writeJsonEnsured(resolvedPath, value);
     generatedFiles.push(resolvedPath);
+  }
+  const trackRegistryUpdated = await syncSelectedIdeaTraceToTrackRegistry({
+    projectRoot,
+    selectedIdeasPacket,
+    selectedTrackId: ideationContract.selectedTrackId,
+  });
+  if (trackRegistryUpdated) {
+    generatedFiles.push(path.join(projectRoot, "TRACK_REGISTRY.json"));
   }
 
   manifest.idea_catalyst = serializeIdeaCatalystState(next);

@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import { buildIdeaCatalystDecompositionPacket } from "../tools/idea-catalyst/decomposer.ts";
 import { buildIdeaCatalystAbstractionPacket } from "../tools/idea-catalyst/translator.ts";
+import { buildIdeaCatalystCandidatePool } from "../tools/idea-catalyst/candidate-pool.ts";
 import { deriveIdeaCatalystScoutReport } from "../tools/idea-catalyst/scout-adapter.ts";
 import { buildIdeaCatalystIdeaFragments } from "../tools/idea-catalyst/integrator.ts";
 
@@ -255,4 +256,101 @@ test("integrator builds graph-grounded fragments from scouting takeaways and dec
   );
   assert.equal(Array.isArray(fragment.concrete_realization.key_innovations), true);
   assert.equal(fragment.concrete_realization.key_innovations.length >= 2, true);
+});
+
+test("candidate pool materializes PaperNexus bundle fields into evidence-rich candidates", () => {
+  const pool = buildIdeaCatalystCandidatePool({
+    graphPacket: {
+      target_domain: "Computer Science",
+      status: "ready",
+      domain_distance_matrix: {
+        distances: {
+          "computer science": {
+            psychology: 0.72,
+            robotics: 0.66,
+            neuroscience: 0.8,
+          },
+        },
+      },
+      idea_fragments: [
+        {
+          candidate_id: "cand-psych",
+          source_domain: "Psychology",
+          frontier_type: "transfer",
+          transferred_mechanism: "metacontrol arbitration",
+          bridge_path_ids: ["bridge-psych-1"],
+          path_completeness: 0.9,
+          evidence_density: 0.8,
+          mechanism_support_density: 0.75,
+          evidence_chain_refs: [{ ref_id: "chain-psych-1", node_id: "node-psych-1" }],
+          source_spans: [{ span_id: "span-psych-1", snippet_node_id: "snippet-psych-1" }],
+          idea_fragment: {
+            title: "Metacontrol memory router",
+            core_insight: "Gate prototype preservation and adaptation with metacontrol.",
+            challenge_resolution: "Stabilize memory updates under domain shift.",
+            concrete_realization: "Add an arbitration head over prototype updates.",
+          },
+        },
+      ],
+      bridge_retrieval: {
+        candidate_bridge_paths: [
+          {
+            path_id: "bridge-robot-1",
+            source_domain: "Robotics",
+            candidate_node_name: "Curriculum relay",
+            mechanism: "curriculum relay",
+            path_completeness: 0.82,
+            evidence_refs: [{ ref_id: "chain-robot-1", node_id: "node-robot-1" }],
+            source_spans: [{ span_id: "span-robot-1" }],
+            path_trace: [{ from: "robotics", to: "gcd" }],
+          },
+        ],
+      },
+      structural_analogy: {
+        alignments: [
+          {
+            bridge_path_id: "bridge-neuro-1",
+            source_domain: "Neuroscience",
+            candidate_node_name: "Memory consolidation",
+            transferred_mechanism: "consolidation replay",
+            path_completeness: 0.78,
+            evidence_chain_refs: [{ ref_id: "chain-neuro-1", node_id: "node-neuro-1" }],
+            source_spans: [{ span_id: "span-neuro-1" }],
+            alignment_rationale: "Replay-based consolidation maps to prototype retention.",
+          },
+        ],
+      },
+    },
+    candidatePool: null,
+    scoutingReport: null,
+    targetDomain: "Computer Science",
+    selectedTrackId: "track-main",
+    baselineReference: "SimGCD",
+    primaryMetric: "ACC",
+  });
+
+  assert.equal(pool.candidate_pool_size >= 3, true);
+  assert.equal(pool.data_starvation, false);
+  assert.deepEqual(pool.generation_summary.source_paths, [
+    "idea_fragments[0]",
+    "bridge_retrieval.candidate_bridge_paths[0]",
+    "structural_analogy.alignments[0]",
+  ]);
+
+  const psychology = pool.candidates.find(
+    (candidate) => candidate.candidate_id === "cand-psych"
+  );
+  assert.equal(psychology.source_domain, "Psychology");
+  assert.equal(psychology.transferred_mechanism, "metacontrol arbitration");
+  assert.deepEqual(psychology.bridge_path_ids, ["bridge-psych-1"]);
+  assert.equal(psychology.path_completeness, 0.9);
+  assert.equal(psychology.domain_distance, 0.72);
+  assert.equal(psychology.baseline_to_compare, "SimGCD");
+  assert.equal(psychology.primary_metric, "ACC");
+  assert.equal(typeof psychology.falsifier_pilot, "string");
+  assert.equal(typeof psychology.weakest_assumption, "string");
+  assert.equal(psychology.claim_cap, "confirmatory");
+  assert.equal(psychology.evidence_tier, "strong");
+  assert.equal(psychology.evidence_chain_refs.length, 1);
+  assert.equal(psychology.source_spans.length, 1);
 });
