@@ -869,6 +869,57 @@ test("dispatchWorkflowTaskToAgent treats a started run as dispatched even before
   assert.equal(result.attempts[0].error, null);
 });
 
+test("dispatchWorkflowTaskToAgent accepts a spawned fallback run when mailbox ack times out", async (t) => {
+  const projectRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "openclaw-research-dispatch-spawn-pending-")
+  );
+  const calls = [];
+
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  const result = await dispatchWorkflowTaskToAgent({
+    workflowRuntime: {
+      async run(params) {
+        calls.push(params.sessionKey);
+        if (!params.sessionKey.includes(":subagent:")) {
+          throw new Error("direct session unavailable");
+        }
+        return { runId: "run-spawn-pending-1" };
+      },
+      async waitForRun() {
+        return { status: "timeout" };
+      },
+      async getSessionMessages() {
+        return { messages: [] };
+      },
+    },
+    requesterSessionKey: "agent:researcher:discord:group:paper-lab",
+    requesterChannel: "discord",
+    fromRole: "researcher",
+    toRole: "coder",
+    projectRoot,
+    projectId: "demo-project",
+    stage: "code",
+    summary: "Continue the code stage.",
+    mailboxMessageId: "msg-spawn-pending-1",
+    waitTimeoutMs: 25,
+    retryOnTimeout: true,
+  });
+
+  assert.equal(result.dispatched, true);
+  assert.equal(result.channel, "sessions_spawn");
+  assert.equal(result.strategy, "spawn_fallback");
+  assert.equal(result.runId, "run-spawn-pending-1");
+  assert.equal(result.waitStatus, "timeout");
+  assert.equal(result.acknowledgedByMailbox, false);
+  assert.equal(result.error, null);
+  assert.equal(result.attempts.at(-1)?.acceptedByMailbox, false);
+  assert.equal(result.attempts.at(-1)?.acceptedByTranscript, false);
+  assert.equal(calls.length, 2);
+});
+
 test("dispatchWorkflowTaskToAgent reports a runtime error when subagent runtime is unavailable", async () => {
   const result = await dispatchWorkflowTaskToAgent({
     requesterSessionKey: "agent:researcher:discord:group:paper-lab",

@@ -501,9 +501,11 @@ async function runSingleDispatchAttempt(params: {
         const afterCount = await getMessageCount(params.workflowRuntime, params.sessionKey);
         const acceptedByTranscript =
           beforeCount != null && afterCount != null && afterCount > beforeCount;
+        const acceptedByStartedFallback =
+          params.strategy === "spawn_fallback" && Boolean(started.runId);
         const accepted =
           params.requireMailboxAcknowledgement === true && params.mailboxMessageId
-            ? acceptedByTranscript
+            ? acceptedByTranscript || acceptedByStartedFallback
             : acceptedByTranscript || params.retryOnTimeout !== true;
         return {
           accepted,
@@ -622,6 +624,11 @@ export async function dispatchWorkflowTaskToAgent(params: {
         waitStatus: result.waitStatus,
         fallbackSpawned: result.fallbackSpawned,
         acknowledgedByMailbox: result.acknowledgedByMailbox,
+        acknowledgementPending:
+          result.dispatched &&
+          Boolean(result.runId) &&
+          result.waitStatus === "timeout" &&
+          !result.acknowledgedByMailbox,
         error: result.error,
         attempts: result.attempts,
       },

@@ -4,12 +4,14 @@ import path from "node:path";
 import {
   argValue,
   dispatchWorkflowCommand,
+  loadWorkflowHarnessPluginConfig,
+  resolveWorkflowHarnessProjectsRoot,
 } from "./workflow_command_harness_lib.mjs";
 
 function buildUsage() {
   return [
     "Usage: node scripts/run_discord_native_slash_replay_test.mjs --command <name> [--args '\"topic\"']",
-    "       [--projects-root <path>] [--project-root <path>] [--agent-id researcher]",
+    "       [--projects-root <path>] [--project-root <path>] [--source-config-path <openclaw.json>] [--agent-id researcher]",
     "       [--user-id owner] [--channel-id native-test] [--account-id default]",
   ].join("\n");
 }
@@ -30,9 +32,17 @@ async function main() {
   const channelId = argValue(argv, "--channel-id", "native-slash-test");
   const projectRootArg = argValue(argv, "--project-root");
   const projectRoot = projectRootArg ? path.resolve(projectRootArg) : null;
-  const projectsRoot =
-    argValue(argv, "--projects-root") ??
-    (projectRoot ? path.dirname(projectRoot) : process.cwd());
+  const sourceConfigPath = argValue(argv, "--source-config-path", null);
+  const projectsRoot = await resolveWorkflowHarnessProjectsRoot({
+    projectsRoot: argValue(argv, "--projects-root", null),
+    projectRoot,
+    sourceConfigPath,
+    fallback: process.cwd(),
+  });
+  const pluginConfig = await loadWorkflowHarnessPluginConfig({
+    sourceConfigPath,
+    projectsRoot,
+  });
   const slashSessionKey =
     argValue(argv, "--session-key") ??
     `agent:${agentId}:discord:slash:${userId}`;
@@ -54,6 +64,7 @@ async function main() {
     from,
     to,
     accountId,
+    pluginConfig,
     contextExtras: {
       sessionKey: slashSessionKey,
       commandSource: "native",

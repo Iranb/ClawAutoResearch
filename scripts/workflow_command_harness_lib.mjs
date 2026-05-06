@@ -50,7 +50,7 @@ function cloneRecord(value) {
   return JSON.parse(JSON.stringify(isRecord(value) ? value : {}));
 }
 
-function expandHomePath(value) {
+export function expandHomePath(value) {
   const raw = String(value ?? "").trim();
   if (raw === "~") {
     return os.homedir();
@@ -97,17 +97,58 @@ export function extractClawAutoResearchPluginConfig(openclawConfig) {
   return {};
 }
 
+export function configuredProjectsRootFromOpenClawConfig(openclawConfig) {
+  const pluginConfig = extractClawAutoResearchPluginConfig(openclawConfig);
+  const candidates = [
+    pluginConfig.projectsRoot,
+    pluginConfig.projects_root,
+    openclawConfig?.projectsRoot,
+    openclawConfig?.projects_root,
+    openclawConfig?.workflow?.projectsRoot,
+    openclawConfig?.workflow?.projects_root,
+  ];
+  for (const candidate of candidates) {
+    if (typeof candidate === "string" && candidate.trim()) {
+      return candidate.trim();
+    }
+  }
+  return null;
+}
+
+export async function resolveWorkflowHarnessProjectsRoot(options = {}) {
+  if (options.projectsRoot) {
+    return path.resolve(expandHomePath(options.projectsRoot));
+  }
+  if (options.projectRoot) {
+    return path.dirname(path.resolve(expandHomePath(options.projectRoot)));
+  }
+  const sourceConfigPath = expandHomePath(
+    options.sourceConfigPath ?? path.join(os.homedir(), ".openclaw", "openclaw.json")
+  );
+  const sourceConfig = (await readJson(sourceConfigPath)) ?? {};
+  const configuredProjectsRoot = configuredProjectsRootFromOpenClawConfig(sourceConfig);
+  if (configuredProjectsRoot) {
+    return path.resolve(expandHomePath(configuredProjectsRoot));
+  }
+  return path.resolve(expandHomePath(options.fallback ?? process.cwd()));
+}
+
 export async function loadWorkflowHarnessPluginConfig(options = {}) {
   const sourceConfigPath = expandHomePath(
     options.sourceConfigPath ?? path.join(os.homedir(), ".openclaw", "openclaw.json")
   );
   const sourceConfig = (await readJson(sourceConfigPath)) ?? {};
+  const projectsRoot = await resolveWorkflowHarnessProjectsRoot({
+    sourceConfigPath,
+    projectsRoot: options.projectsRoot,
+    fallback: process.cwd(),
+  });
   return normalizeHarnessPluginConfig(
     {
       ...extractClawAutoResearchPluginConfig(sourceConfig),
       ...(isRecord(options.overrides) ? options.overrides : {}),
     },
-    path.resolve(options.projectsRoot ?? process.cwd())
+    projectsRoot
   );
 }
 

@@ -254,13 +254,29 @@ export function resolveAutoWorkflowLocalFallbackEnv(params, baseEnv = process.en
 }
 
 export function configuredProjectsRootFromOpenClawConfig(config) {
+  const entries =
+    config?.plugins?.entries && typeof config.plugins.entries === "object"
+      ? config.plugins.entries
+      : {};
+  const pluginEntry =
+    entries.ClawAutoResearch ??
+    entries["claw-auto-research"] ??
+    entries.openclawResearch ??
+    entries["openclaw-research"] ??
+    null;
+  const pluginConfig =
+    pluginEntry?.config && typeof pluginEntry.config === "object"
+      ? pluginEntry.config
+      : pluginEntry && typeof pluginEntry === "object"
+        ? pluginEntry
+        : {};
   const candidates = [
+    pluginConfig?.projectsRoot,
+    pluginConfig?.projects_root,
     config?.projectsRoot,
     config?.projects_root,
     config?.workflow?.projectsRoot,
     config?.workflow?.projects_root,
-    config?.plugins?.entries?.ClawAutoResearch?.config?.projectsRoot,
-    config?.plugins?.entries?.ClawAutoResearch?.config?.projects_root,
   ];
   for (const candidate of candidates) {
     if (typeof candidate === "string" && candidate.trim()) {
@@ -277,6 +293,23 @@ async function readConfiguredProjectsRoot(configPath) {
   } catch {
     return null;
   }
+}
+
+export async function resolveAutoWorkflowProjectsRoot(params) {
+  const explicitProjectsRoot =
+    typeof params?.projectsRoot === "string" && params.projectsRoot.trim()
+      ? params.projectsRoot
+      : null;
+  if (explicitProjectsRoot) {
+    return path.resolve(expandHomePath(explicitProjectsRoot));
+  }
+  if (params?.mode === "live" && params?.sourceConfigPath) {
+    const configuredProjectsRoot = await readConfiguredProjectsRoot(params.sourceConfigPath);
+    if (configuredProjectsRoot) {
+      return path.resolve(expandHomePath(configuredProjectsRoot));
+    }
+  }
+  return path.resolve(expandHomePath(params?.fallback ?? process.cwd()));
 }
 
 async function readJson(filePath, fallback = null) {
@@ -1356,8 +1389,6 @@ async function main(argv = process.argv) {
   const allowPartial = hasFlag(argv, "--allow-partial");
   const noPreflight = hasFlag(argv, "--no-preflight");
   const isolatedGateway = !hasFlag(argv, "--no-isolated-gateway");
-  const configuredProjectsRoot =
-    mode === "live" && !isolatedGateway ? await readConfiguredProjectsRoot(sourceConfigPath) : null;
   const timestamp = timestampSlug();
   const reuseProject = hasFlag(argv, "--reuse-project");
   const generatedProjectId =
@@ -1372,9 +1403,12 @@ async function main(argv = process.argv) {
       path.join(repoRoot, ".openclaw-research", "e2e-runs", `${timestamp}-${command.lane}-${slugify(topic)}`)
     )
   );
-  const projectsRoot = path.resolve(
-    expandHomePath(argValue(argv, "--projects-root", configuredProjectsRoot ?? path.join(runRoot, "projects")))
-  );
+  const projectsRoot = await resolveAutoWorkflowProjectsRoot({
+    mode,
+    sourceConfigPath,
+    projectsRoot: argValue(argv, "--projects-root", null),
+    fallback: path.join(runRoot, "projects"),
+  });
   const conversationId = argValue(
     argv,
     "--conversation-id",

@@ -9,6 +9,7 @@ import { promisify } from "node:util";
 import {
   dispatchWorkflowCommand,
   loadWorkflowHarnessPluginConfig,
+  resolveWorkflowHarnessProjectsRoot,
 } from "../scripts/workflow_command_harness_lib.mjs";
 
 const execFile = promisify(execFileCb);
@@ -56,6 +57,44 @@ test("local workflow harness loads ClawAutoResearch policy from OpenClaw config"
   assert.equal(pluginConfig.papernexusSharedCorpus, "shared-global-graph");
   assert.equal(pluginConfig.papernexusApiTokenSource, "env");
   assert.equal(pluginConfig.enableWorkflowMailbox, true);
+});
+
+test("local workflow harness resolves projects root from plugin config when no CLI root is given", async (t) => {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "workflow-harness-root-config-"));
+  const sourceConfigPath = path.join(tempRoot, "openclaw.json");
+  const projectsRoot = path.join(tempRoot, "configured-projects");
+
+  t.after(async () => {
+    await fs.rm(tempRoot, { recursive: true, force: true });
+  });
+
+  await fs.writeFile(
+    sourceConfigPath,
+    `${JSON.stringify(
+      {
+        plugins: {
+          entries: {
+            "openclaw-research": {
+              config: {
+                projectsRoot,
+              },
+            },
+          },
+        },
+      },
+      null,
+      2
+    )}\n`,
+    "utf8"
+  );
+
+  assert.equal(
+    await resolveWorkflowHarnessProjectsRoot({
+      sourceConfigPath,
+      fallback: path.join(tempRoot, "fallback"),
+    }),
+    path.resolve(projectsRoot)
+  );
 });
 
 test("local workflow harness starts /auto-research without discord context", async (t) => {

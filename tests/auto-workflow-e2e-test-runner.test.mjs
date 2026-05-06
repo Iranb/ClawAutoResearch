@@ -14,6 +14,7 @@ import {
   materializeAutoWorkflowModelOverrideConfig,
   normalizeAutoWorkflowCommand,
   normalizeAutoWorkflowMode,
+  resolveAutoWorkflowProjectsRoot,
   resolveAutoWorkflowLocalFallbackEnv,
   shouldEnableAgentModelSyncWatchdog,
   shouldRestartGatewayAfterAgentModelSync,
@@ -51,6 +52,7 @@ test("auto workflow E2E runner normalizes user-facing command aliases", () => {
   assert.equal(normalizeAutoWorkflowMode("deterministic"), "fixture");
   assert.equal(
     configuredProjectsRootFromOpenClawConfig({
+      projectsRoot: "/tmp/top-level-projects",
       plugins: {
         entries: {
           ClawAutoResearch: {
@@ -62,6 +64,59 @@ test("auto workflow E2E runner normalizes user-facing command aliases", () => {
       },
     }),
     "/tmp/openclaw-projects"
+  );
+  assert.equal(
+    configuredProjectsRootFromOpenClawConfig({
+      plugins: {
+        entries: {
+          "openclaw-research": {
+            config: {
+              projectsRoot: "/tmp/openclaw-research-projects",
+            },
+          },
+        },
+      },
+    }),
+    "/tmp/openclaw-research-projects"
+  );
+});
+
+test("auto workflow E2E runner defaults live projects root to plugin config", async (t) => {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "auto-workflow-root-config-"));
+  const sourceConfigPath = path.join(tempRoot, "openclaw.json");
+  const projectsRoot = path.join(tempRoot, "configured-projects");
+
+  t.after(async () => {
+    await fs.rm(tempRoot, { recursive: true, force: true });
+  });
+
+  await fs.writeFile(
+    sourceConfigPath,
+    `${JSON.stringify(
+      {
+        plugins: {
+          entries: {
+            ClawAutoResearch: {
+              config: {
+                projectsRoot,
+              },
+            },
+          },
+        },
+      },
+      null,
+      2
+    )}\n`,
+    "utf8"
+  );
+
+  assert.equal(
+    await resolveAutoWorkflowProjectsRoot({
+      mode: "live",
+      sourceConfigPath,
+      fallback: path.join(tempRoot, "run-root", "projects"),
+    }),
+    path.resolve(projectsRoot)
   );
 });
 

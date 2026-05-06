@@ -5,7 +5,10 @@ import path from "node:path";
 import { execFile as execFileCb } from "node:child_process";
 import { promisify } from "node:util";
 
-import { dispatchWorkflowCommand } from "./workflow_command_harness_lib.mjs";
+import {
+  dispatchWorkflowCommand,
+  resolveWorkflowHarnessProjectsRoot,
+} from "./workflow_command_harness_lib.mjs";
 import { buildWorkflowTransportContext } from "./workflow_transport_context.mjs";
 import { materializeSurveyReviewState, runWorkflowAutoIterator } from "../tools/workflow-guard.ts";
 import { reconcileAuthoringCloseout } from "../tools/authoring-closeout-reconcile.ts";
@@ -536,9 +539,17 @@ async function main() {
   const bootstrapTransport = argValue("--bootstrap-transport", "local");
   const conversationId = argValue("--conversation-id", null);
   const projectId = argValue("--project-id", null);
+  const sourceConfigPath = argValue("--source-config-path", null);
+  const explicitProjectsRoot = argValue("--projects-root", null);
   const projectsRoot =
-    argValue("--projects-root") ??
-    (await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auto-command-e2e-")));
+    mode === "live"
+      ? await resolveWorkflowHarnessProjectsRoot({
+          projectsRoot: explicitProjectsRoot,
+          sourceConfigPath,
+          fallback: path.join(os.tmpdir(), `openclaw-auto-command-e2e-${Date.now()}`),
+        })
+      : explicitProjectsRoot ??
+        (await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auto-command-e2e-")));
   const localPapernexus = await resolveLocalPapernexusConfig(process.argv);
 
   if (mode === "live") {
@@ -548,7 +559,7 @@ async function main() {
       gatewayUrl: argValue("--gateway-url", null),
       gatewayToken: argValue("--gateway-token", null),
       bootstrapTransport,
-      sourceConfigPath: argValue("--source-config-path", null),
+      sourceConfigPath,
       gatewayStartupTimeoutMs: numericArgValue("--gateway-startup-timeout-ms", null),
       bootstrapTimeoutMs: numericArgValue("--bootstrap-timeout-ms", null),
       projectRootTimeoutMs: numericArgValue("--project-root-timeout-ms", null),
