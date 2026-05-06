@@ -137,6 +137,14 @@ const FAILURE_COOLDOWN_MS = 10 * 60 * 1000;
 const DEFAULT_BOOTSTRAP_TITLE_RESOLVE_TIMEOUT_MS = 15_000;
 const MAX_BOOTSTRAP_TITLE_RESOLUTION_ATTEMPTS = 4;
 
+function hasExplicitMissingGraphPresence(manifest: Record<string, unknown>): boolean {
+  const paperIngestion = asRecord(manifest.paper_ingestion);
+  const graphPresenceStatus = normalizeStage(
+    paperIngestion?.graph_presence_status ?? paperIngestion?.graphPresenceStatus
+  );
+  return Boolean(graphPresenceStatus && graphPresenceStatus !== "ready");
+}
+
 type BootstrapSourceSeed = {
   arxivId: string;
   title: string;
@@ -1293,7 +1301,8 @@ async function queueMaterializedSources(params: {
   }
   if (
     existingRequest &&
-    COMPLETED_PAPER_INGESTION_REQUEST_STATUSES.has(existingRequest.status)
+    COMPLETED_PAPER_INGESTION_REQUEST_STATUSES.has(existingRequest.status) &&
+    !hasExplicitMissingGraphPresence(latestManifest)
   ) {
     return {
       requestId,

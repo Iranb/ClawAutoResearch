@@ -2,6 +2,26 @@
   "id": "ClawAutoResearch",
   "name": "ClawAutoResearch",
   "description": "Multi-agent research workflow: ideation, experiment, analysis, paper, review.",
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": [
+      "research_memory",
+      "research_workflow"
+    ]
+  },
+  "toolMetadata": {
+    "research_memory": {
+      "optional": true
+    },
+    "research_workflow": {
+      "optional": true
+    }
+  },
+  "skills": [
+    "./skills"
+  ],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

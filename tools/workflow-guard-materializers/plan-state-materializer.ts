@@ -51,6 +51,78 @@ function firstNonEmpty(...values: Array<string | null | undefined>): string | nu
   );
 }
 
+function isEmlTopic(value: string | null | undefined): boolean {
+  return /\beml\b|elementary functions from a single binary operator|exp\s*\(\s*x\s*\)\s*-\s*ln\s*\(\s*y\s*\)|basemodel|same-parameter|same parameter|mnist|fashion-mnist|toy text/u.test(
+    value?.toLowerCase() ?? ""
+  );
+}
+
+function isGcdTopic(value: string | null | undefined): boolean {
+  return /\bgcd\b|generalized category discovery|novel-class|novel class/u.test(
+    value?.toLowerCase() ?? ""
+  );
+}
+
+function isAutoBootstrapPlaceholder(value: string | null | undefined): boolean {
+  return /auto-bootstrap|literature-grounded primary metric|target dataset/u.test(
+    value?.toLowerCase() ?? ""
+  );
+}
+
+function isGcdPlanDrift(value: string | null | undefined): boolean {
+  return /fixmatch|generalized category discovery|\bgcd\b|pseudo-?label|adaptive gating|global threshold|known-class|novel-class|selected method delta|selected module|method runs against the reproduced|baseline metric regression/u.test(
+    value?.toLowerCase() ?? ""
+  );
+}
+
+function keepTopicCompatibleString(value: string, topic: string): boolean {
+  if (!isEmlTopic(topic)) {
+    return true;
+  }
+  return !isAutoBootstrapPlaceholder(value) && !isGcdPlanDrift(value);
+}
+
+function filterTopicCompatibleStrings(values: string[], topic: string): string[] {
+  return values.filter((value) => keepTopicCompatibleString(value, topic));
+}
+
+function sanitizeTopicCompatibleValue(value: unknown, topic: string): unknown {
+  if (!isEmlTopic(topic)) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return keepTopicCompatibleString(value, topic) ? value : undefined;
+  }
+  if (Array.isArray(value)) {
+    return value
+      .map((entry) => sanitizeTopicCompatibleValue(entry, topic))
+      .filter((entry) => entry !== undefined);
+  }
+  const record = asRecord(value);
+  if (!record) {
+    return value;
+  }
+  return Object.fromEntries(
+    Object.entries(record)
+      .map(([key, entry]) => [key, sanitizeTopicCompatibleValue(entry, topic)] as const)
+      .filter(([, entry]) => entry !== undefined)
+  );
+}
+
+function firstTopicCompatible(
+  topic: string,
+  ...values: Array<string | null | undefined>
+): string | null {
+  return (
+    values.find(
+      (value) =>
+        typeof value === "string" &&
+        value.trim().length > 0 &&
+        keepTopicCompatibleString(value, topic)
+    ) ?? null
+  );
+}
+
 function collectLooseStrings(...values: unknown[]): string[] {
   const direct: string[] = [];
   for (const value of values) {
@@ -127,12 +199,15 @@ function inferPrimaryMetric(params: {
 }): string {
   const topic = params.topic.toLowerCase();
   return (
-    firstNonEmpty(
+    firstTopicCompatible(
+      topic,
       params.patchState.primaryMetric,
       params.current.primaryMetric,
       pickString(params.manifest, ["primary_metric", "primaryMetric"])
     ) ??
-    (/\bgcd\b|generalized category discovery|novel-class|novel class/u.test(topic)
+    (isEmlTopic(topic)
+      ? "same-parameter validation accuracy with numerical-stability telemetry"
+      : isGcdTopic(topic)
       ? "H-score with known and novel accuracy"
       : "primary task quality metric")
   );
@@ -146,12 +221,15 @@ function inferBaselineReference(params: {
 }): string {
   const topic = params.topic.toLowerCase();
   return (
-    firstNonEmpty(
+    firstTopicCompatible(
+      topic,
       params.patchState.baselineReference,
       params.current.baselineReference,
       pickString(params.manifest, ["baseline_reference", "baselineReference"])
     ) ??
-    (/\bgcd\b|generalized category discovery/u.test(topic)
+    (isEmlTopic(topic)
+      ? "parameter-matched CNN, ResNet-like, Transformer, and MLP-Mixer toy baselines"
+      : isGcdTopic(topic)
       ? "SimGCD-style supervised and semi-supervised GCD baselines"
       : "strongest available supervised baseline")
   );
@@ -162,16 +240,82 @@ function inferDatasets(params: {
   patchState: ResearchProgramState;
   topic: string;
 }): string[] {
-  const existing = uniqueStrings([
+  const existing = filterTopicCompatibleStrings(uniqueStrings([
     ...params.patchState.datasets,
     ...params.current.datasets,
-  ]);
+  ]), params.topic);
   if (existing.length > 0) {
     return existing;
   }
-  return /\bgcd\b|generalized category discovery/u.test(params.topic.toLowerCase())
+  if (isEmlTopic(params.topic)) {
+    return ["MNIST", "Fashion-MNIST", "toy character-level text classification"];
+  }
+  return isGcdTopic(params.topic)
     ? ["CIFAR-100", "ImageNet-100", "CUB-200"]
     : ["primary benchmark suite"];
+}
+
+function inferDefaultAblations(topic: string): string[] {
+  if (isEmlTopic(topic)) {
+    return [
+      "remove the EML operator branch",
+      "replace the EML cell with a parameter-matched MLP or activation block",
+      "disable exp/log stabilization clamps and domain shifts",
+    ];
+  }
+  if (isGcdTopic(topic)) {
+    return [
+      "remove the selected method delta",
+      "replace adaptive gating with a single global threshold",
+    ];
+  }
+  return [
+    "remove the selected method delta",
+    "replace the selected module with a parameter-matched baseline block",
+  ];
+}
+
+function inferDefaultControls(topic: string): string[] {
+  const controls = ["fixed random seed control", "matched training budget control"];
+  if (isEmlTopic(topic)) {
+    controls.push(
+      "parameter-count matched baseline control",
+      "NaN/Inf and activation-range telemetry control"
+    );
+  }
+  return controls;
+}
+
+function inferDefaultStopRules(topic: string, primaryMetric: string, baselineReference: string): string[] {
+  if (isEmlTopic(topic)) {
+    return [
+      `stop after two consecutive non-improving EML runs against ${baselineReference}`,
+      "stop immediately if stabilized EML primitives still produce NaN or Inf values",
+    ];
+  }
+  return [
+    `stop after two consecutive non-improving method runs against the reproduced ${primaryMetric} baseline`,
+  ];
+}
+
+function inferDefaultRollbackTriggers(topic: string): string[] {
+  if (isEmlTopic(topic)) {
+    return [
+      "exp/log primitive instability produces NaN or Inf after stabilization",
+      "parameter-count matching drifts outside the accepted tolerance",
+      "toy image or text validation regresses below the matched baseline",
+    ];
+  }
+  if (isGcdTopic(topic)) {
+    return [
+      "known-class or baseline metric regression exceeds the accepted tolerance",
+      "ablation evidence shows the selected method delta does not drive the gain",
+    ];
+  }
+  return [
+    "baseline metric regression exceeds the accepted tolerance",
+    "ablation evidence shows the selected method delta does not drive the gain",
+  ];
 }
 
 function renderBulletList(items: string[]): string {
@@ -207,6 +351,13 @@ function syncTrackRegistryWithResearchProgram(
   trackRegistry: Record<string, unknown>,
   state: ResearchProgramState
 ): Record<string, unknown> {
+  const topic = firstNonEmpty(
+    state.goal,
+    state.problemStatement,
+    state.baselineReference,
+    state.primaryMetric,
+    ...state.datasets
+  ) ?? "";
   const rawTracks = Array.isArray(trackRegistry.tracks) ? trackRegistry.tracks : [];
   const existingById = new Map<string, Record<string, unknown>>();
   const passthroughTracks: unknown[] = [];
@@ -221,7 +372,10 @@ function syncTrackRegistryWithResearchProgram(
   }
 
   const canonicalTracks = state.tracks.map((track) => {
-    const existing = existingById.get(track.trackId) ?? {};
+    const existing =
+      (sanitizeTopicCompatibleValue(existingById.get(track.trackId) ?? {}, topic) as
+        | Record<string, unknown>
+        | undefined) ?? {};
     return {
       ...existing,
       track_id: track.trackId,
@@ -367,17 +521,21 @@ function buildPlanMarkdown(params: {
 function buildTodosMarkdown(params: {
   state: ResearchProgramState;
   selectedTrack: ResearchProgramTrack | null;
+  topic: string;
 }): string {
   const trackId =
     params.selectedTrack?.trackId ??
     params.state.planSelection.selectedTrackId ??
     "selected-track";
+  const methodImplementationTodo = isEmlTopic(params.topic)
+    ? "- [ ] Add the stabilized EML block behind a configuration switch."
+    : "- [ ] Add the selected method delta behind a configuration switch.";
   return [
     "# Plan TODOs",
     "",
     `## ${trackId}`,
     "- [ ] Implement the baseline reproduction entry point and record the exact command.",
-    "- [ ] Add the selected method delta behind a configuration switch.",
+    methodImplementationTodo,
     "- [ ] Run required baselines and store metrics in researcher/EXPERIMENT_LEDGER.json.",
     "- [ ] Run required ablations and compare against the selected metric.",
     "- [ ] Write analyzer evidence packets before paper drafting.",
@@ -537,42 +695,42 @@ export async function materializePlanStateImpl(params: {
       ) ??
       "Graph-backed ideation selected this track as the strongest bounded research direction.";
     const requiredBaselines = uniqueStrings([
-      ...(currentTrack?.requiredBaselines ?? []),
-      ...(patchTrack?.requiredBaselines ?? []),
-      ...(registryTrackState?.requiredBaselines ?? []),
-      ...collectLooseStrings((registryTrack ?? {}).baselines),
+      ...filterTopicCompatibleStrings(currentTrack?.requiredBaselines ?? [], topic),
+      ...filterTopicCompatibleStrings(patchTrack?.requiredBaselines ?? [], topic),
+      ...filterTopicCompatibleStrings(registryTrackState?.requiredBaselines ?? [], topic),
+      ...filterTopicCompatibleStrings(collectLooseStrings((registryTrack ?? {}).baselines), topic),
       baselineReference,
     ]);
     const requiredAblations = uniqueStrings([
-      ...(currentTrack?.requiredAblations ?? []),
-      ...(patchTrack?.requiredAblations ?? []),
-      ...(registryTrackState?.requiredAblations ?? []),
-      ...collectLooseStrings(
-        (registryTrack ?? {}).ablation_plan,
-        (registryTrack ?? {}).required_ablations
+      ...filterTopicCompatibleStrings(currentTrack?.requiredAblations ?? [], topic),
+      ...filterTopicCompatibleStrings(patchTrack?.requiredAblations ?? [], topic),
+      ...filterTopicCompatibleStrings(registryTrackState?.requiredAblations ?? [], topic),
+      ...filterTopicCompatibleStrings(
+        collectLooseStrings(
+          (registryTrack ?? {}).ablation_plan,
+          (registryTrack ?? {}).required_ablations
+        ),
+        topic
       ),
-      "remove the selected method delta",
-      "replace adaptive gating with a single global threshold",
+      ...inferDefaultAblations(topic),
     ]);
     const requiredControls = uniqueStrings([
-      ...(currentTrack?.requiredControls ?? []),
-      ...(patchTrack?.requiredControls ?? []),
-      ...(registryTrackState?.requiredControls ?? []),
-      "fixed random seed control",
-      "matched training budget control",
+      ...filterTopicCompatibleStrings(currentTrack?.requiredControls ?? [], topic),
+      ...filterTopicCompatibleStrings(patchTrack?.requiredControls ?? [], topic),
+      ...filterTopicCompatibleStrings(registryTrackState?.requiredControls ?? [], topic),
+      ...inferDefaultControls(topic),
     ]);
     const stopRules = uniqueStrings([
-      ...(currentTrack?.stopRules ?? []),
-      ...(patchTrack?.stopRules ?? []),
-      ...(registryTrackState?.stopRules ?? []),
-      "stop after two consecutive non-improving method runs against the reproduced baseline",
+      ...filterTopicCompatibleStrings(currentTrack?.stopRules ?? [], topic),
+      ...filterTopicCompatibleStrings(patchTrack?.stopRules ?? [], topic),
+      ...filterTopicCompatibleStrings(registryTrackState?.stopRules ?? [], topic),
+      ...inferDefaultStopRules(topic, primaryMetric, baselineReference),
     ]);
     const rollbackTriggers = uniqueStrings([
-      ...(currentTrack?.rollbackTriggers ?? []),
-      ...(patchTrack?.rollbackTriggers ?? []),
-      ...(registryTrackState?.rollbackTriggers ?? []),
-      "known-class or baseline metric regression exceeds the accepted tolerance",
-      "ablation evidence shows the selected method delta does not drive the gain",
+      ...filterTopicCompatibleStrings(currentTrack?.rollbackTriggers ?? [], topic),
+      ...filterTopicCompatibleStrings(patchTrack?.rollbackTriggers ?? [], topic),
+      ...filterTopicCompatibleStrings(registryTrackState?.rollbackTriggers ?? [], topic),
+      ...inferDefaultRollbackTriggers(topic),
     ]);
     const allowedClaimIds = uniqueStrings([
       ...(currentTrack?.writeScope.allowedClaimIds ?? []),
@@ -603,19 +761,41 @@ export async function materializePlanStateImpl(params: {
       status,
       hypothesis,
       novelty_basis: noveltyBasis,
+      mainMetric:
+        firstTopicCompatible(
+          topic,
+          patchTrack?.mainMetric,
+          currentTrack?.mainMetric,
+          registryTrackState?.mainMetric
+        ) ?? primaryMetric,
       main_metric:
-        patchTrack?.mainMetric ??
-        currentTrack?.mainMetric ??
-        registryTrackState?.mainMetric ??
-        primaryMetric,
+        firstTopicCompatible(
+          topic,
+          patchTrack?.mainMetric,
+          currentTrack?.mainMetric,
+          registryTrackState?.mainMetric
+        ) ?? primaryMetric,
+      successThreshold:
+        firstTopicCompatible(
+          topic,
+          patchTrack?.successThreshold,
+          currentTrack?.successThreshold,
+          registryTrackState?.successThreshold
+        ) ?? `improve ${primaryMetric} over ${baselineReference} without a baseline regression`,
       success_threshold:
-        patchTrack?.successThreshold ??
-        currentTrack?.successThreshold ??
-        registryTrackState?.successThreshold ??
-        `improve ${primaryMetric} over ${baselineReference} without a baseline regression`,
+        firstTopicCompatible(
+          topic,
+          patchTrack?.successThreshold,
+          currentTrack?.successThreshold,
+          registryTrackState?.successThreshold
+        ) ?? `improve ${primaryMetric} over ${baselineReference} without a baseline regression`,
+      requiredBaselines,
       required_baselines: requiredBaselines,
+      requiredAblations,
       required_ablations: requiredAblations,
+      requiredControls,
       required_controls: requiredControls,
+      experimentStageMatrix: mergedStageMatrix,
       experiment_stage_matrix: mergedStageMatrix,
       budget: {
         gpu_hours:
@@ -634,7 +814,9 @@ export async function materializePlanStateImpl(params: {
           registryTrackState?.budget.maxDebugIterations ??
           2,
       },
+      stopRules,
       stop_rules: stopRules,
+      rollbackTriggers,
       rollback_triggers: rollbackTriggers,
       write_scope: {
         allowed_claim_ids: allowedClaimIds,
@@ -891,6 +1073,7 @@ export async function materializePlanStateImpl(params: {
     content: buildTodosMarkdown({
       state: next,
       selectedTrack,
+      topic,
     }),
   });
   await writeMarkdownIfWeak({

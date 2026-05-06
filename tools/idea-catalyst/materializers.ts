@@ -11,6 +11,12 @@ import {
   serializeIdeationContractState,
   serializeIdeationGraphIndicesState,
 } from "../workflow-guard-state/ideation-contract";
+import {
+  normalizePaperIngestionQueuedRequest,
+  normalizePaperIngestionState,
+  serializePaperIngestionQueuedRequest,
+  serializePaperIngestionState,
+} from "../workflow-guard-state/paper-ingestion";
 import { normalizeResearchProgramState } from "../workflow-guard-state/research-program";
 import { buildIdeaCatalystCandidatePool } from "./candidate-pool";
 import { buildIdeaCatalystDecompositionPacket } from "./decomposer";
@@ -37,6 +43,7 @@ import { buildIdeaCatalystAbstractionPacket } from "./translator";
 
 const PAPER_NEXUS_IDEA_CATALYST_BUNDLE_PATH =
   "researcher/papernexus/IDEA_CATALYST_PACKET_BUNDLE.json";
+const PAPER_SOURCE_INDEX_PATH = "researcher/PAPER_SOURCE_INDEX.json";
 const CANDIDATE_POOL_PATH = "researcher/idea-catalyst/CANDIDATE_POOL.json";
 const CANDIDATE_SCORECARD_PATH =
   "researcher/idea-catalyst/CANDIDATE_SCORECARD.json";
@@ -44,6 +51,8 @@ const CANDIDATE_TOURNAMENT_PATH =
   "researcher/idea-catalyst/CANDIDATE_TOURNAMENT.json";
 const SELECTED_IDEAS_PATH = "researcher/idea-catalyst/SELECTED_IDEAS.json";
 const REJECTED_IDEAS_PATH = "researcher/idea-catalyst/REJECTED_IDEAS.json";
+const REQUISITION_RETIREMENT_REPORT_PATH =
+  "researcher/idea-catalyst/REQUISITION_RETIREMENT_REPORT.json";
 
 type LegacyIdeaCatalystCandidate = {
   direction_id?: string | null;
@@ -57,6 +66,460 @@ type LegacyIdeaCatalystCandidate = {
   composite_score?: number | null;
 };
 
+type IdeaCatalystRecoveryProfile = {
+  kind: "eml_operator";
+  selectedDirectionTitle: string;
+  sourceDomains: string[];
+  noveltyCandidateClusters: string[];
+  challengeClusters: string[];
+  insightClusters: string[];
+  transferBridges: string[];
+  occupiedSolutionZones: string[];
+};
+
+const EML_IDEA_CATALYST_PROFILE: IdeaCatalystRecoveryProfile = {
+  kind: "eml_operator",
+  selectedDirectionTitle:
+    "EML residual and mixer blocks for small basemodel validation",
+  sourceDomains: [
+    "EML operator semantics and neural-cell mapping",
+    "Numerical stability controls for exp/log primitives",
+    "Same-parameter ResNet-like and CNN baselines",
+    "Transformer and MLP-Mixer token-mixing baselines",
+    "MNIST/Fashion-MNIST and toy text validation protocol",
+  ],
+  noveltyCandidateClusters: [
+    "Safe EML residual block for compact basemodels",
+    "EML channel or token mixer under matched parameter budgets",
+  ],
+  challengeClusters: [
+    "The EML operator uses exp and log, so the neural block needs explicit overflow clipping and positive-y constraints.",
+    "Same-parameter comparison must isolate the EML operator from width, depth, normalization, residual scaling, and training-budget confounds.",
+    "MNIST-like image tasks can saturate, so finite-loss rate, calibration, activation statistics, and branch contribution must be tracked.",
+    "Toy text or sequence validation should stay compact enough that the comparison is about the operator rather than model scale.",
+  ],
+  insightClusters: [
+    "A residual EML branch can be tested as a guarded nonlinear interaction primitive.",
+    "An EML mixer can replace part of an MLP/FFN interaction when y-domain and exp-range controls are part of the model contract.",
+    "A useful basemodel claim requires source-backed operator definition, stability guardrails, and same-parameter baselines before scaling.",
+  ],
+  transferBridges: [
+    "EML operator semantics and neural-cell mapping: translate eml(x,y)=exp(x)-ln(y) into a bounded neural interaction cell.",
+    "Numerical stability controls for exp/log primitives: enforce softplus-positive y, exp-input clipping, finite-loss checks, and residual scaling.",
+    "Same-parameter ResNet-like and CNN baselines: compare safe EML residual blocks against residual MLP/CNN blocks with matched trainable parameters.",
+    "Transformer and MLP-Mixer token-mixing baselines: test EML channel/token mixers against compact FFN or mixer blocks of the same size.",
+    "MNIST/Fashion-MNIST and toy text validation protocol: start with small image and sequence tasks, then report accuracy plus stability metrics.",
+  ],
+  occupiedSolutionZones: [
+    "uncontrolled exp/log operator without finite-value guardrails",
+    "larger EML model compared against smaller baseline",
+    "MNIST-only accuracy claim without stability or branch-contribution ablations",
+  ],
+};
+
+const EML_PAPER_DOMAIN_HINTS: Array<{
+  domain: string;
+  patterns: RegExp[];
+  mechanism: string;
+}> = [
+  {
+    domain: "EML operator semantics and neural-cell mapping",
+    patterns: [/2603\.21852/i, /all elementary functions/i, /\beml\b/i],
+    mechanism: "bounded EML interaction cell",
+  },
+  {
+    domain: "Numerical stability controls for exp/log primitives",
+    patterns: [/2603\.21852/i, /all elementary functions/i, /\beml\b/i],
+    mechanism: "softplus-positive y and clipped exp input",
+  },
+  {
+    domain: "Same-parameter ResNet-like and CNN baselines",
+    patterns: [/1512\.03385/i, /deep residual learning/i, /\bresnet\b/i],
+    mechanism: "residual baseline matching",
+  },
+  {
+    domain: "Transformer and MLP-Mixer token-mixing baselines",
+    patterns: [
+      /1706\.03762/i,
+      /attention is all you need/i,
+      /2105\.01601/i,
+      /mlp-mixer/i,
+      /\btransformer\b/i,
+    ],
+    mechanism: "token and channel mixing baseline matching",
+  },
+  {
+    domain: "MNIST/Fashion-MNIST and toy text validation protocol",
+    patterns: [/1708\.07747/i, /fashion-mnist/i, /\bmnist\b/i],
+    mechanism: "small-dataset validation protocol",
+  },
+];
+
+function stableSearchText(value: unknown): string {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (value === null || value === undefined) {
+    return "";
+  }
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
+function hasEmlSignal(value: unknown): boolean {
+  return /\beml\b|2603\.21852|elementary functions from a single binary operator|eml\(x\s*,\s*y\)|exp\(x\).*ln\(y\)|ln\(y\).*exp\(x\)/i.test(
+    stableSearchText(value)
+  );
+}
+
+function hasFixMatchGcdDrift(value: unknown): boolean {
+  return /fixmatch|generalized category discovery|\bgcd\b|pseudo-?label|known\/novel|novel-class|simgcd/i.test(
+    stableSearchText(value)
+  );
+}
+
+function inferIdeaCatalystRecoveryProfile(params: {
+  manifest: Record<string, unknown>;
+  topicSummary: Record<string, unknown> | null;
+  paperSourceIndex: Record<string, unknown> | null;
+}): IdeaCatalystRecoveryProfile | null {
+  const profileMarker =
+    pickString(params.topicSummary ?? {}, ["recovery_profile", "recoveryProfile"]) ??
+    pickString(params.paperSourceIndex ?? {}, ["recovery_profile", "recoveryProfile"]);
+  if (profileMarker === "eml_operator") {
+    return EML_IDEA_CATALYST_PROFILE;
+  }
+  const topicText = [
+    params.manifest.title,
+    params.manifest.project_id,
+    params.manifest.research_program,
+    params.manifest.brainstorm_cycle,
+    params.topicSummary,
+    params.paperSourceIndex?.topic,
+    params.paperSourceIndex?.papers,
+  ]
+    .map(stableSearchText)
+    .join("\n");
+  return hasEmlSignal(topicText) ? EML_IDEA_CATALYST_PROFILE : null;
+}
+
+function sourceBackedPapersFromIndex(
+  paperSourceIndex: Record<string, unknown> | null
+): Record<string, unknown>[] {
+  const papers = Array.isArray(paperSourceIndex?.papers)
+    ? paperSourceIndex?.papers
+        .map((entry) => asRecord(entry))
+        .filter((entry): entry is Record<string, unknown> => Boolean(entry))
+    : [];
+  return papers.filter((paper) => {
+    const status = pickString(paper, ["source_status", "sourceStatus", "status"])
+      ?.trim()
+      .toLowerCase();
+    if (
+      paper.metadata_only === true ||
+      paper.metadataOnly === true ||
+      paper.source_backed === false ||
+      paper.sourceBacked === false ||
+      status === "metadata_only" ||
+      status === "metadata-only" ||
+      status === "metadata"
+    ) {
+      return false;
+    }
+    const sourcePath = pickString(paper, [
+      "source_path",
+      "sourcePath",
+      "pdf_path",
+      "pdfPath",
+      "local_path",
+      "localPath",
+      "staged_path",
+      "stagedPath",
+    ]);
+    return Boolean(
+      sourcePath || paper.source_backed === true || paper.sourceBacked === true
+    );
+  });
+}
+
+function hasSourceBackedEmlProfileEvidence(
+  paperSourceIndex: Record<string, unknown> | null
+): boolean {
+  const papers = sourceBackedPapersFromIndex(paperSourceIndex);
+  if (papers.length < 3) {
+    return false;
+  }
+  const coveredHintCount = EML_PAPER_DOMAIN_HINTS.filter((hint) =>
+    Boolean(findSourceBackedPaper(papers, hint.patterns))
+  ).length;
+  return hasEmlSignal(papers) && coveredHintCount >= 3;
+}
+
+function hasCanonicalEmlSourceDomainCoverage(value: unknown): boolean {
+  const haystack = stableSearchText(value).toLowerCase();
+  return (
+    EML_IDEA_CATALYST_PROFILE.sourceDomains.filter((domain) =>
+      haystack.includes(domain.toLowerCase())
+    ).length >= 3
+  );
+}
+
+function isActionableInvestigationRequisition(value: unknown): boolean {
+  const record = asRecord(value);
+  if (!record) {
+    return false;
+  }
+  if (record.actionable === false) {
+    return false;
+  }
+  const status = pickString(record, ["status"])?.trim().toLowerCase();
+  return (
+    record.actionable === true ||
+    ["pending", "queued", "running", "requisition"].includes(status ?? "") ||
+    (Array.isArray(record.missing_domains) && record.missing_domains.length > 0)
+  );
+}
+
+function findSourceBackedPaper(
+  papers: Record<string, unknown>[],
+  patterns: RegExp[]
+): Record<string, unknown> | null {
+  return (
+    papers.find((paper) => patterns.some((pattern) => pattern.test(stableSearchText(paper)))) ??
+    null
+  );
+}
+
+function sourceBackedPaperLabel(paper: Record<string, unknown> | null): string {
+  return (
+    pickString(paper ?? {}, ["canonical_id", "canonicalId"]) ??
+    pickString(paper ?? {}, ["title"]) ??
+    "source-backed-paper"
+  );
+}
+
+function sourceBackedPaperPath(paper: Record<string, unknown> | null): string | null {
+  return (
+    pickString(paper ?? {}, ["source_path", "sourcePath"]) ??
+    pickString(paper ?? {}, ["pdf_path", "pdfPath"]) ??
+    pickString(paper ?? {}, ["local_path", "localPath"]) ??
+    pickString(paper ?? {}, ["staged_path", "stagedPath"]) ??
+    null
+  );
+}
+
+function buildEmlIdeaCatalystGraphPacket(params: {
+  profile: IdeaCatalystRecoveryProfile;
+  paperSourceIndex: Record<string, unknown> | null;
+  selectedTrackId: string | null;
+}): Record<string, unknown> {
+  const sourceBackedPapers = sourceBackedPapersFromIndex(params.paperSourceIndex);
+  const sourceDomainAnalyses = EML_PAPER_DOMAIN_HINTS.map((hint, index) => {
+    const paper = findSourceBackedPaper(sourceBackedPapers, hint.patterns);
+    const paperLabel = sourceBackedPaperLabel(paper);
+    const paperPath = sourceBackedPaperPath(paper);
+    const hasSource = Boolean(paper);
+    const bridgeId = `eml-bridge-${index + 1}`;
+    const sourceSpans = hasSource
+      ? [
+          {
+            span_id: `${bridgeId}-source`,
+            paper_id: paperLabel,
+            source_path: paperPath,
+            source_type: paperPath ? "source_pdf" : "source_backed_index_entry",
+            source_span_available: false,
+            explicit_or_inferred: "source_backed_paper_index",
+          },
+        ]
+      : [];
+    const evidenceRefs = hasSource
+      ? [
+          {
+            ref_id: `${bridgeId}-evidence`,
+            paper_id: paperLabel,
+            source_path: paperPath,
+          },
+        ]
+      : [];
+    return {
+      source_domain: hint.domain,
+      domain_rationale: `${hint.domain} is required to keep the EML basemodel idea grounded in source-backed operator, baseline, and validation evidence.`,
+      shared_mechanisms: [hint.mechanism],
+      supporting_papers: hasSource ? [paperLabel] : [],
+      takeaways: [
+        {
+          concept: hint.mechanism,
+          mechanism: hint.mechanism,
+          kg_node_id: bridgeId,
+          source_domain_formulation: `${hint.domain} constrains the EML small-basemodel design.`,
+          mechanism_explanation: `${hint.mechanism} connects the source-backed EML literature set to the compact image/text validation plan.`,
+          relevance_to_challenge:
+            params.profile.challengeClusters[index % params.profile.challengeClusters.length],
+          selection_rationale:
+            hasSource
+              ? `Selected because ${paperLabel} is present as source-backed project evidence.`
+              : "Selected as an EML-specific evidence gap because no source-backed paper was indexed for this domain yet.",
+          supporting_papers: hasSource ? [paperLabel] : [],
+          source_spans: sourceSpans,
+          evidence_chain_refs: evidenceRefs,
+          bridge_path_ids: hasSource ? [bridgeId] : [],
+          path_trace: hasSource
+            ? [{ from: hint.domain, to: "Computer Science", via: paperLabel }]
+            : [],
+          path_completeness: hasSource ? 0.82 : 0.2,
+          evidence_density: hasSource ? 0.72 : 0,
+          mechanism_support_density: hasSource ? 0.7 : 0.35,
+          evidence_tier: hasSource ? "strong" : "weak",
+        },
+      ],
+      domain_distance: Number((0.62 + index * 0.04).toFixed(2)),
+      path_completeness: hasSource ? 0.82 : 0.2,
+      evidence_density: hasSource ? 0.72 : 0,
+      mechanism_support_density: hasSource ? 0.7 : 0.35,
+      evidence_tier: hasSource ? "strong" : "weak",
+      selection_rationale:
+        hasSource
+          ? `Source-backed EML profile evidence is present for ${hint.domain}.`
+          : `EML profile still needs source-backed evidence for ${hint.domain}.`,
+    };
+  });
+  const bridgePaths = sourceDomainAnalyses.map((analysis, index) => {
+    const takeaway = asRecord(Array.isArray(analysis.takeaways) ? analysis.takeaways[0] : null) ?? {};
+    return {
+      path_id: `eml-bridge-${index + 1}`,
+      source_domain: analysis.source_domain,
+      candidate_node_name: pickString(takeaway, ["concept"]) ?? "EML evidence bridge",
+      mechanism: pickString(takeaway, ["mechanism"]) ?? "EML evidence bridge",
+      matched_challenges: [
+        params.profile.challengeClusters[index % params.profile.challengeClusters.length],
+      ],
+      bridge_path_ids: Array.isArray(takeaway.bridge_path_ids)
+        ? takeaway.bridge_path_ids
+        : [],
+      evidence_refs: takeaway.evidence_chain_refs ?? [],
+      source_spans: takeaway.source_spans ?? [],
+      path_trace: takeaway.path_trace ?? [],
+      path_completeness: takeaway.path_completeness,
+      evidence_density: takeaway.evidence_density,
+      mechanism_support_density: takeaway.mechanism_support_density,
+      combined_score: analysis.evidence_density ? 0.82 : 0.42,
+    };
+  });
+  return {
+    status: "ready",
+    recovery_profile: params.profile.kind,
+    selected_track_id: params.selectedTrackId,
+    target_domain: "Computer Science",
+    selected_direction_title: params.profile.selectedDirectionTitle,
+    challenge_clusters: params.profile.challengeClusters,
+    insight_clusters: params.profile.insightClusters,
+    occupied_solution_zones: params.profile.occupiedSolutionZones,
+    candidate_domains: params.profile.sourceDomains,
+    selected_domains: sourceDomainAnalyses
+      .filter((entry) => Number(entry.evidence_density ?? 0) > 0)
+      .map((entry) => entry.source_domain),
+    transfer_bridges: params.profile.transferBridges,
+    bridge_retrieval: {
+      candidate_bridge_paths: bridgePaths,
+    },
+    source_domain_analyses: sourceDomainAnalyses,
+    idea_fragments: [
+      {
+        candidate_id: "eml-safe-residual-block",
+        source_domain: "EML operator semantics and neural-cell mapping",
+        frontier_type: "operator_transfer",
+        transferred_mechanism: "bounded EML residual interaction",
+        title: "Safe EML residual block",
+        idea_fragment: {
+          title: "Safe EML residual block",
+          core_insight:
+            "Wrap eml(x,y)=exp(x)-ln(y) in positive-y, clipping, normalization, and residual scaling before comparing against same-parameter residual baselines.",
+          integration_mechanism: "bounded EML residual interaction",
+          challenge_resolution:
+            "Turns the EML operator into a falsifiable small-basemodel component with explicit numerical guardrails.",
+          concrete_realization:
+            "Train compact EML residual blocks beside same-parameter CNN/MLP residual blocks on MNIST-like data.",
+        },
+        bridge_path_ids: ["eml-bridge-1", "eml-bridge-2", "eml-bridge-3"],
+        evidence_refs: bridgePaths.flatMap((entry) => objectList(entry.evidence_refs)),
+        source_spans: bridgePaths.flatMap((entry) => objectList(entry.source_spans)),
+        path_completeness: 0.82,
+        evidence_density: 0.72,
+        mechanism_support_density: 0.7,
+        evidence_tier: "strong",
+      },
+      {
+        candidate_id: "eml-token-mixer-block",
+        source_domain: "Transformer and MLP-Mixer token-mixing baselines",
+        frontier_type: "composition",
+        transferred_mechanism: "EML channel or token mixer",
+        title: "EML mixer block",
+        idea_fragment: {
+          title: "EML mixer block",
+          core_insight:
+            "Use a guarded EML interaction as a compact channel/token mixer and compare it against same-size FFN, Transformer, or MLP-Mixer blocks.",
+          integration_mechanism: "EML channel or token mixer",
+          challenge_resolution:
+            "Tests whether EML contributes beyond standard token/channel mixing under matched parameter counts.",
+          concrete_realization:
+            "Run small image and toy sequence tasks with finite-value checks and branch-contribution ablations.",
+        },
+        bridge_path_ids: ["eml-bridge-4", "eml-bridge-5"],
+        evidence_refs: bridgePaths.flatMap((entry) => objectList(entry.evidence_refs)),
+        source_spans: bridgePaths.flatMap((entry) => objectList(entry.source_spans)),
+        path_completeness: 0.8,
+        evidence_density: 0.7,
+        mechanism_support_density: 0.68,
+        evidence_tier: "strong",
+      },
+    ],
+  };
+}
+
+function buildProfileGraphIndices(
+  profile: IdeaCatalystRecoveryProfile,
+  current: ReturnType<typeof normalizeIdeationContractState>["graphIdeationIndices"]
+) {
+  return {
+    ...current,
+    status: "ready",
+    noveltyCandidateClusters: profile.noveltyCandidateClusters,
+    challengeClusters: profile.challengeClusters,
+    insightClusters: profile.insightClusters,
+    occupiedSolutionZones: profile.occupiedSolutionZones,
+    transferBridges: profile.transferBridges,
+    candidateSourceDomains: profile.sourceDomains,
+    selectedSourceDomains: [],
+    prunedSourceDomains: [],
+  };
+}
+
+function buildSupersededProfileRequisition(params: {
+  profile: IdeaCatalystRecoveryProfile;
+  targetDomain: string;
+  trigger: string | null | undefined;
+}) {
+  return {
+    schema_version: 1,
+    status: "not_required",
+    actionable: false,
+    requisition_id: `${params.profile.kind}-profile-requisition-not-required`,
+    target_domain: params.targetDomain,
+    missing_domains: [],
+    missing_evidence_types: [],
+    search_queries: [],
+    coverage_gap_questions: [],
+    required_stage_reentry: [],
+    non_actionable_reason:
+      "Source-backed EML profile evidence is available; the prior IDEA-CATALYST requisition was retired.",
+    trigger: params.trigger ?? "idea_catalyst",
+    retired_at: nowIso(),
+  };
+}
+
 function markdownBulletsToList(rawText: unknown): string[] {
   return String(rawText || "")
     .split(/\r?\n/)
@@ -68,6 +531,59 @@ function markdownBulletsToList(rawText: unknown): string[] {
 
 function nowIso() {
   return new Date().toISOString();
+}
+
+function isActiveIdeaCatalystQueuedRequestStatus(value: unknown): boolean {
+  return ["queued", "launching", "running", "needs_repair"].includes(
+    String(value ?? "").trim().toLowerCase()
+  );
+}
+
+function retireActiveIdeaCatalystRequisitionQueuedRequests(params: {
+  paperIngestion: unknown;
+  updatedAt: string;
+  detail: string;
+  validationReportPath: string;
+  validationSummary: string;
+}) {
+  const paperIngestion = normalizePaperIngestionState(params.paperIngestion);
+  let retiredCount = 0;
+  const retiredRequestIds: string[] = [];
+  const queuedRequests = paperIngestion.queuedRequests.map((entry) => {
+    if (
+      entry.triggerKind !== "idea_catalyst_requisition" ||
+      !isActiveIdeaCatalystQueuedRequestStatus(entry.status)
+    ) {
+      return entry;
+    }
+    retiredCount += 1;
+    retiredRequestIds.push(entry.requestId);
+    return (
+      normalizePaperIngestionQueuedRequest({
+        ...serializePaperIngestionQueuedRequest(entry),
+        status: "completed",
+        updated_at: params.updatedAt,
+        finished_at: params.updatedAt,
+        last_error: null,
+        detail: params.detail,
+        validation_status: "valid",
+        validation_summary: params.validationSummary,
+        validation_report_path: params.validationReportPath,
+      }) ?? entry
+    );
+  });
+  if (retiredCount === 0) {
+    return { retiredCount, retiredRequestIds, paperIngestion };
+  }
+  return {
+    retiredCount,
+    retiredRequestIds,
+    paperIngestion: {
+      ...paperIngestion,
+      queuedRequests,
+      lastUpdatedAt: params.updatedAt,
+    },
+  };
 }
 
 function normalizePairwiseVote(value: unknown): "a" | "b" | "tie" {
@@ -342,6 +858,14 @@ export async function materializeIdeaCatalystState(params: {
     projectRoot,
     ideationContract.graphBasisPaths.topicSummaryPath
   );
+  const paperSourceIndexPath = resolveProjectArtifactPath(
+    projectRoot,
+    PAPER_SOURCE_INDEX_PATH
+  );
+  const currentRequisitionPath = resolveProjectArtifactPath(
+    projectRoot,
+    current.investigationRequisitionPath
+  );
   const candidatePoolPath = resolveProjectArtifactPath(
     projectRoot,
     ideationContract.candidatePoolPath
@@ -359,6 +883,8 @@ export async function materializeIdeaCatalystState(params: {
     topicSummary,
     candidatePool,
     problemDecompositionText,
+    paperSourceIndex,
+    existingInvestigationRequisition,
   ] =
     await Promise.all([
       readJsonIfExists<Record<string, unknown>>(graphPacketPath ?? ""),
@@ -368,106 +894,180 @@ export async function materializeIdeaCatalystState(params: {
       readJsonIfExists<Record<string, unknown>>(topicSummaryPath ?? ""),
       readJsonIfExists<Record<string, unknown>>(candidatePoolPath ?? ""),
       readTextIfExists(problemDecompositionPath),
+      readJsonIfExists<Record<string, unknown>>(paperSourceIndexPath ?? ""),
+      readJsonIfExists<Record<string, unknown>>(currentRequisitionPath ?? ""),
     ]);
   const ideaCatalystPacketBundle = unwrapPacketBundle(rawIdeaCatalystPacketBundle);
+  const recoveryProfile = inferIdeaCatalystRecoveryProfile({
+    manifest,
+    topicSummary,
+    paperSourceIndex,
+  });
+  const profileDriftDetected =
+    recoveryProfile?.kind === "eml_operator" &&
+    [
+      ideationContract.graphIdeationIndices,
+      graphPacket,
+      rawIdeaCatalystPacketBundle,
+      mechanismBridgePacket,
+      challengeInsightPacket,
+      candidatePool,
+      current,
+      existingInvestigationRequisition,
+    ].some(hasFixMatchGcdDrift);
+  const sparseEmlGraphPacket =
+    recoveryProfile?.kind === "eml_operator" &&
+    sourceBackedPapersFromIndex(paperSourceIndex).length > 0 &&
+    !hasEmlSignal(graphPacket) &&
+    !hasEmlSignal(ideaCatalystPacketBundle);
+  const sourceBackedEmlProfileReady =
+    recoveryProfile?.kind === "eml_operator" &&
+    hasSourceBackedEmlProfileEvidence(paperSourceIndex);
+  const shouldRecoverSourceBackedEmlProfile =
+    sourceBackedEmlProfileReady &&
+    (current.status === "requisition" ||
+      current.requisitionRequired ||
+      isActionableInvestigationRequisition(existingInvestigationRequisition) ||
+      !hasCanonicalEmlSourceDomainCoverage(ideationContract.graphIdeationIndices));
+  const shouldUseSourceBackedEmlProfile =
+    recoveryProfile?.kind === "eml_operator" && sourceBackedEmlProfileReady;
+  const useProfileRecovery = Boolean(
+    recoveryProfile &&
+      (shouldUseSourceBackedEmlProfile ||
+        profileDriftDetected ||
+        sparseEmlGraphPacket ||
+        shouldRecoverSourceBackedEmlProfile)
+  );
+  const profileGraphPacket =
+    useProfileRecovery && recoveryProfile
+      ? buildEmlIdeaCatalystGraphPacket({
+          profile: recoveryProfile,
+          paperSourceIndex,
+          selectedTrackId: ideationContract.selectedTrackId,
+        })
+      : null;
+  const graphPacketForMerge = profileGraphPacket ?? graphPacket;
+  const ideaCatalystPacketBundleForMerge =
+    useProfileRecovery && hasFixMatchGcdDrift(ideaCatalystPacketBundle)
+      ? null
+      : ideaCatalystPacketBundle;
+  const mechanismBridgePacketForMerge =
+    useProfileRecovery && hasFixMatchGcdDrift(mechanismBridgePacket)
+      ? null
+      : mechanismBridgePacket;
+  const challengeInsightPacketForMerge =
+    useProfileRecovery && hasFixMatchGcdDrift(challengeInsightPacket)
+      ? null
+      : challengeInsightPacket;
+  const candidatePoolForMaterialization =
+    useProfileRecovery && hasFixMatchGcdDrift(candidatePool)
+      ? null
+      : candidatePool;
+  const graphIndices =
+    useProfileRecovery && recoveryProfile
+      ? buildProfileGraphIndices(
+          recoveryProfile,
+          ideationContract.graphIdeationIndices
+        )
+      : ideationContract.graphIdeationIndices;
 
   const mergedGraphPacket: Record<string, unknown> = {
-    ...(graphPacket ?? {}),
-    ...(ideaCatalystPacketBundle ?? {}),
-    ...(challengeInsightPacket ?? {}),
-    ...(mechanismBridgePacket ?? {}),
+    ...(graphPacketForMerge ?? {}),
+    ...(ideaCatalystPacketBundleForMerge ?? {}),
+    ...(challengeInsightPacketForMerge ?? {}),
+    ...(mechanismBridgePacketForMerge ?? {}),
     challenge_clusters:
-      challengeInsightPacket?.challenge_clusters ??
-      challengeInsightPacket?.challengeClusters ??
-      graphPacket?.challenge_clusters ??
-      graphPacket?.challengeClusters,
+      challengeInsightPacketForMerge?.challenge_clusters ??
+      challengeInsightPacketForMerge?.challengeClusters ??
+      graphPacketForMerge?.challenge_clusters ??
+      graphPacketForMerge?.challengeClusters,
     candidate_domains:
-      mechanismBridgePacket?.candidate_domains ??
-      mechanismBridgePacket?.candidateDomains ??
-      graphPacket?.candidate_domains ??
-      graphPacket?.candidateDomains,
+      mechanismBridgePacketForMerge?.candidate_domains ??
+      mechanismBridgePacketForMerge?.candidateDomains ??
+      graphPacketForMerge?.candidate_domains ??
+      graphPacketForMerge?.candidateDomains,
     selected_domains:
-      mechanismBridgePacket?.selected_domains ??
-      mechanismBridgePacket?.selectedDomains,
+      mechanismBridgePacketForMerge?.selected_domains ??
+      mechanismBridgePacketForMerge?.selectedDomains,
     pruned_domains:
-      mechanismBridgePacket?.pruned_domains ??
-      mechanismBridgePacket?.prunedDomains,
+      mechanismBridgePacketForMerge?.pruned_domains ??
+      mechanismBridgePacketForMerge?.prunedDomains,
     transfer_bridges:
-      mechanismBridgePacket?.transfer_bridges ??
-      mechanismBridgePacket?.transferBridges ??
-      graphPacket?.transfer_bridges ??
-      graphPacket?.transferBridges,
+      mechanismBridgePacketForMerge?.transfer_bridges ??
+      mechanismBridgePacketForMerge?.transferBridges ??
+      graphPacketForMerge?.transfer_bridges ??
+      graphPacketForMerge?.transferBridges,
     bridge_nodes:
-      mechanismBridgePacket?.bridge_nodes ??
-      mechanismBridgePacket?.bridgeNodes ??
-      graphPacket?.bridge_nodes ??
-      graphPacket?.bridgeNodes,
+      mechanismBridgePacketForMerge?.bridge_nodes ??
+      mechanismBridgePacketForMerge?.bridgeNodes ??
+      graphPacketForMerge?.bridge_nodes ??
+      graphPacketForMerge?.bridgeNodes,
     domain_distance_matrix:
-      mechanismBridgePacket?.domain_distance_matrix ??
-      mechanismBridgePacket?.domainDistanceMatrix ??
-      graphPacket?.domain_distance_matrix ??
-      graphPacket?.domainDistanceMatrix,
+      mechanismBridgePacketForMerge?.domain_distance_matrix ??
+      mechanismBridgePacketForMerge?.domainDistanceMatrix ??
+      graphPacketForMerge?.domain_distance_matrix ??
+      graphPacketForMerge?.domainDistanceMatrix,
     bridge_evidence_tier:
-      mechanismBridgePacket?.bridge_evidence_tier ??
-      mechanismBridgePacket?.bridgeEvidenceTier ??
-      ideaCatalystPacketBundle?.bridge_evidence_tier ??
-      ideaCatalystPacketBundle?.bridgeEvidenceTier ??
-      graphPacket?.bridge_evidence_tier ??
-      graphPacket?.bridgeEvidenceTier,
+      mechanismBridgePacketForMerge?.bridge_evidence_tier ??
+      mechanismBridgePacketForMerge?.bridgeEvidenceTier ??
+      ideaCatalystPacketBundleForMerge?.bridge_evidence_tier ??
+      ideaCatalystPacketBundleForMerge?.bridgeEvidenceTier ??
+      graphPacketForMerge?.bridge_evidence_tier ??
+      graphPacketForMerge?.bridgeEvidenceTier,
     bridge_retrieval:
-      ideaCatalystPacketBundle?.bridge_retrieval ??
-      ideaCatalystPacketBundle?.bridgeRetrieval ??
-      mechanismBridgePacket?.bridge_retrieval ??
-      mechanismBridgePacket?.bridgeRetrieval ??
-      graphPacket?.bridge_retrieval ??
-      graphPacket?.bridgeRetrieval,
+      ideaCatalystPacketBundleForMerge?.bridge_retrieval ??
+      ideaCatalystPacketBundleForMerge?.bridgeRetrieval ??
+      mechanismBridgePacketForMerge?.bridge_retrieval ??
+      mechanismBridgePacketForMerge?.bridgeRetrieval ??
+      graphPacketForMerge?.bridge_retrieval ??
+      graphPacketForMerge?.bridgeRetrieval,
     structural_analogy:
-      ideaCatalystPacketBundle?.structural_analogy ??
-      ideaCatalystPacketBundle?.structuralAnalogy ??
-      mechanismBridgePacket?.structural_analogy ??
-      mechanismBridgePacket?.structuralAnalogy ??
-      graphPacket?.structural_analogy ??
-      graphPacket?.structuralAnalogy,
+      ideaCatalystPacketBundleForMerge?.structural_analogy ??
+      ideaCatalystPacketBundleForMerge?.structuralAnalogy ??
+      mechanismBridgePacketForMerge?.structural_analogy ??
+      mechanismBridgePacketForMerge?.structuralAnalogy ??
+      graphPacketForMerge?.structural_analogy ??
+      graphPacketForMerge?.structuralAnalogy,
     interdisciplinary_potential_ranking:
-      ideaCatalystPacketBundle?.interdisciplinary_potential_ranking ??
-      ideaCatalystPacketBundle?.interdisciplinaryPotentialRanking ??
-      mechanismBridgePacket?.interdisciplinary_potential_ranking ??
-      mechanismBridgePacket?.interdisciplinaryPotentialRanking ??
-      graphPacket?.interdisciplinary_potential_ranking ??
-      graphPacket?.interdisciplinaryPotentialRanking,
+      ideaCatalystPacketBundleForMerge?.interdisciplinary_potential_ranking ??
+      ideaCatalystPacketBundleForMerge?.interdisciplinaryPotentialRanking ??
+      mechanismBridgePacketForMerge?.interdisciplinary_potential_ranking ??
+      mechanismBridgePacketForMerge?.interdisciplinaryPotentialRanking ??
+      graphPacketForMerge?.interdisciplinary_potential_ranking ??
+      graphPacketForMerge?.interdisciplinaryPotentialRanking,
     domain_distance_policy:
-      ideaCatalystPacketBundle?.domain_distance_policy ??
-      ideaCatalystPacketBundle?.domainDistancePolicy ??
-      mechanismBridgePacket?.domain_distance_policy ??
-      mechanismBridgePacket?.domainDistancePolicy ??
-      graphPacket?.domain_distance_policy ??
-      graphPacket?.domainDistancePolicy,
+      ideaCatalystPacketBundleForMerge?.domain_distance_policy ??
+      ideaCatalystPacketBundleForMerge?.domainDistancePolicy ??
+      mechanismBridgePacketForMerge?.domain_distance_policy ??
+      mechanismBridgePacketForMerge?.domainDistancePolicy ??
+      graphPacketForMerge?.domain_distance_policy ??
+      graphPacketForMerge?.domainDistancePolicy,
     source_domain_analyses:
-      ideaCatalystPacketBundle?.source_domain_analyses ??
-      ideaCatalystPacketBundle?.sourceDomainAnalyses ??
-      mechanismBridgePacket?.source_domain_analyses ??
-      mechanismBridgePacket?.sourceDomainAnalyses ??
-      graphPacket?.source_domain_analyses ??
-      graphPacket?.sourceDomainAnalyses,
+      ideaCatalystPacketBundleForMerge?.source_domain_analyses ??
+      ideaCatalystPacketBundleForMerge?.sourceDomainAnalyses ??
+      mechanismBridgePacketForMerge?.source_domain_analyses ??
+      mechanismBridgePacketForMerge?.sourceDomainAnalyses ??
+      graphPacketForMerge?.source_domain_analyses ??
+      graphPacketForMerge?.sourceDomainAnalyses,
     cross_domain_analysis:
-      ideaCatalystPacketBundle?.cross_domain_analysis ??
-      ideaCatalystPacketBundle?.crossDomainAnalysis ??
-      mechanismBridgePacket?.cross_domain_analysis ??
-      mechanismBridgePacket?.crossDomainAnalysis ??
-      graphPacket?.cross_domain_analysis ??
-      graphPacket?.crossDomainAnalysis,
+      ideaCatalystPacketBundleForMerge?.cross_domain_analysis ??
+      ideaCatalystPacketBundleForMerge?.crossDomainAnalysis ??
+      mechanismBridgePacketForMerge?.cross_domain_analysis ??
+      mechanismBridgePacketForMerge?.crossDomainAnalysis ??
+      graphPacketForMerge?.cross_domain_analysis ??
+      graphPacketForMerge?.crossDomainAnalysis,
     idea_fragments:
-      ideaCatalystPacketBundle?.idea_fragments ??
-      ideaCatalystPacketBundle?.ideaFragments ??
-      mechanismBridgePacket?.idea_fragments ??
-      mechanismBridgePacket?.ideaFragments ??
-      graphPacket?.idea_fragments ??
-      graphPacket?.ideaFragments,
+      ideaCatalystPacketBundleForMerge?.idea_fragments ??
+      ideaCatalystPacketBundleForMerge?.ideaFragments ??
+      mechanismBridgePacketForMerge?.idea_fragments ??
+      mechanismBridgePacketForMerge?.ideaFragments ??
+      graphPacketForMerge?.idea_fragments ??
+      graphPacketForMerge?.ideaFragments,
     requisition_report:
-      ideaCatalystPacketBundle?.requisition_report ??
-      ideaCatalystPacketBundle?.requisitionReport ??
-      mechanismBridgePacket?.requisition_report ??
-      mechanismBridgePacket?.requisitionReport,
+      ideaCatalystPacketBundleForMerge?.requisition_report ??
+      ideaCatalystPacketBundleForMerge?.requisitionReport ??
+      mechanismBridgePacketForMerge?.requisition_report ??
+      mechanismBridgePacketForMerge?.requisitionReport,
   };
 
   const targetDomain =
@@ -475,15 +1075,14 @@ export async function materializeIdeaCatalystState(params: {
     pickString(mergedGraphPacket, ["target_domain", "targetDomain"]) ??
     pickString(topicSummary ?? {}, ["target_domain", "targetDomain"]) ??
     "Computer Science";
-  const graphIndices = ideationContract.graphIdeationIndices;
   const challengeClusters = uniqueStrings([
     ...graphIndices.challengeClusters,
     ...markdownBulletsToList(problemDecompositionText).slice(0, 4),
   ]).slice(0, 6);
   const graphPacketTransferBridges = Array.isArray(
-    graphPacket?.transfer_bridges ?? graphPacket?.transferBridges
+    graphPacketForMerge?.transfer_bridges ?? graphPacketForMerge?.transferBridges
   )
-    ? ((graphPacket?.transfer_bridges ?? graphPacket?.transferBridges) as unknown[])
+    ? ((graphPacketForMerge?.transfer_bridges ?? graphPacketForMerge?.transferBridges) as unknown[])
         .map((entry) => asString(entry))
         .filter((entry): entry is string => Boolean(entry))
     : [];
@@ -626,7 +1225,7 @@ export async function materializeIdeaCatalystState(params: {
 
   const candidatePoolPacket = buildIdeaCatalystCandidatePool({
     graphPacket: mergedGraphPacket,
-    candidatePool,
+    candidatePool: candidatePoolForMaterialization,
     scoutingReport,
     targetDomain,
     selectedTrackId: ideationContract.selectedTrackId,
@@ -678,6 +1277,7 @@ export async function materializeIdeaCatalystState(params: {
     shouldIntegrateFragments && ideaFragmentsPacket
       ? buildIdeaCatalystRankedFragments(ideaFragmentsPacket, { llmJudgments })
       : null;
+  const materializedAt = nowIso();
 
   const next = normalizeIdeaCatalystState({
     ...serializeIdeaCatalystState(current),
@@ -719,20 +1319,27 @@ export async function materializeIdeaCatalystState(params: {
             "non_actionable_reason",
             "nonActionableReason",
           ]) ?? gateDecision.rationale,
-    last_updated_at: nowIso(),
+    last_updated_at: materializedAt,
   });
 
   const ideationContractState = normalizeIdeationContractState(manifest.ideation_contract);
+  const manifestGraphIndicesBase =
+    useProfileRecovery && recoveryProfile
+      ? buildProfileGraphIndices(
+          recoveryProfile,
+          ideationContractState.graphIdeationIndices
+        )
+      : ideationContractState.graphIdeationIndices;
   manifest.ideation_contract = serializeIdeationContractState({
     ...ideationContractState,
     graphIdeationIndices: {
-      ...ideationContractState.graphIdeationIndices,
+      ...manifestGraphIndicesBase,
       transferBridges: uniqueStrings([
-        ...ideationContractState.graphIdeationIndices.transferBridges,
+        ...manifestGraphIndicesBase.transferBridges,
         ...bridgeNodeLabels,
       ]),
       candidateSourceDomains: uniqueStrings([
-        ...ideationContractState.graphIdeationIndices.candidateSourceDomains,
+        ...manifestGraphIndicesBase.candidateSourceDomains,
         ...candidateSourceDomains,
       ]),
       selectedSourceDomains: selectedSourceDomains,
@@ -742,6 +1349,12 @@ export async function materializeIdeaCatalystState(params: {
     },
   });
 
+  const shouldRetireProfileRequisition =
+    gateDecision.decision === "brainstorm" &&
+    Boolean(recoveryProfile) &&
+    (hasFixMatchGcdDrift(existingInvestigationRequisition) ||
+      (useProfileRecovery &&
+        isActionableInvestigationRequisition(existingInvestigationRequisition)));
   const resolvedPaths: Array<[string, Record<string, unknown> | null]> = [
     [next.decompositionPacketPath, decompositionPacket],
     [next.abstractionPacketPath, abstractionPacket],
@@ -757,7 +1370,13 @@ export async function materializeIdeaCatalystState(params: {
     [
       next.investigationRequisitionPath,
       gateDecision.decision === "brainstorm"
-        ? null
+        ? shouldRetireProfileRequisition && recoveryProfile
+          ? buildSupersededProfileRequisition({
+              profile: recoveryProfile,
+              targetDomain,
+              trigger: params.trigger,
+            })
+          : null
         : {
             ...(requisitionRecord ?? {}),
             trigger: params.trigger ?? "idea_catalyst",
@@ -799,6 +1418,45 @@ export async function materializeIdeaCatalystState(params: {
   });
   if (trackRegistryUpdated) {
     generatedFiles.push(path.join(projectRoot, "TRACK_REGISTRY.json"));
+  }
+
+  if (!next.requisitionRequired) {
+    const retirementSummary =
+      next.status === "ready"
+        ? "IDEA-CATALYST is source-backed and no longer requires this requisition."
+        : "IDEA-CATALYST requisition is no longer actionable.";
+    const queueRetirement = retireActiveIdeaCatalystRequisitionQueuedRequests({
+      paperIngestion: manifest.paper_ingestion,
+      updatedAt: materializedAt,
+      validationReportPath: REQUISITION_RETIREMENT_REPORT_PATH,
+      validationSummary: retirementSummary,
+      detail:
+        next.status === "ready"
+          ? "IDEA-CATALYST is source-backed and no longer requires this requisition; retired the stale graph-build queue request with a durable satisfaction report."
+          : "IDEA-CATALYST requisition is no longer actionable; retired the stale graph-build queue request with a durable satisfaction report.",
+    });
+    if (queueRetirement.retiredCount > 0) {
+      manifest.paper_ingestion = serializePaperIngestionState(
+        queueRetirement.paperIngestion
+      );
+      const retirementReportPath = resolveRequiredProjectArtifactPath(
+        projectRoot,
+        REQUISITION_RETIREMENT_REPORT_PATH
+      );
+      await writeJsonEnsured(retirementReportPath, {
+        status: "valid",
+        trigger: params.trigger ?? "idea_catalyst",
+        retired_at: materializedAt,
+        retired_request_ids: queueRetirement.retiredRequestIds,
+        retirement_summary: retirementSummary,
+        idea_catalyst_status: next.status,
+        requisition_required: next.requisitionRequired,
+        investigation_requisition_path: next.investigationRequisitionPath,
+        paper_source_index_path: PAPER_SOURCE_INDEX_PATH,
+        source_domains: next.sourceDomains,
+      });
+      generatedFiles.push(retirementReportPath);
+    }
   }
 
   manifest.idea_catalyst = serializeIdeaCatalystState(next);

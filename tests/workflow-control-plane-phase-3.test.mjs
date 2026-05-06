@@ -1440,6 +1440,148 @@ test("materialize_plan_state repairs malformed plan payloads into auto-iterator-
   assert.match(auditText, /Handoff Decision/);
 });
 
+test("materialize_plan_state uses EML defaults instead of GCD plan fallbacks", async (t) => {
+  const projectRoot = await makeProjectRoot();
+
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await seedPlanProject(projectRoot);
+  const trackId = "track-eml-residual-and-mixer-blocks";
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.title = "EML operator small basemodel toy validation";
+  manifest.primary_track_id = trackId;
+  manifest.research_program = {
+    status: "draft",
+    goal:
+      "Use EML eml(x,y)=exp(x)-ln(y) to build small ResNet-like and Transformer-like basemodels, then compare same-parameter models on MNIST, Fashion-MNIST, and toy text datasets.",
+    problem_statement:
+      "The plan must validate numerically stable EML operator blocks against same-parameter small baselines.",
+    baseline_reference:
+      "EML toy validation literature baseline (auto-bootstrap)",
+    primary_metric: "literature-grounded primary metric (auto-bootstrap)",
+    datasets: ["EML toy validation target dataset (auto-bootstrap)"],
+    tracks: [
+      {
+        track_id: trackId,
+        status: "active",
+        hypothesis: "Stale EML hypothesis",
+        novelty_basis: "Stale EML novelty",
+        main_metric: "literature-grounded primary metric (auto-bootstrap)",
+        success_threshold:
+          "improve literature-grounded primary metric (auto-bootstrap) over EML toy validation literature baseline (auto-bootstrap)",
+        required_baselines: [
+          "EML toy validation literature baseline (auto-bootstrap)",
+        ],
+        required_ablations: [
+          "remove the selected method delta",
+          "replace adaptive gating with a single global threshold",
+        ],
+        required_controls: ["fixed random seed control"],
+        experiment_stage_matrix: [
+          "baseline_implementation",
+          "baseline_tuning",
+          "creative_research",
+          "ablation_studies",
+        ],
+        budget: {
+          gpu_hours: 2,
+          max_runs: 2,
+          max_debug_iterations: 1,
+        },
+        stop_rules: [
+          "stop after two consecutive non-improving method runs against the reproduced baseline",
+        ],
+        rollback_triggers: [
+          "known-class or baseline metric regression exceeds the accepted tolerance",
+          "baseline metric regression exceeds the accepted tolerance",
+        ],
+        write_scope: {
+          allowed_claim_ids: ["claim-stale"],
+          allowed_figure_ids: ["fig-stale"],
+        },
+      },
+    ],
+    plan_alternatives: [],
+    plan_selection: {
+      selected_option_id: null,
+      selected_track_id: null,
+      compared_option_ids: [],
+      rationale: null,
+      decisive_graph_evidence_paths: [],
+    },
+  };
+  await writeJson(manifestPath, manifest);
+  await writeJson(path.join(projectRoot, "TRACK_REGISTRY.json"), {
+    tracks: [
+      {
+        track_id: trackId,
+        status: "active",
+        title: "EML residual and mixer blocks",
+        baseline_reference:
+          "EML toy validation literature baseline (auto-bootstrap)",
+        primary_metric: "literature-grounded primary metric (auto-bootstrap)",
+        falsifier_pilot:
+          "Run a bounded pilot that requires literature-grounded primary metric (auto-bootstrap).",
+        graph_backed_innovation_evidence: {
+          baseline_reference:
+            "EML toy validation literature baseline (auto-bootstrap)",
+          primary_metric: "literature-grounded primary metric (auto-bootstrap)",
+          falsifier_pilot:
+            "Run a bounded pilot that requires literature-grounded primary metric (auto-bootstrap).",
+          evidence_pointers: [
+            "researcher/idea-catalyst/SCOUTING_REPORT.json",
+          ],
+        },
+        evidence_pointers: [
+          "researcher/idea-catalyst/SCOUTING_REPORT.json",
+          "graph/LIMITATION_FRONTIER.md",
+        ],
+      },
+    ],
+  });
+  await seedReadyIdeationContract(projectRoot, { trackId });
+
+  const tool = createResearchWorkflowTool({ workspaceDir: projectRoot });
+  const materialized = await executeWorkflowTool(tool, {
+    action: "materialize_plan_state",
+    planMaterialization: {
+      selectedTrackId: trackId,
+    },
+  });
+  const validationErrors = materialized.validationErrors.join("\n");
+  assert.doesNotMatch(validationErrors, /plan_alternatives|plan_selection|active track/i);
+
+  const nextManifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  const trackRegistry = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "TRACK_REGISTRY.json"), "utf8")
+  );
+  const planText = await fs.readFile(path.join(projectRoot, "orchestrator", "PLAN.md"), "utf8");
+  const todosText = await fs.readFile(path.join(projectRoot, "orchestrator", "TODOS.md"), "utf8");
+  const auditText = await fs.readFile(
+    path.join(projectRoot, "orchestrator", "PLAN_AUDIT.md"),
+    "utf8"
+  );
+  const combined = JSON.stringify({
+    researchProgram: nextManifest.research_program,
+    trackRegistry,
+    planText,
+    todosText,
+    auditText,
+  });
+  assert.match(combined, /MNIST/);
+  assert.match(combined, /Fashion-MNIST/);
+  assert.match(combined, /toy character-level text classification/);
+  assert.match(combined, /parameter-matched/i);
+  assert.match(combined, /NaN\/Inf|NaN or Inf/);
+  assert.doesNotMatch(
+    combined,
+    /FixMatch|generalized category discovery|\bGCD\b|pseudo-?label|adaptive gating|global threshold|auto-bootstrap|literature-grounded primary metric|selected method delta|non-improving method runs|baseline metric regression|selected module/i
+  );
+});
+
 test("write-package assembler derives secondary artifacts and marks the package ready", async (t) => {
   const projectRoot = await makeProjectRoot();
 

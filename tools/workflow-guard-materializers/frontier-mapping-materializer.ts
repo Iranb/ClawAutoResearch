@@ -41,6 +41,452 @@ const FRONTIER_GRAPH_ARTIFACTS = [
 
 const CORE_FRONTIER_GRAPH_ARTIFACTS = FRONTIER_GRAPH_ARTIFACTS.slice(0, 3);
 
+type FrontierRecoveryProfile = {
+  kind: "eml_operator" | "fixmatch_gcd" | "generic";
+  selectedDirectionTitle: string;
+  topicSummary: string;
+  anchorPapers: Array<{ id: string; title: string; relevance: string }>;
+  researchSummary: string;
+  keyFindings: string[];
+  relevantMethods: string[];
+  openQuestions: string[];
+  workingKeyFacts: string[];
+  activeHypotheses: string[];
+  pendingQueries: string[];
+  limitationFrontier: string[];
+  contradictionFrontier: string[];
+  transferFrontier: string[];
+  compositionSections: Array<{ heading: string; body: string }>;
+  logicChain: string[];
+  questionPacket: string[];
+  synthesisRationale: string;
+  requiredAblations: string[];
+  handoffImplications: string[];
+};
+
+function topicMatchesAny(topic: string, patterns: RegExp[]): boolean {
+  return patterns.some((pattern) => pattern.test(topic));
+}
+
+function inferFrontierRecoveryProfile(topic: string): FrontierRecoveryProfile {
+  const normalizedTopic = topic.toLowerCase();
+  if (
+    topicMatchesAny(normalizedTopic, [
+      /\beml\b/,
+      /2603\.21852/,
+      /elementary functions from a single binary operator/,
+      /eml\(x\s*,\s*y\)/,
+      /exp\(x\).*ln\(y\)/,
+      /ln\(y\).*exp\(x\)/,
+    ])
+  ) {
+    return {
+      kind: "eml_operator",
+      selectedDirectionTitle:
+        "EML residual and mixer blocks for small basemodel validation",
+      topicSummary:
+        "Recover frontier mapping around using the EML operator eml(x,y)=exp(x)-ln(y) as a numerically guarded primitive for compact ResNet-like and Transformer-like blocks under matched parameter budgets.",
+      anchorPapers: [
+        {
+          id: "paper:eml-operator",
+          title: "All elementary functions from a single binary operator",
+          relevance:
+            "Defines the EML operator and motivates testing whether one binary primitive can replace or compose common elementary functions.",
+        },
+        {
+          id: "method:residual-and-attention-baselines",
+          title: "Parameter-matched residual, mixer, and attention basemodels",
+          relevance:
+            "Target baseline family for checking whether EML blocks improve small image and toy text models without extra parameter budget.",
+        },
+      ],
+      researchSummary:
+        "EML blocks are plausible only if exp/log domain and overflow controls are explicit and if every comparison is matched by trainable parameters, training budget, and evaluation protocol.",
+      keyFindings: [
+        "The EML branch must enforce y > 0 through a stable parameterization such as softplus plus epsilon, and must bound exp inputs to avoid overflow.",
+        "Small-model validation should compare against same-parameter CNN, residual MLP, mixer, and attention baselines rather than larger architectural variants.",
+        "MNIST-style image data and toy token/sequence tasks are useful first filters, but saturated accuracy requires reporting stability, calibration, and failure-rate metrics.",
+        "Ablations must isolate the operator from normalization, residual scaling, activation choice, and parameter-count differences.",
+      ],
+      relevantMethods: [
+        "safe EML operator",
+        "EML residual block",
+        "EML channel mixer",
+        "EML token mixer",
+        "parameter-matched baseline",
+        "NaN/Inf guardrail",
+      ],
+      openQuestions: [
+        "Does EML add useful inductive bias beyond an MLP or standard activation under the same parameter budget?",
+        "Which y-domain parameterization keeps log inputs positive without suppressing gradient flow?",
+        "Does the operator help both image and toy text tasks, or only one modality?",
+        "How much clipping, normalization, and residual scaling is needed before the operator is trainable?",
+      ],
+      workingKeyFacts: [
+        "The project topic is EML operator basemodel construction, not GCD or FixMatch-style pseudo-labeling.",
+        "The first implementation target should be small and reproducible: MNIST/Fashion-MNIST plus a compact toy sequence or character task.",
+        "Every proposed block needs an explicit parameter-count accounting contract before experiment launch.",
+      ],
+      activeHypotheses: [
+        "A residual EML branch can match or improve a same-parameter nonlinear residual block on simple image classification.",
+        "An EML mixer can replace part of an MLP/FFN interaction if exp/log stability controls are built into the operator.",
+        "Without clipping, y-domain guards, and finite-loss checks, apparent gains are likely numerical artifacts.",
+      ],
+      pendingQueries: [
+        "Retrieve the arXiv:2603.21852 source and extract the exact operator definition and stability assumptions.",
+        "Collect compact ResNet, MLP-Mixer, and Transformer baseline references suitable for toy-scale reproduction.",
+        "Find benchmark methodology for fair parameter matching on MNIST-like image tasks and toy text tasks.",
+      ],
+      limitationFrontier: [
+        "The exp term can overflow and the log term is undefined for non-positive y, so the operator needs an explicit safe domain contract.",
+        "Extra nonlinear expressivity can be confounded with normalization, clipping, residual scaling, or hidden parameter-count changes.",
+        "MNIST-like tasks may saturate quickly; headline accuracy alone may not expose whether EML changes the model class.",
+        "Toy text validation needs a very small sequence model so comparison remains about the operator rather than scale.",
+        "Compute cost and numerical failure rate should be tracked alongside trainable parameter count.",
+      ],
+      contradictionFrontier: [
+        "EML is attractive as a universal elementary-function primitive, but neural training favors stable gradients over symbolic expressivity.",
+        "Clipping exp inputs prevents overflow, yet too much clipping can erase the very nonlinear behavior being tested.",
+        "A positive-y parameterization makes log safe, but it can bias the learned interaction if the transform saturates.",
+        "Residual wrapping can stabilize EML, but it may also make the learned EML branch irrelevant unless branch contribution is measured.",
+        "Equal parameter count does not guarantee equal compute or equal numerical conditioning.",
+      ],
+      transferFrontier: [
+        "Insert a safe EML branch inside a residual block and compare it against a same-parameter MLP or convolutional residual branch.",
+        "Build a channel/token mixer where one operand is a learned positive gate and the other is the feature activation.",
+        "Use residual scaling, finite-value checks, and per-layer activation statistics as first-class experiment outputs.",
+        "Keep the first image protocol to MNIST/Fashion-MNIST or similarly small datasets before larger vision benchmarks.",
+        "For toy text, use a compact character or synthetic sequence classification task with an attention/MLP baseline of matched size.",
+      ],
+      compositionSections: [
+        {
+          heading: "Cx1. Safe EML residual block",
+          body:
+            "Compose a residual path with a bounded EML operator, positive-y gate, normalization, and residual scaling so instability is controlled before comparing against a same-parameter nonlinear block.",
+        },
+        {
+          heading: "Cx2. EML mixer or FFN replacement",
+          body:
+            "Use EML as a channel or token interaction primitive inside a mixer/Transformer-style block while preserving the baseline width, depth, and trainable parameter count.",
+        },
+        {
+          heading: "Cx3. Small fair-validation harness",
+          body:
+            "Pair MNIST-like image tasks with a compact toy text/sequence task, track accuracy plus finite-loss rate, and report parameter-count deltas for every model.",
+        },
+      ],
+      logicChain: [
+        "The EML paper defines a binary primitive that can represent elementary functions, which motivates testing it as a neural operator.",
+        "A basemodel claim is only meaningful when EML is compared against same-parameter residual, mixer, or attention baselines.",
+        "The operator introduces exp/log numerical hazards, so safety constraints are part of the model contract rather than implementation detail.",
+        "The next idea should prioritize a small residual EML block and a small mixer/Transformer-style EML block on toy datasets.",
+      ],
+      questionPacket: [
+        "Which safe EML parameterization should be the default: clipped exp input, softplus-positive y, residual scaling, or all three?",
+        "Does an EML residual block outperform a same-parameter MLP/convolutional residual block on MNIST-like data?",
+        "Does an EML mixer help a compact toy text/sequence model under the same parameter budget?",
+        "Which ablation falsifies the operator contribution without requiring a large benchmark?",
+      ],
+      synthesisRationale:
+        "The strongest topic-grounded direction is to build a numerically safe EML residual block and a compact EML mixer/FFN variant, then validate them against same-parameter small baselines before scaling.",
+      requiredAblations: [
+        "Baseline residual/MLP block versus safe EML residual block at matched parameter count.",
+        "No clipping versus exp-input clipping and finite-loss guardrails.",
+        "Different positive-y parameterizations such as softplus plus epsilon versus learned clamped gate.",
+        "EML branch enabled versus residual branch with the same normalization and scaling but no EML operator.",
+      ],
+      handoffImplications: [
+        "The next idea stage should preserve the EML operator basemodel hypothesis and explicitly test numerical stability, parameter matching, and small image/text validation.",
+        "The plan stage should treat safe exp/log handling, y-domain constraints, NaN/Inf monitoring, and same-parameter baselines as non-optional experiment contracts.",
+      ],
+    };
+  }
+
+  if (
+    topicMatchesAny(normalizedTopic, [
+      /fixmatch/,
+      /generalized category discovery/,
+      /\bgcd\b/,
+      /pseudo-label/,
+    ])
+  ) {
+    return {
+      kind: "fixmatch_gcd",
+      selectedDirectionTitle:
+        "Adaptive FixMatch consistency for generalized category discovery",
+      topicSummary:
+        "Recover frontier mapping around transferring FixMatch weak-to-strong consistency and confidence-thresholded pseudo-labeling into GCD, with safeguards for known/novel imbalance.",
+      anchorPapers: [
+        {
+          id: "paper:fixmatch-generalization",
+          title: "Towards Understanding Why FixMatch Generalizes Better Than Supervised Learning",
+          relevance:
+            "Source mechanism for weak-to-strong consistency, confidence thresholding, and pseudo-label regularization.",
+        },
+        {
+          id: "method:gcd",
+          title: "Generalized Category Discovery",
+          relevance:
+            "Target setting where labeled known classes and unlabeled novel classes must be optimized jointly.",
+        },
+      ],
+      researchSummary:
+        "FixMatch-style consistency is a plausible GCD improvement only if confidence thresholds and augmentation strength are calibrated separately for known and novel candidates.",
+      keyFindings: [
+        "Supervised-only GCD can overfit labeled known classes and leave novel-class structure under-regularized.",
+        "FixMatch gains are tied to high-confidence pseudo-labels that remain stable under strong augmentation.",
+        "Naive confidence filtering can amplify known-class confirmation bias in GCD because known classes start with labeled supervision.",
+        "A stable transfer should evaluate H-score, known accuracy, novel accuracy, and pseudo-label precision/recall independently.",
+      ],
+      relevantMethods: [
+        "weak-to-strong consistency",
+        "confidence-thresholded pseudo-labeling",
+        "EMA teacher or self-distillation",
+        "known/novel adaptive threshold calibration",
+        "cluster diversity regularization",
+      ],
+      openQuestions: [
+        "Should novel candidates use lower confidence thresholds early and stricter thresholds after clusters stabilize?",
+        "Which augmentations preserve novel-class semantics in GCD benchmarks?",
+        "Does an EMA teacher reduce pseudo-label churn without suppressing novel discovery?",
+      ],
+      workingKeyFacts: [
+        "The graph presence check is usable enough for frontier mapping, so remote graph repair can continue asynchronously when PaperNexus corpus sync or provider output is unavailable.",
+        "The target topic asks for improving GCD using mechanisms from the FixMatch generalization analysis.",
+        "GCD requires preserving known-class accuracy while discovering unlabeled novel classes.",
+      ],
+      activeHypotheses: [
+        "Known/novel adaptive thresholds reduce confirmation bias compared with a global FixMatch threshold.",
+        "EMA-teacher pseudo-labels reduce temporal instability in novel-class assignments.",
+        "Strong augmentation must be semantic-preserving for novel clusters to avoid fragmentation.",
+      ],
+      pendingQueries: [
+        "Find the exact GCD baseline used for implementation.",
+        "Identify available GCD datasets and official evaluation metrics.",
+        "Compare pseudo-label precision on known-like versus novel-like unlabeled examples.",
+      ],
+      limitationFrontier: [
+        "GCD pseudo-labels are not equally reliable across known and novel candidates; known classes receive labeled supervision and can dominate confidence ranking.",
+        "A direct FixMatch transfer can worsen confirmation bias if high-confidence unlabeled samples are mostly known-like.",
+        "Strong augmentation may regularize representation learning but can fragment novel-class clusters when transformations alter fine-grained semantics.",
+        "Static confidence thresholds are brittle during early GCD training because novel-class centroids and classifier heads are still unstable.",
+        "A credible experiment must separate H-score, known accuracy, novel accuracy, and pseudo-label quality instead of reporting only aggregate gains.",
+      ],
+      contradictionFrontier: [
+        "FixMatch depends on confident pseudo-labels, but GCD's most valuable samples are often novel and initially low-confidence.",
+        "Raising thresholds improves pseudo-label precision but can remove novel-class learning signal; lowering thresholds improves coverage but can inject noisy labels.",
+        "Supervised known-class anchors stabilize training, yet those anchors can pull ambiguous novel samples into known decision regions.",
+        "Stronger consistency reduces variance, but too much invariance can erase distinctions needed for novel-category separation.",
+        "The proposed resolution is not simply more consistency; it is consistency plus adaptive thresholding and cluster-diversity safeguards.",
+      ],
+      transferFrontier: [
+        "Transfer FixMatch's weak-to-strong consistency onto the unlabeled GCD branch: weak views generate pseudo-labels and strong views receive the consistency loss.",
+        "Replace a global confidence threshold with calibrated known-like and novel-like thresholds, updated from class prior estimates or cluster stability.",
+        "Use an EMA teacher to reduce pseudo-label churn and decouple target generation from the current student update.",
+        "Gate novel pseudo-labels with feature-neighborhood or cluster-consensus checks so high-confidence known classes do not consume the unlabeled objective.",
+        "Evaluate with ablations that isolate consistency, threshold calibration, augmentation strength, and teacher-student stabilization.",
+      ],
+      compositionSections: [
+        {
+          heading: "Cx1. Consistency-regularized GCD pseudo-labeling",
+          body:
+            "Combine FixMatch weak-to-strong consistency with GCD pseudo-labeling so high-confidence known-class assignments remain stable while novel-class candidates receive a smoother unlabeled training signal.",
+        },
+        {
+          heading: "Cx2. Adaptive thresholding plus cluster diversity",
+          body:
+            "Compose confidence-thresholded pseudo-labeling with known/novel threshold calibration and feature-region diversity, preventing the selection process from collapsing onto known classes only.",
+        },
+        {
+          heading: "Cx3. Teacher-student refinement for novel classes",
+          body:
+            "Use an EMA or self-distilled teacher to stabilize pseudo-labels across training time, while monitoring H-score so known-class accuracy is not purchased by suppressing novel discovery.",
+        },
+      ],
+      logicChain: [
+        "FixMatch improves generalization by coupling confident pseudo-labels with weak-to-strong consistency.",
+        "GCD inherits the pseudo-labeling problem but adds known/novel imbalance and uncertain novel-class semantics.",
+        "The transfer is plausible when consistency is adapted with known/novel threshold calibration and cluster-aware safeguards.",
+        "The next idea should test H-score, known-class accuracy, novel-class accuracy, and pseudo-label precision/recall separately.",
+      ],
+      questionPacket: [
+        "Which FixMatch mechanism is responsible for the expected GCD gain: consistency, thresholding, or augmentation diversity?",
+        "How should the confidence threshold differ for known and novel candidates?",
+        "Does strong augmentation preserve novel-class cluster structure or fragment it?",
+        "Which ablation can falsify the claimed improvement without requiring a new benchmark?",
+      ],
+      synthesisRationale:
+        "The strongest graph-grounded direction is to adapt FixMatch consistency to GCD with explicit controls for known/novel imbalance. The existing frontier artifacts point to pseudo-label confirmation bias, static threshold miscalibration, augmentation risk, and multi-view consistency as the critical constraints.",
+      requiredAblations: [
+        "Baseline GCD objective versus FixMatch-style consistency on unlabeled data.",
+        "Fixed threshold versus known/novel adaptive thresholds.",
+        "Uniform strong augmentation versus confidence-aware augmentation strength.",
+        "Student-only pseudo-labels versus EMA teacher pseudo-labels.",
+      ],
+      handoffImplications: [
+        "The next idea stage should preserve the selected FixMatch-to-GCD transfer hypothesis and explicitly test pseudo-label quality, thresholding, and known-versus-novel tradeoffs.",
+        "The plan stage should treat the frontier pack as the source of truth for limitation, contradiction, transfer, composition, and anchor evidence.",
+      ],
+    };
+  }
+
+  return {
+    kind: "generic",
+    selectedDirectionTitle: `Topic-grounded frontier for ${topic}`,
+    topicSummary:
+      "Recover frontier mapping from the current project topic, preserving the requested research direction instead of importing a stale fallback domain.",
+    anchorPapers: [
+      {
+        id: "topic:primary",
+        title: topic,
+        relevance:
+          "Project prompt and manifest topic used as the recovery anchor until source-backed graph evidence is available.",
+      },
+    ],
+    researchSummary:
+      "The local frontier recovery should keep the project topic intact, identify testable assumptions, and require source-backed graph evidence before strong claims.",
+    keyFindings: [
+      "The current recovery path is operating without enough provider or graph output, so artifacts must be conservative.",
+      "Every proposed direction should preserve the project topic and avoid borrowing unrelated stale templates.",
+      "The next stage should separate hypothesis generation from evidence-backed claims.",
+    ],
+    relevantMethods: [
+      "topic-grounded frontier recovery",
+      "source-backed evidence acquisition",
+      "bounded pilot validation",
+    ],
+    openQuestions: [
+      "Which source-backed papers define the core operator, method, or baseline?",
+      "Which small pilot can falsify the project hypothesis quickly?",
+      "Which metrics and ablations prevent narrative drift?",
+    ],
+    workingKeyFacts: [
+      "The project topic is the authoritative recovery anchor.",
+      "Graph repair and literature acquisition can continue after local frontier packaging.",
+    ],
+    activeHypotheses: [
+      "A small topic-aligned pilot is preferable to importing an unrelated fallback direction.",
+    ],
+    pendingQueries: [
+      "Collect source-backed papers directly tied to the project topic.",
+      "Define matched baselines, metrics, and ablations before experiment launch.",
+    ],
+    limitationFrontier: [
+      "Provider or graph output is incomplete, so the recovery pack cannot support strong claims yet.",
+      "The project can drift if stale domain templates are reused as frontier evidence.",
+      "A valid next step needs topic-specific baselines, datasets, and failure criteria.",
+    ],
+    contradictionFrontier: [
+      "Local recovery can keep the workflow moving, but it must not pretend that missing source evidence is present.",
+      "A broad research prompt encourages exploration, but durable artifacts need bounded claims and explicit tests.",
+    ],
+    transferFrontier: [
+      "Translate the topic into a smallest viable experiment with matched baselines.",
+      "Route literature acquisition toward the topic's core method, benchmark, and safety constraints.",
+      "Keep graph repair asynchronous while preserving the topic-aligned frontier contract.",
+    ],
+    compositionSections: [
+      {
+        heading: "Cx1. Topic-aligned pilot",
+        body:
+          "Convert the manifest topic into a compact, falsifiable pilot that can run before broader graph enrichment finishes.",
+      },
+      {
+        heading: "Cx2. Evidence acquisition contract",
+        body:
+          "Require source-backed papers for the method, baselines, and benchmark before promoting the idea to a stronger claim.",
+      },
+      {
+        heading: "Cx3. Drift guard",
+        body:
+          "Use the project topic and selected track as the recovery boundary so unrelated stale domains cannot become active frontiers.",
+      },
+    ],
+    logicChain: [
+      "The project topic is the authoritative recovery anchor.",
+      "Missing graph output permits conservative local packaging but not strong evidence claims.",
+      "The next idea should define a small pilot, matched baselines, and source acquisition requirements.",
+    ],
+    questionPacket: [
+      "Which source-backed papers are required before the project can advance?",
+      "What is the smallest experiment that tests the central hypothesis?",
+      "Which baseline and metric choices would make the comparison fair?",
+    ],
+    synthesisRationale:
+      "The strongest recovery direction is to preserve the topic, define a small falsifiable pilot, and require source-backed evidence before broad claims.",
+    requiredAblations: [
+      "Topic method enabled versus disabled under the same parameter or resource budget.",
+      "Baseline protocol unchanged versus project-specific modification.",
+      "Main metric plus failure-mode metrics.",
+    ],
+    handoffImplications: [
+      "The next idea stage should preserve the project topic and require source-backed evidence before advancing claims.",
+      "The plan stage should treat matched baselines, explicit metrics, and drift checks as required contracts.",
+    ],
+  };
+}
+
+function isOffTopicFrontierTitle(profile: FrontierRecoveryProfile, title: string): boolean {
+  const normalizedTitle = title.toLowerCase();
+  if (profile.kind === "eml_operator") {
+    const hasEmlSignal =
+      /\beml\b|2603\.21852|elementary function|exp\(x\)|ln\(y\)|resnet|transformer|mnist|toy/.test(
+        normalizedTitle
+      );
+    const hasStaleGcdSignal =
+      /fixmatch|generalized category discovery|\bgcd\b|pseudo-label|known\/novel|h-score/.test(
+        normalizedTitle
+      );
+    return hasStaleGcdSignal && !hasEmlSignal;
+  }
+  return false;
+}
+
+function hasProfileRecoveryMarker(profile: FrontierRecoveryProfile, text: string): boolean {
+  return new RegExp(`recovery[_ ]profile["']?\\s*[:=]\\s*["']?${profile.kind}`, "i").test(
+    text
+  );
+}
+
+function hasStaleProfileDrift(profile: FrontierRecoveryProfile, text: string): boolean {
+  if (profile.kind === "eml_operator") {
+    return (
+      /fixmatch|generalized category discovery|\bgcd\b|pseudo-label|known\/novel|h-score/i.test(
+        text
+      ) && !hasProfileRecoveryMarker(profile, text)
+    );
+  }
+  return false;
+}
+
+function shouldReplaceProfileDriftText(
+  profile: FrontierRecoveryProfile,
+  text: string
+): boolean {
+  if (!text.trim()) {
+    return false;
+  }
+  return hasStaleProfileDrift(profile, text);
+}
+
+function shouldReplaceProfileDriftJson(
+  profile: FrontierRecoveryProfile,
+  value: Record<string, unknown>
+): boolean {
+  const text = JSON.stringify(value);
+  const source = String(value.source ?? "").trim();
+  const recoveryProfile = String(value.recovery_profile ?? value.recoveryProfile ?? "").trim();
+  if (recoveryProfile === profile.kind) {
+    return false;
+  }
+  const fallbackReason = String(value.fallback_reason ?? value.fallbackReason ?? "").trim();
+  const isLocalRecovery =
+    source === "workflow_local_frontier_recovery" ||
+    fallbackReason ===
+      "local_frontier_mapping_recovery_after_graph_degraded_or_missing_agent_outputs";
+  return isLocalRecovery && hasStaleProfileDrift(profile, text);
+}
+
 function updatedGeneratedFiles(files: string[]): { updated: boolean; generatedFiles: string[] } {
   return { updated: files.length > 0, generatedFiles: files };
 }
@@ -408,12 +854,14 @@ async function writeTextIfMissingOrEmpty(params: {
   artifactPath: string | null;
   text: string;
   generatedFiles: string[];
+  replaceIf?: (currentText: string) => boolean;
 }): Promise<void> {
   const resolved = resolveProjectArtifactPath(params.projectRoot, params.artifactPath);
   if (!resolved) {
     return;
   }
-  if (await fileHasText(params.projectRoot, params.artifactPath)) {
+  const currentText = await readTextIfExists(resolved);
+  if (hasTextContent(currentText) && !params.replaceIf?.(currentText ?? "")) {
     return;
   }
   await writeTextEnsured(resolved, params.text);
@@ -427,12 +875,18 @@ async function writeJsonIfMissingOrEmpty(params: {
   artifactPath: string | null;
   value: Record<string, unknown>;
   generatedFiles: string[];
+  replaceIf?: (currentValue: Record<string, unknown>) => boolean;
 }): Promise<void> {
   const resolved = resolveProjectArtifactPath(params.projectRoot, params.artifactPath);
   if (!resolved) {
     return;
   }
-  if (await fileHasJson(params.projectRoot, params.artifactPath)) {
+  const currentValue = await readJsonIfExists<Record<string, unknown>>(resolved);
+  if (
+    currentValue &&
+    Object.keys(currentValue).length > 0 &&
+    !params.replaceIf?.(currentValue)
+  ) {
     return;
   }
   await writeJsonEnsured(resolved, params.value);
@@ -547,15 +1001,20 @@ async function materializeMissingFrontierRecoveryCore(params: {
   const graphStatus = normalizeStage(presence?.status) ?? "available";
   const fallbackReason =
     "local_frontier_mapping_recovery_after_graph_degraded_or_missing_agent_outputs";
+  const profile = inferFrontierRecoveryProfile(params.topic);
+  const replaceProfileDriftJson = (current: Record<string, unknown>) =>
+    shouldReplaceProfileDriftJson(profile, current);
+  const replaceProfileDriftText = (current: string) =>
+    shouldReplaceProfileDriftText(profile, current);
 
   await writeJsonIfMissingOrEmpty({
     projectRoot: params.projectRoot,
     artifactPath: params.state.topicSummaryPath,
     generatedFiles: params.generatedFiles,
+    replaceIf: replaceProfileDriftJson,
     value: {
       topic: params.topic,
-      summary:
-        "Recover frontier mapping around transferring FixMatch weak-to-strong consistency and confidence-thresholded pseudo-labeling into GCD, with safeguards for known/novel imbalance.",
+      summary: profile.topicSummary,
       source: "workflow_local_frontier_recovery",
       fallback_reason: fallbackReason,
       generated_at: params.now,
@@ -563,20 +1022,8 @@ async function materializeMissingFrontierRecoveryCore(params: {
       expected_paper_count: expectedPaperCount,
       present_paper_count: presentPaperCount,
       missing_paper_count: missingPaperCount,
-      anchor_papers: [
-        {
-          id: "paper:fixmatch-generalization",
-          title: "Towards Understanding Why FixMatch Generalizes Better Than Supervised Learning",
-          relevance:
-            "Source mechanism for weak-to-strong consistency, confidence thresholding, and pseudo-label regularization.",
-        },
-        {
-          id: "method:gcd",
-          title: "Generalized Category Discovery",
-          relevance:
-            "Target setting where labeled known classes and unlabeled novel classes must be optimized jointly.",
-        },
-      ],
+      recovery_profile: profile.kind,
+      anchor_papers: profile.anchorPapers,
     },
   });
 
@@ -584,30 +1031,16 @@ async function materializeMissingFrontierRecoveryCore(params: {
     projectRoot: params.projectRoot,
     artifactPath: params.state.researchBriefPath,
     generatedFiles: params.generatedFiles,
+    replaceIf: replaceProfileDriftJson,
     value: {
-      summary:
-        "FixMatch-style consistency is a plausible GCD improvement only if confidence thresholds and augmentation strength are calibrated separately for known and novel candidates.",
+      summary: profile.researchSummary,
       source: "workflow_local_frontier_recovery",
       fallback_reason: fallbackReason,
       generated_at: params.now,
-      key_findings: [
-        "Supervised-only GCD can overfit labeled known classes and leave novel-class structure under-regularized.",
-        "FixMatch gains are tied to high-confidence pseudo-labels that remain stable under strong augmentation.",
-        "Naive confidence filtering can amplify known-class confirmation bias in GCD because known classes start with labeled supervision.",
-        "A stable transfer should evaluate H-score, known accuracy, novel accuracy, and pseudo-label precision/recall independently.",
-      ],
-      relevant_methods: [
-        "weak-to-strong consistency",
-        "confidence-thresholded pseudo-labeling",
-        "EMA teacher or self-distillation",
-        "known/novel adaptive threshold calibration",
-        "cluster diversity regularization",
-      ],
-      open_questions: [
-        "Should novel candidates use lower confidence thresholds early and stricter thresholds after clusters stabilize?",
-        "Which augmentations preserve novel-class semantics in GCD benchmarks?",
-        "Does an EMA teacher reduce pseudo-label churn without suppressing novel discovery?",
-      ],
+      recovery_profile: profile.kind,
+      key_findings: profile.keyFindings,
+      relevant_methods: profile.relevantMethods,
+      open_questions: profile.openQuestions,
     },
   });
 
@@ -615,30 +1048,19 @@ async function materializeMissingFrontierRecoveryCore(params: {
     projectRoot: params.projectRoot,
     artifactPath: params.state.brainstormBriefPath,
     generatedFiles: params.generatedFiles,
+    replaceIf: replaceProfileDriftJson,
     value: {
       source: "workflow_local_frontier_recovery",
       fallback_reason: fallbackReason,
       generated_at: params.now,
+      recovery_profile: profile.kind,
       directions: [
         {
-          id: "direction:adaptive-fixmatch-gcd",
-          title: "Adaptive FixMatch consistency for generalized category discovery",
-          summary:
-            "Add FixMatch weak-to-strong consistency to the unlabeled GCD branch, while splitting confidence thresholds and loss weighting between known-like and novel-like samples.",
-          rationale:
-            "This keeps the useful regularization mechanism while controlling the known-class confirmation bias that can block novel discovery.",
-          required_ablations: [
-            "baseline GCD objective versus added weak-to-strong consistency",
-            "single global threshold versus known/novel adaptive thresholds",
-            "student pseudo-labels versus EMA-teacher pseudo-labels",
-            "uniform strong augmentation versus confidence-aware augmentation strength",
-          ],
-        },
-        {
-          id: "direction:cluster-aware-thresholding",
-          title: "Cluster-aware pseudo-label filtering for GCD",
-          summary:
-            "Use cluster agreement and feature-neighborhood density as a second gate before accepting FixMatch pseudo-labels.",
+          id: `direction:${profile.kind}`,
+          title: profile.selectedDirectionTitle,
+          summary: profile.synthesisRationale,
+          rationale: profile.researchSummary,
+          required_ablations: profile.requiredAblations,
         },
       ],
     },
@@ -648,25 +1070,15 @@ async function materializeMissingFrontierRecoveryCore(params: {
     projectRoot: params.projectRoot,
     artifactPath: params.state.workingMemoryPath,
     generatedFiles: params.generatedFiles,
+    replaceIf: replaceProfileDriftJson,
     value: {
       source: "workflow_local_frontier_recovery",
       fallback_reason: fallbackReason,
       generated_at: params.now,
-      key_facts: [
-        "The graph presence check is usable enough for frontier mapping, so remote graph repair can continue asynchronously when PaperNexus corpus sync or provider output is unavailable.",
-        "The target topic asks for improving GCD using mechanisms from the FixMatch generalization analysis.",
-        "GCD requires preserving known-class accuracy while discovering unlabeled novel classes.",
-      ],
-      active_hypotheses: [
-        "Known/novel adaptive thresholds reduce confirmation bias compared with a global FixMatch threshold.",
-        "EMA-teacher pseudo-labels reduce temporal instability in novel-class assignments.",
-        "Strong augmentation must be semantic-preserving for novel clusters to avoid fragmentation.",
-      ],
-      pending_queries: [
-        "Find the exact GCD baseline used for implementation.",
-        "Identify available GCD datasets and official evaluation metrics.",
-        "Compare pseudo-label precision on known-like versus novel-like unlabeled examples.",
-      ],
+      recovery_profile: profile.kind,
+      key_facts: profile.workingKeyFacts,
+      active_hypotheses: profile.activeHypotheses,
+      pending_queries: profile.pendingQueries,
     },
   });
 
@@ -674,18 +1086,16 @@ async function materializeMissingFrontierRecoveryCore(params: {
     projectRoot: params.projectRoot,
     artifactPath: "graph/LIMITATION_FRONTIER.md",
     generatedFiles: params.generatedFiles,
+    replaceIf: replaceProfileDriftText,
     text: [
       "# Limitation Frontier",
       "",
       `Topic: ${params.topic}`,
       `Generated at: ${params.now}`,
+      `Recovery profile: ${profile.kind}`,
       `Recovery source: ${fallbackReason}`,
       "",
-      "- GCD pseudo-labels are not equally reliable across known and novel candidates; known classes receive labeled supervision and can dominate confidence ranking.",
-      "- A direct FixMatch transfer can worsen confirmation bias if high-confidence unlabeled samples are mostly known-like.",
-      "- Strong augmentation may regularize representation learning but can fragment novel-class clusters when transformations alter fine-grained semantics.",
-      "- Static confidence thresholds are brittle during early GCD training because novel-class centroids and classifier heads are still unstable.",
-      "- A credible experiment must separate H-score, known accuracy, novel accuracy, and pseudo-label quality instead of reporting only aggregate gains.",
+      bulletize(profile.limitationFrontier, "No limitation frontier was inferred."),
       "",
     ].join("\n"),
   });
@@ -694,18 +1104,16 @@ async function materializeMissingFrontierRecoveryCore(params: {
     projectRoot: params.projectRoot,
     artifactPath: "graph/CONTRADICTION_FRONTIER.md",
     generatedFiles: params.generatedFiles,
+    replaceIf: replaceProfileDriftText,
     text: [
       "# Contradiction Frontier",
       "",
       `Topic: ${params.topic}`,
       `Generated at: ${params.now}`,
+      `Recovery profile: ${profile.kind}`,
       `Recovery source: ${fallbackReason}`,
       "",
-      "- FixMatch depends on confident pseudo-labels, but GCD's most valuable samples are often novel and initially low-confidence.",
-      "- Raising thresholds improves pseudo-label precision but can remove novel-class learning signal; lowering thresholds improves coverage but can inject noisy labels.",
-      "- Supervised known-class anchors stabilize training, yet those anchors can pull ambiguous novel samples into known decision regions.",
-      "- Stronger consistency reduces variance, but too much invariance can erase distinctions needed for novel-category separation.",
-      "- The proposed resolution is not simply more consistency; it is consistency plus adaptive thresholding and cluster-diversity safeguards.",
+      bulletize(profile.contradictionFrontier, "No contradiction frontier was inferred."),
       "",
     ].join("\n"),
   });
@@ -714,18 +1122,16 @@ async function materializeMissingFrontierRecoveryCore(params: {
     projectRoot: params.projectRoot,
     artifactPath: "graph/TRANSFER_FRONTIER.md",
     generatedFiles: params.generatedFiles,
+    replaceIf: replaceProfileDriftText,
     text: [
       "# Transfer Frontier",
       "",
       `Topic: ${params.topic}`,
       `Generated at: ${params.now}`,
+      `Recovery profile: ${profile.kind}`,
       `Recovery source: ${fallbackReason}`,
       "",
-      "- Transfer FixMatch's weak-to-strong consistency onto the unlabeled GCD branch: weak views generate pseudo-labels and strong views receive the consistency loss.",
-      "- Replace a global confidence threshold with calibrated known-like and novel-like thresholds, updated from class prior estimates or cluster stability.",
-      "- Use an EMA teacher to reduce pseudo-label churn and decouple target generation from the current student update.",
-      "- Gate novel pseudo-labels with feature-neighborhood or cluster-consensus checks so high-confidence known classes do not consume the unlabeled objective.",
-      "- Evaluate with ablations that isolate consistency, threshold calibration, augmentation strength, and teacher-student stabilization.",
+      bulletize(profile.transferFrontier, "No transfer frontier was inferred."),
       "",
     ].join("\n"),
   });
@@ -756,6 +1162,9 @@ async function materializeRecoverableFrontierSources(params: {
     readArtifactText(params.projectRoot, "graph/TRANSFER_FRONTIER.md"),
   ]);
   const topic = pickTopic({ manifest: params.manifest, topicSummary });
+  const profile = inferFrontierRecoveryProfile(topic);
+  const replaceProfileDriftText = (current: string) =>
+    shouldReplaceProfileDriftText(profile, current);
   await materializeMissingFrontierRecoveryCore({
     projectRoot: params.projectRoot,
     manifest: params.manifest,
@@ -803,34 +1212,37 @@ async function materializeRecoverableFrontierSources(params: {
     ...contradictionLines,
     ...transferLines,
   ]);
-  const selectedOptionTitle = inferTopIdeaTitle({
+  const inferredSelectedOptionTitle = inferTopIdeaTitle({
     state,
     brainstormBrief,
     synthesisText: "",
     topic,
   });
+  const selectedOptionTitle = isOffTopicFrontierTitle(
+    profile,
+    inferredSelectedOptionTitle
+  )
+    ? profile.selectedDirectionTitle
+    : inferredSelectedOptionTitle;
 
   await writeTextIfMissingOrEmpty({
     projectRoot: params.projectRoot,
     artifactPath: "graph/COMPOSITION_FRONTIER.md",
     generatedFiles,
+    replaceIf: replaceProfileDriftText,
     text: [
       "# Composition Frontier",
       "",
       `Topic: ${topic}`,
       `Generated at: ${params.now}`,
+      `Recovery profile: ${profile.kind}`,
       "",
-      "## Cx1. Consistency-regularized GCD pseudo-labeling",
-      "",
-      "Combine FixMatch weak-to-strong consistency with GCD pseudo-labeling so high-confidence known-class assignments remain stable while novel-class candidates receive a smoother unlabeled training signal.",
-      "",
-      "## Cx2. Adaptive thresholding plus cluster diversity",
-      "",
-      "Compose confidence-thresholded pseudo-labeling with known/novel threshold calibration and feature-region diversity, preventing the selection process from collapsing onto known classes only.",
-      "",
-      "## Cx3. Teacher-student refinement for novel classes",
-      "",
-      "Use an EMA or self-distilled teacher to stabilize pseudo-labels across training time, while monitoring H-score so known-class accuracy is not purchased by suppressing novel discovery.",
+      ...profile.compositionSections.flatMap((section) => [
+        `## ${section.heading}`,
+        "",
+        section.body,
+        "",
+      ]),
       "",
       "## Source Signals",
       bulletize(allSignalLines, selectedOptionTitle),
@@ -857,11 +1269,13 @@ async function materializeRecoverableFrontierSources(params: {
     projectRoot: params.projectRoot,
     artifactPath: "graph/ANCHOR_INDEX.md",
     generatedFiles,
+    replaceIf: replaceProfileDriftText,
     text: [
       "# Anchor Index",
       "",
       `Topic: ${topic}`,
       `Generated at: ${params.now}`,
+      `Recovery profile: ${profile.kind}`,
       "",
       "## Paper Anchors",
       bulletize(anchorLines, "No explicit paper anchors were recorded in the topic summary."),
@@ -883,15 +1297,15 @@ async function materializeRecoverableFrontierSources(params: {
     projectRoot: params.projectRoot,
     artifactPath: state.logicChainPath,
     generatedFiles,
+    replaceIf: replaceProfileDriftText,
     text: [
       "# Logic Chain",
       "",
       `Topic: ${topic}`,
+      `Recovery profile: ${profile.kind}`,
       "",
-      "1. FixMatch improves generalization by coupling confident pseudo-labels with weak-to-strong consistency.",
-      "2. GCD inherits the pseudo-labeling problem but adds known/novel imbalance and uncertain novel-class semantics.",
-      "3. The transfer is plausible when consistency is adapted with known/novel threshold calibration and cluster-aware safeguards.",
-      "4. The next idea should test H-score, known-class accuracy, novel-class accuracy, and pseudo-label precision/recall separately.",
+      "",
+      ...profile.logicChain.map((line, index) => `${index + 1}. ${line}`),
       "",
     ].join("\n"),
   });
@@ -900,10 +1314,13 @@ async function materializeRecoverableFrontierSources(params: {
     projectRoot: params.projectRoot,
     artifactPath: state.evidenceChainPath,
     generatedFiles,
+    replaceIf: replaceProfileDriftText,
     text: [
       "# Evidence Chain",
       "",
       `Topic: ${topic}`,
+      `Recovery profile: ${profile.kind}`,
+      "",
       "",
       bulletize(allSignalLines, selectedOptionTitle),
       "",
@@ -914,15 +1331,15 @@ async function materializeRecoverableFrontierSources(params: {
     projectRoot: params.projectRoot,
     artifactPath: state.questionPacketPath,
     generatedFiles,
+    replaceIf: replaceProfileDriftText,
     text: [
       "# Question Packet",
       "",
       `Topic: ${topic}`,
+      `Recovery profile: ${profile.kind}`,
       "",
-      "- Which FixMatch mechanism is responsible for the expected GCD gain: consistency, thresholding, or augmentation diversity?",
-      "- How should the confidence threshold differ for known and novel candidates?",
-      "- Does strong augmentation preserve novel-class cluster structure or fragment it?",
-      "- Which ablation can falsify the claimed improvement without requiring a new benchmark?",
+      "",
+      bulletize(profile.questionPacket, "No frontier questions were inferred."),
       "",
     ].join("\n"),
   });
@@ -931,10 +1348,13 @@ async function materializeRecoverableFrontierSources(params: {
     projectRoot: params.projectRoot,
     artifactPath: state.synthesisPacketPath,
     generatedFiles,
+    replaceIf: replaceProfileDriftText,
     text: [
       "# Synthesis Packet",
       "",
       `Topic: ${topic}`,
+      `Recovery profile: ${profile.kind}`,
+      "",
       "",
       "## Recommended Pilot",
       "",
@@ -942,14 +1362,11 @@ async function materializeRecoverableFrontierSources(params: {
       "",
       "## Rationale",
       "",
-      "The strongest graph-grounded direction is to adapt FixMatch consistency to GCD with explicit controls for known/novel imbalance. The existing frontier artifacts point to pseudo-label confirmation bias, static threshold miscalibration, augmentation risk, and multi-view consistency as the critical constraints.",
+      profile.synthesisRationale,
       "",
       "## Required Ablations",
       "",
-      "- Baseline GCD objective versus FixMatch-style consistency on unlabeled data.",
-      "- Fixed threshold versus known/novel adaptive thresholds.",
-      "- Uniform strong augmentation versus confidence-aware augmentation strength.",
-      "- Student-only pseudo-labels versus EMA teacher pseudo-labels.",
+      bulletize(profile.requiredAblations, "No required ablations were inferred."),
       "",
     ].join("\n"),
   });
@@ -958,12 +1375,14 @@ async function materializeRecoverableFrontierSources(params: {
     projectRoot: params.projectRoot,
     artifactPath: state.reasoningTracePath,
     generatedFiles,
+    replaceIf: replaceProfileDriftText,
     text: [
       JSON.stringify({
         ts: params.now,
         event: "frontier_mapping_recovery",
         topic,
         selected_direction: selectedOptionTitle,
+        recovery_profile: profile.kind,
         source_artifacts: [
           "graph/LIMITATION_FRONTIER.md",
           "graph/CONTRADICTION_FRONTIER.md",
@@ -1037,7 +1456,7 @@ function buildReconciledBrainstormCycle(params: {
     rounds,
     selected_round_id: selectedRoundId,
     selected_option_id: selectedOptionId,
-    selected_option_title: state.selectedOptionTitle ?? params.selectedOptionTitle,
+    selected_option_title: params.selectedOptionTitle,
   });
   return serializeBrainstormCycleState(next);
 }
@@ -1060,6 +1479,7 @@ function renderFrontierReport(params: {
     "",
   ];
 
+  const profile = inferFrontierRecoveryProfile(params.topic);
   const synthesisLines = meaningfulLines(params.synthesisText, 10);
   if (synthesisLines.length > 0) {
     lines.push("## Graph-Grounded Synthesis", "");
@@ -1081,12 +1501,11 @@ function renderFrontierReport(params: {
     lines.push("");
   }
 
-  lines.push(
-    "## Handoff Implications",
-    "- The next idea stage should preserve the selected FixMatch-to-GCD transfer hypothesis and explicitly test pseudo-label quality, thresholding, and known-versus-novel tradeoffs.",
-    "- The plan stage should treat the frontier pack as the source of truth for limitation, contradiction, transfer, composition, and anchor evidence.",
-    ""
-  );
+  lines.push("## Handoff Implications", "");
+  for (const implication of profile.handoffImplications) {
+    lines.push(`- ${implication}`);
+  }
+  lines.push("");
 
   return lines.join("\n");
 }
@@ -1127,11 +1546,18 @@ export async function materializeFrontierMappingState(params: {
     params.projectRoot,
     state.synthesisPacketPath ?? "researcher/brainstorm-cycle/SYNTHESIS_PACKET.md"
   );
-  const selectedOptionTitle = inferSelectedOptionTitle({
+  const profile = inferFrontierRecoveryProfile(topic);
+  const inferredSelectedOptionTitle = inferSelectedOptionTitle({
     state,
     synthesisText,
     topic,
   });
+  const selectedOptionTitle = isOffTopicFrontierTitle(
+    profile,
+    inferredSelectedOptionTitle
+  )
+    ? profile.selectedDirectionTitle
+    : inferredSelectedOptionTitle;
   const frontierTexts = await Promise.all(
     FRONTIER_GRAPH_ARTIFACTS.map(async (artifact) => ({
       title: artifact.title,

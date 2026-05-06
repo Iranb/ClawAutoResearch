@@ -668,6 +668,381 @@ test("research_workflow materialize_idea_catalyst_state prunes unsupported scout
   assert.match(top3Summary, /Contribution hints:/i);
 });
 
+test("research_workflow materialize_idea_catalyst_state recovers EML profile from stale FixMatch/GCD ideation drift", async (t) => {
+  const projectRoot = await makeCatalystProjectRoot();
+  const previousProjectRoot = process.env.OPENCLAW_PROJECT;
+  const emlTopic =
+    "EML operator small basemodels: use EML from arXiv:2603.21852 (All elementary functions from a single binary operator, eml(x,y)=exp(x)-ln(y)) to construct new small base models analogous to ResNet and Transformer blocks; compare same-parameter baselines on MNIST and toy text with NaN/Inf guardrails.";
+
+  t.after(async () => {
+    if (previousProjectRoot === undefined) delete process.env.OPENCLAW_PROJECT;
+    else process.env.OPENCLAW_PROJECT = previousProjectRoot;
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.title = emlTopic;
+  manifest.papernexus_corpus = "EML";
+  manifest.primary_track_id = "track-eml-residual-and-mixer-blocks";
+  manifest.active_track_ids = ["track-eml-residual-and-mixer-blocks"];
+  manifest.research_program = {
+    status: "ready",
+    goal: emlTopic,
+    problem_statement: emlTopic,
+    baseline_reference: "Same-parameter CNN, ResNet-like, Transformer, and MLP-Mixer toy baselines",
+    primary_metric: "accuracy plus finite-loss rate",
+    datasets: ["MNIST", "Fashion-MNIST", "toy text"],
+    success_criteria: [
+      "Compare EML blocks against same-parameter baselines with explicit exp/log stability checks.",
+    ],
+    zotero_project_path: "bot/eml-small-basemodel-toy-validation",
+  };
+  manifest.brainstorm_cycle = {
+    status: "ready",
+    topic: emlTopic,
+    selected_option_title: "EML residual and mixer blocks for small basemodel validation",
+  };
+  manifest.idea_catalyst = {
+    status: "requisition",
+    contract_version: 1,
+    mode: "graph-first",
+    micro_stage: "gatekeeping",
+    investigation_requisition_path: "researcher/idea-catalyst/INVESTIGATION_REQUISITION.json",
+    requisition_required: true,
+    source_domains: [
+      "Transfer FixMatch's weak-to-strong consistency onto the unlabeled GCD branch",
+    ],
+    pending_reason:
+      "Legacy bridge relevance and quality signals are present, but graph-backed source-span and evidence-chain grounding is incomplete.",
+  };
+  manifest.ideation_contract.selected_track_id =
+    "track-eml-residual-and-mixer-blocks";
+  manifest.ideation_contract.graph_ideation_indices = {
+    status: "ready",
+    novelty_candidate_clusters: [
+      "Adaptive FixMatch consistency for generalized category discovery",
+    ],
+    challenge_clusters: [
+      "GCD pseudo-labels are not equally reliable across known and novel candidates.",
+      "A direct FixMatch transfer can worsen confirmation bias.",
+    ],
+    insight_clusters: [
+      "Adaptive FixMatch consistency for generalized category discovery",
+    ],
+    occupied_solution_zones: [],
+    transfer_bridges: [
+      "Transfer FixMatch's weak-to-strong consistency onto the unlabeled GCD branch",
+    ],
+    candidate_source_domains: [
+      "Transfer FixMatch's weak-to-strong consistency onto the unlabeled GCD branch",
+    ],
+    selected_source_domains: [
+      "Transfer FixMatch's weak-to-strong consistency onto the unlabeled GCD branch",
+    ],
+    pruned_source_domains: [],
+    bridge_evidence_tier: "strong",
+  };
+  await writeJson(manifestPath, manifest);
+
+  await writeJson(
+    path.join(projectRoot, "researcher", "brainstorm-cycle", "TOPIC_SUMMARY.json"),
+    {
+      topic: emlTopic,
+      summary:
+        "Use the EML operator as a guarded primitive for compact residual, mixer, and Transformer-like basemodels.",
+      recovery_profile: "eml_operator",
+      target_domain: "Computer Science",
+    }
+  );
+  await writeJson(
+    path.join(projectRoot, "researcher", "PAPER_SOURCE_INDEX.json"),
+    {
+      schema_version: 1,
+      topic: emlTopic,
+      recovery_profile: "eml_operator",
+      source_backed_paper_count: 5,
+      metadata_only_paper_count: 0,
+      papers: [
+        {
+          canonical_id: "arxiv:2603.21852",
+          title: "All elementary functions from a single binary operator",
+          source_path:
+            "researcher/paper-staging/eml-core-sources/2603.21852-all-elementary-functions-from-a-single-binary-operator.pdf",
+        },
+        {
+          canonical_id: "arxiv:1512.03385",
+          title: "Deep Residual Learning for Image Recognition",
+          source_path:
+            "researcher/paper-staging/eml-core-sources/1512.03385-deep-residual-learning-for-image-recognition.pdf",
+        },
+        {
+          canonical_id: "arxiv:1706.03762",
+          title: "Attention Is All You Need",
+          source_path:
+            "researcher/paper-staging/eml-core-sources/1706.03762-attention-is-all-you-need.pdf",
+        },
+        {
+          canonical_id: "arxiv:2105.01601",
+          title: "MLP-Mixer: An all-MLP Architecture for Vision",
+          source_path:
+            "researcher/paper-staging/eml-core-sources/2105.01601-mlp-mixer-an-all-mlp-architecture-for-vision.pdf",
+        },
+        {
+          canonical_id: "arxiv:1708.07747",
+          title:
+            "Fashion-MNIST: a Novel Image Dataset for Benchmarking Machine Learning Algorithms",
+          source_path:
+            "researcher/paper-staging/eml-core-sources/1708.07747-fashion-mnist-a-novel-image-dataset.pdf",
+        },
+      ],
+    }
+  );
+  await writeJson(
+    path.join(projectRoot, "researcher", "ideation", "GRAPH_IDEATION_PACKET.json"),
+    {
+      status: "ready",
+      selected_track_id: "track-eml-residual-and-mixer-blocks",
+      graph_basis: ["arXiv:2603.21852", "ResNet", "Transformer", "MNIST"],
+    }
+  );
+  await writeJson(
+    path.join(projectRoot, "researcher", "ideation", "CANDIDATE_POOL.json"),
+    {
+      candidates: [
+        {
+          direction_id: "opt_1",
+          track_id:
+            "track-adaptive-fixmatch-consistency-for-generalized-category-discovery",
+          title:
+            "Adaptive FixMatch consistency for generalized category discovery",
+          summary: "Use pseudo-label confidence thresholds for GCD.",
+          novelty: 0.7,
+          feasibility: 0.7,
+          relevance: 0.7,
+          clarity: 0.7,
+          composite_score: 0.7,
+        },
+      ],
+    }
+  );
+  await writeJson(
+    path.join(
+      projectRoot,
+      "researcher",
+      "idea-catalyst",
+      "INVESTIGATION_REQUISITION.json"
+    ),
+    {
+      actionable: true,
+      status: "pending",
+      requisition_id: "req-old-gcd",
+      missing_domains: [
+        "Transfer FixMatch's weak-to-strong consistency onto the unlabeled GCD branch",
+      ],
+      search_queries: [
+        {
+          domain: "GCD",
+          query: "FixMatch generalized category discovery pseudo-labels",
+        },
+      ],
+    }
+  );
+
+  process.env.OPENCLAW_PROJECT = projectRoot;
+  const tool = createResearchWorkflowTool({ workspaceDir: projectRoot });
+  const result = await executeWorkflowTool(tool, {
+    action: "materialize_idea_catalyst_state",
+    ideaCatalystMaterialization: {
+      basis_stage: "idea",
+    },
+  });
+
+  assert.equal(result.state.status, "ready");
+  assert.equal(result.state.requisitionRequired, false);
+  assert.ok(
+    result.state.sourceDomains.includes(
+      "EML operator semantics and neural-cell mapping"
+    )
+  );
+
+  const updatedManifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  const scoutReport = JSON.parse(
+    await fs.readFile(
+      path.join(projectRoot, "researcher", "idea-catalyst", "SCOUTING_REPORT.json"),
+      "utf8"
+    )
+  );
+  const candidatePool = JSON.parse(
+    await fs.readFile(
+      path.join(projectRoot, "researcher", "idea-catalyst", "CANDIDATE_POOL.json"),
+      "utf8"
+    )
+  );
+  const requisition = JSON.parse(
+    await fs.readFile(
+      path.join(
+        projectRoot,
+        "researcher",
+        "idea-catalyst",
+        "INVESTIGATION_REQUISITION.json"
+      ),
+      "utf8"
+    )
+  );
+  const contamination = JSON.stringify({
+    idea_catalyst: updatedManifest.idea_catalyst,
+    graph_ideation_indices:
+      updatedManifest.ideation_contract.graph_ideation_indices,
+    scoutReport,
+    candidatePool,
+    requisition,
+  });
+  assert.doesNotMatch(
+    contamination,
+    /fixmatch|generalized category discovery|\bgcd\b|pseudo-?label/i
+  );
+  assert.equal(requisition.status, "not_required");
+  assert.equal(requisition.actionable, false);
+  assert.ok(candidatePool.candidates.length >= 3);
+  assert.match(JSON.stringify(candidatePool), /Safe EML residual block|EML mixer block/i);
+
+  const manifestBeforeReopen = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  const pseudoDomains = [
+    "Insert a safe EML branch inside a residual block and compare it against a same-parameter MLP or convolutional residual branch.",
+    "Build a channel/token mixer where one operand is a learned positive gate and the other is the feature activation.",
+    "Use residual scaling, finite-value checks, and per-layer activation statistics as first-class experiment outputs.",
+  ];
+  manifestBeforeReopen.idea_catalyst = {
+    ...manifestBeforeReopen.idea_catalyst,
+    status: "requisition",
+    micro_stage: "gatekeeping",
+    source_domains: pseudoDomains,
+    requisition_required: true,
+    pending_reason:
+      "Legacy bridge relevance is incomplete even though the EML source index is source backed.",
+  };
+  manifestBeforeReopen.ideation_contract.graph_ideation_indices = {
+    ...manifestBeforeReopen.ideation_contract.graph_ideation_indices,
+    status: "ready",
+    candidate_source_domains: pseudoDomains,
+    selected_source_domains: pseudoDomains,
+    transfer_bridges: pseudoDomains,
+    bridge_evidence_tier: "weak",
+  };
+  manifestBeforeReopen.paper_ingestion = {
+    ...(manifestBeforeReopen.paper_ingestion ?? {}),
+    queued_requests: [
+      {
+        request_id: "idea-catalyst-req-eml-pseudo-domains",
+        request_kind: "requisition",
+        status: "running",
+        trigger_kind: "idea_catalyst_requisition",
+        summary: "Stale IDEA-CATALYST requisition reopened after EML profile recovery.",
+        detail: "Live-like stale queue entry from a previously reopened requisition.",
+      },
+    ],
+  };
+  await writeJson(manifestPath, manifestBeforeReopen);
+  await writeJson(
+    path.join(
+      projectRoot,
+      "researcher",
+      "idea-catalyst",
+      "INVESTIGATION_REQUISITION.json"
+    ),
+    {
+      actionable: true,
+      status: "pending",
+      requisition_id: "req-eml-pseudo-domains",
+      missing_domains: pseudoDomains,
+      missing_evidence_types: ["source_span"],
+    }
+  );
+
+  const reopenedResult = await executeWorkflowTool(tool, {
+    action: "materialize_idea_catalyst_state",
+    ideaCatalystMaterialization: {
+      basis_stage: "idea",
+    },
+  });
+  assert.equal(reopenedResult.state.status, "ready");
+  assert.equal(reopenedResult.state.requisitionRequired, false);
+  assert.ok(
+    reopenedResult.state.sourceDomains.includes(
+      "EML operator semantics and neural-cell mapping"
+    )
+  );
+  assert.doesNotMatch(
+    JSON.stringify(reopenedResult.state.sourceDomains),
+    /Insert a safe EML branch|learned positive gate|first-class experiment outputs/i
+  );
+  const retiredReopenedRequisition = JSON.parse(
+    await fs.readFile(
+      path.join(
+        projectRoot,
+        "researcher",
+        "idea-catalyst",
+        "INVESTIGATION_REQUISITION.json"
+      ),
+      "utf8"
+    )
+  );
+  assert.equal(retiredReopenedRequisition.status, "not_required");
+  assert.equal(retiredReopenedRequisition.actionable, false);
+  const manifestAfterReopen = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  const retiredQueuedRequest =
+    manifestAfterReopen.paper_ingestion.queued_requests.find(
+      (entry) => entry.request_id === "idea-catalyst-req-eml-pseudo-domains"
+    );
+  assert.equal(retiredQueuedRequest.status, "completed");
+  assert.equal(retiredQueuedRequest.last_error, null);
+  assert.equal(retiredQueuedRequest.validation_status, "valid");
+  assert.match(
+    retiredQueuedRequest.validation_report_path ?? "",
+    /REQUISITION_RETIREMENT_REPORT\.json$/
+  );
+  assert.ok(retiredQueuedRequest.finished_at);
+  assert.match(retiredQueuedRequest.detail ?? "", /no longer requires|retired/i);
+  const retirementReport = JSON.parse(
+    await fs.readFile(
+      path.join(
+        projectRoot,
+        "researcher",
+        "idea-catalyst",
+        "REQUISITION_RETIREMENT_REPORT.json"
+      ),
+      "utf8"
+    )
+  );
+  assert.equal(retirementReport.status, "valid");
+  assert.deepEqual(retirementReport.retired_request_ids, [
+    "idea-catalyst-req-eml-pseudo-domains",
+  ]);
+
+  const idempotentResult = await executeWorkflowTool(tool, {
+    action: "materialize_idea_catalyst_state",
+    ideaCatalystMaterialization: {
+      basis_stage: "idea",
+    },
+  });
+  assert.equal(idempotentResult.state.status, "ready");
+  assert.equal(idempotentResult.state.requisitionRequired, false);
+  const idempotentRequisition = JSON.parse(
+    await fs.readFile(
+      path.join(
+        projectRoot,
+        "researcher",
+        "idea-catalyst",
+        "INVESTIGATION_REQUISITION.json"
+      ),
+      "utf8"
+    )
+  );
+  assert.equal(idempotentRequisition.status, "not_required");
+  assert.equal(idempotentRequisition.actionable, false);
+});
+
 test("research_workflow run_idea_catalyst_research30 persists cross-domain search evidence and syncs scout summaries", async (t) => {
   const projectRoot = await makeCatalystProjectRoot();
   const previousProjectRoot = process.env.OPENCLAW_PROJECT;

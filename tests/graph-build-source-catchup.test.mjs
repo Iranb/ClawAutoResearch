@@ -589,6 +589,86 @@ ${"The method section contains enough source content for staged import validatio
   assert.equal(updatedManifest.paper_ingestion.queued_requests.length, 1);
 });
 
+test("graph-build source catch-up requeues a completed request when graph presence becomes missing again", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await writeJson(path.join(projectRoot, "researcher", "PAPER_SOURCE_INDEX.json"), {
+    canonical_papers: [
+      {
+        canonical_id: "arxiv:2604.14762",
+        arxiv_id: "2604.14762",
+        title: "OmniGCD: Abstracting Generalized Category Discovery for Modality Agnosticism",
+        import_status: "pending",
+      },
+    ],
+  });
+
+  const markdown = `# OmniGCD: Abstracting Generalized Category Discovery for Modality Agnosticism
+
+## Abstract
+
+This fixture represents a substantive full-text source for a metadata-only canonical paper.
+
+## Introduction
+
+${"Generalized category discovery needs stable pseudo-label transfer, unlabeled calibration, and cross-modal evidence grounded in full paper sources. ".repeat(24)}
+
+## Method
+
+${"The method section contains enough source content for staged import validation and graph-build catch-up. ".repeat(24)}
+`;
+
+  const first = await maybeMaterializeGraphBuildPaperSources({
+    projectRoot,
+    projectId: "source-catchup-demo",
+    workflowPolicy: {
+      papernexusSharedCorpus: "GCD",
+      papernexusMcpUrl: "http://127.0.0.1:9123/mcp",
+    },
+    now: "2026-04-24T10:00:00.000Z",
+    fetchImpl: makeFetch(markdown),
+  });
+
+  assert.equal(first.queued, true);
+  assert.equal(first.materializedPaperCount, 1);
+
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.paper_ingestion.queued_requests[0].status = "completed";
+  manifest.paper_ingestion.graph_presence_status = "missing_corpus";
+  await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+
+  const sourceIndexPath = path.join(projectRoot, "researcher", "PAPER_SOURCE_INDEX.json");
+  const sourceIndex = JSON.parse(await fs.readFile(sourceIndexPath, "utf8"));
+  sourceIndex.papers[0].import_status = "pending";
+  sourceIndex.papers[0].staging_path = sourceIndex.papers[0].source_path;
+  await writeJson(sourceIndexPath, sourceIndex);
+
+  const second = await maybeMaterializeGraphBuildPaperSources({
+    projectRoot,
+    projectId: "source-catchup-demo",
+    workflowPolicy: {
+      papernexusSharedCorpus: "GCD",
+      papernexusMcpUrl: "http://127.0.0.1:9123/mcp",
+    },
+    now: "2026-04-24T10:05:00.000Z",
+    fetchImpl: makeFetch(markdown),
+  });
+
+  assert.equal(second.queued, true);
+  assert.equal(second.skippedReason, null);
+  assert.equal(second.requestId, first.requestId);
+
+  const updatedManifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  const request = updatedManifest.paper_ingestion.queued_requests.find(
+    (entry) => entry.request_id === first.requestId
+  );
+  assert.equal(request.status, "queued");
+});
+
 test("graph-build source catch-up can recover past unrelated needs-repair import requests", async (t) => {
   const projectRoot = await makeProjectRoot();
   t.after(async () => {

@@ -362,6 +362,269 @@ test("stage preflight locally recovers frontier and brainstorm artifacts from gr
   assert.equal(manifest.graph_reasoning.frontier_recovery.status, "ready");
 });
 
+test("stage preflight recovers EML frontier without stale GCD fallback content", async (t) => {
+  const projectRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "openclaw-frontier-materializer-eml-")
+  );
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  const topic =
+    "EML operator small basemodels using arXiv:2603.21852 eml(x,y)=exp(x)-ln(y), ResNet and Transformer-like blocks, MNIST and toy text validation.";
+
+  await Promise.all([
+    writeJson(path.join(projectRoot, "graph", "GRAPH_PRESENCE_CHECK.json"), {
+      status: "partial",
+      expected_paper_count: 1,
+      present_paper_count: 0,
+      missing_paper_count: 1,
+      verification_mode: "canonical_paper_index",
+    }),
+    writeText(
+      path.join(projectRoot, "graph", "GRAPH_BUILD_REPORT.md"),
+      "# Graph Build Report\nGraph Presence Status: partial\nExpected Papers: 1\nPresent Papers: 0\n"
+    ),
+    writeText(
+      path.join(projectRoot, ".openclaw-research", "workflow-local-operator-relay.jsonl"),
+      `${JSON.stringify({
+        kind: "provider_capacity_cooldown",
+        stage: "frontier_mapping",
+        reason: "429 usage allocated quota exceeded. please try again later.",
+        status: "pending",
+      })}\n`
+    ),
+    writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+      project_id: "eml-frontier-materializer-demo",
+      title: topic,
+      current_stage: "frontier_mapping",
+      current_micro_stage: "frontier_mapping_requested",
+      owner_agent: "researcher",
+      paper_ingestion: {
+        graph_presence_status: "partial",
+      },
+      graph_reasoning: {
+        required: true,
+        stop_status: "unknown",
+      },
+    }),
+  ]);
+
+  const result = await maybePrepareWorkflowStageContracts({
+    projectRoot,
+    stage: "frontier_mapping",
+    deps: makeNoopPreflightDeps(),
+  });
+
+  assert.equal(result.materializedContracts.includes("frontier_mapping_state"), true);
+  assert.deepEqual(result.errors, []);
+
+  const report = await fs.readFile(
+    path.join(projectRoot, "researcher", "FRONTIER_REPORT.md"),
+    "utf8"
+  );
+  assert.equal(auditFrontierReportText(report).ok, true);
+  assert.match(report, /EML residual and mixer blocks/i);
+  assert.match(report, /MNIST/i);
+  assert.match(report, /NaN\/Inf/i);
+  assert.doesNotMatch(report, /FixMatch|generalized category discovery|\bGCD\b/i);
+
+  const anchorIndex = await fs.readFile(
+    path.join(projectRoot, "graph", "ANCHOR_INDEX.md"),
+    "utf8"
+  );
+  assert.match(anchorIndex, /paper:eml-operator/i);
+  assert.doesNotMatch(anchorIndex, /fixmatch|generalized category discovery|\bgcd\b/i);
+
+  const manifest = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "PROJECT_MANIFEST.json"), "utf8")
+  );
+  assert.equal(
+    manifest.brainstorm_cycle.selected_option_title,
+    "EML residual and mixer blocks for small basemodel validation"
+  );
+});
+
+test("stage preflight replaces stale non-empty GCD frontier artifacts for EML topic", async (t) => {
+  const projectRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "openclaw-frontier-materializer-eml-drift-")
+  );
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  const topic =
+    "EML operator small basemodels: use EML from arXiv:2603.21852 and eml(x,y)=exp(x)-ln(y) to construct ResNet-like and Transformer-like blocks for MNIST and toy text validation.";
+
+  await Promise.all([
+    writeJson(path.join(projectRoot, "graph", "GRAPH_PRESENCE_CHECK.json"), {
+      status: "ready",
+      expected_paper_count: 1,
+      present_paper_count: 1,
+      missing_paper_count: 0,
+    }),
+    writeText(
+      path.join(projectRoot, "graph", "LIMITATION_FRONTIER.md"),
+      "# Limitation Frontier\nTopic: EML\nRecovery source: local_frontier_mapping_recovery_after_graph_degraded_or_missing_agent_outputs\n- GCD pseudo-labels for novel categories are noisy.\n- FixMatch consistency requires known/novel threshold calibration.\n"
+    ),
+    writeText(
+      path.join(projectRoot, "graph", "CONTRADICTION_FRONTIER.md"),
+      "# Contradiction Frontier\nTopic: EML\n- FixMatch depends on confident pseudo-labels, but GCD novel samples are low-confidence.\n"
+    ),
+    writeText(
+      path.join(projectRoot, "graph", "TRANSFER_FRONTIER.md"),
+      "# Transfer Frontier\nTopic: EML\n- Transfer FixMatch weak-to-strong consistency onto the unlabeled GCD branch.\n"
+    ),
+    writeText(
+      path.join(projectRoot, "graph", "COMPOSITION_FRONTIER.md"),
+      "# Composition Frontier\nTopic: EML\n- Adaptive FixMatch consistency for generalized category discovery.\n"
+    ),
+    writeText(
+      path.join(projectRoot, "graph", "ANCHOR_INDEX.md"),
+      "# Anchor Index\nTopic: EML\n- paper:fixmatch-generalization: Towards Understanding Why FixMatch Generalizes Better Than Supervised Learning.\n"
+    ),
+    writeJson(path.join(projectRoot, "researcher", "brainstorm-cycle", "TOPIC_SUMMARY.json"), {
+      topic,
+      summary:
+        "Recover frontier mapping around transferring FixMatch weak-to-strong consistency into GCD.",
+      source: "workflow_local_frontier_recovery",
+      fallback_reason:
+        "local_frontier_mapping_recovery_after_graph_degraded_or_missing_agent_outputs",
+      anchor_papers: [
+        {
+          id: "paper:fixmatch-generalization",
+          title: "FixMatch for generalized category discovery",
+          relevance: "Pseudo-label regularization source.",
+        },
+      ],
+    }),
+    writeJson(path.join(projectRoot, "researcher", "brainstorm-cycle", "RESEARCH_BRIEF.json"), {
+      summary: "FixMatch-style consistency is a plausible GCD improvement.",
+      source: "workflow_local_frontier_recovery",
+      fallback_reason:
+        "local_frontier_mapping_recovery_after_graph_degraded_or_missing_agent_outputs",
+    }),
+    writeJson(path.join(projectRoot, "researcher", "brainstorm-cycle", "BRAINSTORM_BRIEF.json"), {
+      source: "workflow_local_frontier_recovery",
+      fallback_reason:
+        "local_frontier_mapping_recovery_after_graph_degraded_or_missing_agent_outputs",
+      directions: [
+        {
+          title: "Adaptive FixMatch consistency for generalized category discovery",
+          summary: "Use known/novel pseudo-label threshold calibration.",
+        },
+      ],
+    }),
+    writeJson(path.join(projectRoot, "researcher", "brainstorm-cycle", "WORKING_MEMORY.json"), {
+      source: "workflow_local_frontier_recovery",
+      fallback_reason:
+        "local_frontier_mapping_recovery_after_graph_degraded_or_missing_agent_outputs",
+      key_facts: ["GCD optimizes known and novel classes jointly."],
+    }),
+    writeText(
+      path.join(projectRoot, "researcher", "brainstorm-cycle", "LOGIC_CHAIN.md"),
+      "# Logic Chain\nTopic: EML\n- FixMatch improves GCD through pseudo-label consistency.\n"
+    ),
+    writeText(
+      path.join(projectRoot, "researcher", "brainstorm-cycle", "EVIDENCE_CHAIN.md"),
+      "# Evidence Chain\nTopic: EML\n- GCD H-score is the primary metric.\n"
+    ),
+    writeText(
+      path.join(projectRoot, "researcher", "brainstorm-cycle", "QUESTION_PACKET.md"),
+      "# Question Packet\nTopic: EML\n- Does FixMatch improve GCD known/novel accuracy?\n"
+    ),
+    writeText(
+      path.join(projectRoot, "researcher", "brainstorm-cycle", "SYNTHESIS_PACKET.md"),
+      "# Synthesis Packet\nTopic: EML\n## Recommended Pilot\nAdaptive FixMatch consistency for generalized category discovery.\n"
+    ),
+    writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+      project_id: "eml-frontier-materializer-drift-demo",
+      title: topic,
+      current_stage: "frontier_mapping",
+      current_micro_stage: "frontier_mapping_requested",
+      owner_agent: "researcher",
+      graph_reasoning: {
+        required: true,
+        stop_status: "unknown",
+      },
+      brainstorm_cycle: {
+        status: "ready",
+        topic,
+        basis_stage: "frontier_mapping",
+        provider: "workflow_core_brainstorm",
+        provider_mode: "core",
+        provider_status: "ready",
+        contract_version: 1,
+        topic_summary_path: "researcher/brainstorm-cycle/TOPIC_SUMMARY.json",
+        research_brief_path: "researcher/brainstorm-cycle/RESEARCH_BRIEF.json",
+        brainstorm_brief_path: "researcher/brainstorm-cycle/BRAINSTORM_BRIEF.json",
+        working_memory_path: "researcher/brainstorm-cycle/WORKING_MEMORY.json",
+        logic_chain_path: "researcher/brainstorm-cycle/LOGIC_CHAIN.md",
+        evidence_chain_path: "researcher/brainstorm-cycle/EVIDENCE_CHAIN.md",
+        reasoning_trace_path: "researcher/brainstorm-cycle/REASONING_TRACE.jsonl",
+        question_packet_path: "researcher/brainstorm-cycle/QUESTION_PACKET.md",
+        synthesis_packet_path: "researcher/brainstorm-cycle/SYNTHESIS_PACKET.md",
+        rounds: [
+          {
+            round_id: "round_1",
+            status: "completed",
+            options: [
+              {
+                option_id: "opt_1",
+                title: "Adaptive FixMatch consistency for generalized category discovery",
+              },
+            ],
+          },
+        ],
+        selected_round_id: "round_1",
+        selected_option_id: "opt_1",
+        selected_option_title: "Adaptive FixMatch consistency for generalized category discovery",
+      },
+    }),
+  ]);
+
+  const result = await maybePrepareWorkflowStageContracts({
+    projectRoot,
+    stage: "frontier_mapping",
+    deps: makeNoopPreflightDeps(),
+  });
+
+  assert.equal(result.materializedContracts.includes("frontier_mapping_state"), true);
+  assert.deepEqual(result.errors, []);
+
+  const topicSummary = JSON.parse(
+    await fs.readFile(
+      path.join(projectRoot, "researcher", "brainstorm-cycle", "TOPIC_SUMMARY.json"),
+      "utf8"
+    )
+  );
+  assert.equal(topicSummary.recovery_profile, "eml_operator");
+  assert.match(topicSummary.summary, /EML/i);
+  assert.doesNotMatch(JSON.stringify(topicSummary.anchor_papers), /FixMatch|GCD/i);
+
+  const synthesisPacket = await fs.readFile(
+    path.join(projectRoot, "researcher", "brainstorm-cycle", "SYNTHESIS_PACKET.md"),
+    "utf8"
+  );
+  assert.match(synthesisPacket, /EML residual and mixer blocks/i);
+  assert.doesNotMatch(synthesisPacket, /FixMatch|generalized category discovery|\bGCD\b/i);
+
+  const anchorIndex = await fs.readFile(
+    path.join(projectRoot, "graph", "ANCHOR_INDEX.md"),
+    "utf8"
+  );
+  assert.match(anchorIndex, /paper:eml-operator/i);
+  assert.doesNotMatch(anchorIndex, /fixmatch|generalized category discovery|\bgcd\b/i);
+
+  const manifest = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "PROJECT_MANIFEST.json"), "utf8")
+  );
+  assert.equal(
+    manifest.brainstorm_cycle.selected_option_title,
+    "EML residual and mixer blocks for small basemodel validation"
+  );
+});
+
 test("stage preflight recovers frontier from local paper sources when PaperNexus corpus is missing", async (t) => {
   const projectRoot = await fs.mkdtemp(
     path.join(os.tmpdir(), "openclaw-frontier-materializer-local-source-")
