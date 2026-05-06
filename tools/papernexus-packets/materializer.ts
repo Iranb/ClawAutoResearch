@@ -240,6 +240,10 @@ function deriveMechanismBridgePacketFromBundle(bundle: Record<string, unknown>) 
           "supporting_papers",
           "supportingPapers",
         ]),
+        source_spans: readRecordList(takeaway.source_spans ?? takeaway.sourceSpans),
+        evidence_chain_refs: readRecordList(
+          takeaway.evidence_chain_refs ?? takeaway.evidenceChainRefs
+        ),
       },
     }));
   });
@@ -255,6 +259,27 @@ function deriveMechanismBridgePacketFromBundle(bundle: Record<string, unknown>) 
     bridge_evidence_tier: deriveBridgeEvidenceTierFromBundle(bundle),
     transfer_bridges: transferBridges,
     bridge_nodes: bridgeNodes,
+    bridge_retrieval:
+      asRecord(bundle.bridge_retrieval ?? bundle.bridgeRetrieval) ?? null,
+    structural_analogy:
+      asRecord(bundle.structural_analogy ?? bundle.structuralAnalogy) ?? null,
+    interdisciplinary_potential_ranking:
+      asRecord(
+        bundle.interdisciplinary_potential_ranking ??
+          bundle.interdisciplinaryPotentialRanking
+      ) ?? null,
+    interdisciplinary_ranking:
+      asRecord(bundle.interdisciplinary_ranking ?? bundle.interdisciplinaryRanking) ??
+      null,
+    domain_distance_matrix:
+      asRecord(bundle.domain_distance_matrix ?? bundle.domainDistanceMatrix) ?? null,
+    domain_distance_policy:
+      asRecord(bundle.domain_distance_policy ?? bundle.domainDistancePolicy) ?? null,
+    source_domain_analyses: sourceDomainAnalyses,
+    cross_domain_analysis: sourceDomainAnalyses,
+    idea_fragments: ideaFragments,
+    requisition_report:
+      asRecord(bundle.requisition_report ?? bundle.requisitionReport) ?? null,
   };
 }
 
@@ -357,6 +382,56 @@ function mergeMechanismBridgePackets(
       ...readRecordList(base.bridge_nodes),
       ...readRecordList(derived.bridge_nodes),
     ],
+    bridge_retrieval:
+      asRecord(derived.bridge_retrieval ?? derived.bridgeRetrieval) ??
+      asRecord(base.bridge_retrieval ?? base.bridgeRetrieval) ??
+      null,
+    structural_analogy:
+      asRecord(derived.structural_analogy ?? derived.structuralAnalogy) ??
+      asRecord(base.structural_analogy ?? base.structuralAnalogy) ??
+      null,
+    interdisciplinary_potential_ranking:
+      asRecord(
+        derived.interdisciplinary_potential_ranking ??
+          derived.interdisciplinaryPotentialRanking
+      ) ??
+      asRecord(
+        base.interdisciplinary_potential_ranking ??
+          base.interdisciplinaryPotentialRanking
+      ) ??
+      null,
+    interdisciplinary_ranking:
+      asRecord(derived.interdisciplinary_ranking ?? derived.interdisciplinaryRanking) ??
+      asRecord(base.interdisciplinary_ranking ?? base.interdisciplinaryRanking) ??
+      null,
+    domain_distance_matrix:
+      asRecord(derived.domain_distance_matrix ?? derived.domainDistanceMatrix) ??
+      asRecord(base.domain_distance_matrix ?? base.domainDistanceMatrix) ??
+      null,
+    domain_distance_policy:
+      asRecord(derived.domain_distance_policy ?? derived.domainDistancePolicy) ??
+      asRecord(base.domain_distance_policy ?? base.domainDistancePolicy) ??
+      null,
+    source_domain_analyses: [
+      ...readRecordList(base.source_domain_analyses ?? base.sourceDomainAnalyses),
+      ...readRecordList(
+        derived.source_domain_analyses ?? derived.sourceDomainAnalyses
+      ),
+    ],
+    cross_domain_analysis: [
+      ...readRecordList(base.cross_domain_analysis ?? base.crossDomainAnalysis),
+      ...readRecordList(
+        derived.cross_domain_analysis ?? derived.crossDomainAnalysis
+      ),
+    ],
+    idea_fragments: [
+      ...readRecordList(base.idea_fragments ?? base.ideaFragments),
+      ...readRecordList(derived.idea_fragments ?? derived.ideaFragments),
+    ],
+    requisition_report:
+      asRecord(derived.requisition_report ?? derived.requisitionReport) ??
+      asRecord(base.requisition_report ?? base.requisitionReport) ??
+      null,
   };
 }
 

@@ -355,6 +355,11 @@ test("research_workflow materialize_idea_catalyst_state scaffolds IDEA-CATALYST 
   assert.ok(result.state.sourceDomains.includes("Psychology"));
   assert.ok(result.generatedFiles.some((filePath) => /DECOMPOSITION_PACKET\.json$/.test(filePath)));
   assert.ok(result.generatedFiles.some((filePath) => /RANKED_FRAGMENTS\.json$/.test(filePath)));
+  assert.ok(result.generatedFiles.some((filePath) => /CANDIDATE_POOL\.json$/.test(filePath)));
+  assert.ok(result.generatedFiles.some((filePath) => /CANDIDATE_SCORECARD\.json$/.test(filePath)));
+  assert.ok(result.generatedFiles.some((filePath) => /CANDIDATE_TOURNAMENT\.json$/.test(filePath)));
+  assert.ok(result.generatedFiles.some((filePath) => /SELECTED_IDEAS\.json$/.test(filePath)));
+  assert.ok(result.generatedFiles.some((filePath) => /REJECTED_IDEAS\.json$/.test(filePath)));
 
   const decompositionPacket = JSON.parse(
     await fs.readFile(
@@ -423,9 +428,75 @@ test("research_workflow materialize_idea_catalyst_state scaffolds IDEA-CATALYST 
       "utf8"
     )
   );
+  const candidatePoolPacket = JSON.parse(
+    await fs.readFile(
+      path.join(projectRoot, "researcher", "idea-catalyst", "CANDIDATE_POOL.json"),
+      "utf8"
+    )
+  );
+  assert.equal(candidatePoolPacket.contract_version, "idea-catalyst-candidate-pool-v1");
+  assert.equal(candidatePoolPacket.candidate_pool_size >= 3, true);
+
+  const scorecardPacket = JSON.parse(
+    await fs.readFile(
+      path.join(projectRoot, "researcher", "idea-catalyst", "CANDIDATE_SCORECARD.json"),
+      "utf8"
+    )
+  );
+  assert.equal(scorecardPacket.contract_version, "idea-catalyst-candidate-scorecard-v1");
+  assert.equal(scorecardPacket.scoring_policy.hard_filters_first, true);
+  assert.ok(scorecardPacket.candidates[0].dimensions.evidence_support);
+
+  const tournamentPacket = JSON.parse(
+    await fs.readFile(
+      path.join(projectRoot, "researcher", "idea-catalyst", "CANDIDATE_TOURNAMENT.json"),
+      "utf8"
+    )
+  );
+  assert.equal(tournamentPacket.contract_version, "idea-catalyst-candidate-tournament-v1");
+  assert.equal(Array.isArray(tournamentPacket.pairwise_results), true);
+
+  const selectedIdeasPacket = JSON.parse(
+    await fs.readFile(
+      path.join(projectRoot, "researcher", "idea-catalyst", "SELECTED_IDEAS.json"),
+      "utf8"
+    )
+  );
+  assert.equal(selectedIdeasPacket.contract_version, "idea-catalyst-selected-ideas-v1");
+  assert.equal(selectedIdeasPacket.selected_count >= 1, true);
+  assert.ok(
+    selectedIdeasPacket.selected_ideas.every(
+      (candidate) =>
+        candidate.baseline_to_compare &&
+        candidate.primary_metric &&
+        candidate.falsifier_pilot &&
+        candidate.weakest_assumption &&
+        candidate.claim_cap
+    )
+  );
+
+  const rejectedIdeasPacket = JSON.parse(
+    await fs.readFile(
+      path.join(projectRoot, "researcher", "idea-catalyst", "REJECTED_IDEAS.json"),
+      "utf8"
+    )
+  );
+  assert.equal(rejectedIdeasPacket.contract_version, "idea-catalyst-rejected-ideas-v1");
+  assert.ok(
+    rejectedIdeasPacket.rejected_ideas.every(
+      (candidate) => typeof candidate.rejection_reason === "string"
+    )
+  );
+
   assert.ok(
     ideaFragmentsPacket.fragments.every(
       (fragment) =>
+        fragment.candidate_id &&
+        fragment.baseline_to_compare &&
+        fragment.primary_metric &&
+        fragment.falsifier_pilot &&
+        fragment.weakest_assumption &&
+        fragment.claim_cap &&
         fragment.integration_mechanism &&
         Array.isArray(fragment.integration_mechanism.selected_takeaways) &&
         fragment.integration_mechanism.selected_takeaways.length >= 1 &&
@@ -817,6 +888,21 @@ test("research_workflow materialize_idea_catalyst_state emits a structured requi
   assert.equal(result.state.status, "requisition");
   assert.equal(result.state.requisitionRequired, true);
 
+  const gateDecision = JSON.parse(
+    await fs.readFile(
+      path.join(projectRoot, "researcher", "idea-catalyst", "GATE_DECISION.json"),
+      "utf8"
+    )
+  );
+  assert.equal(gateDecision.decision, "requisition");
+  assert.equal(typeof gateDecision.evidence.bridge_path_count, "number");
+  assert.equal(typeof gateDecision.evidence.source_span_count, "number");
+  assert.equal(typeof gateDecision.evidence.path_completeness, "number");
+  assert.equal(typeof gateDecision.evidence.evidence_density, "number");
+  assert.equal(typeof gateDecision.evidence.mechanism_support_density, "number");
+  assert.equal(typeof gateDecision.evidence.claim_cap, "string");
+  assert.ok(gateDecision.evidence.missing_evidence_types.includes("bridge_path"));
+
   const requisition = JSON.parse(
     await fs.readFile(
       path.join(
@@ -829,6 +915,7 @@ test("research_workflow materialize_idea_catalyst_state emits a structured requi
     )
   );
   assert.deepEqual(requisition.missing_domains, ["Psychology", "Control Theory"]);
+  assert.ok(requisition.missing_evidence_types.includes("bridge_path"));
   assert.equal(requisition.required_stage_reentry.join(" -> "), "graph_build -> frontier_mapping -> idea");
   assert.ok(Array.isArray(requisition.search_queries));
   assert.ok(requisition.search_queries.length >= 2);

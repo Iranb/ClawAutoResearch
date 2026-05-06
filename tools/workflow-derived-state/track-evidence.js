@@ -54,6 +54,16 @@ function collectEvidencePointers(record) {
         ...asStringArray(record.graph_evidence_pointers ?? record.graphEvidencePointers).map(normalizeEvidencePointer),
         ...asStringArray(record.graph_innovation_evidence_pointers ?? record.graphInnovationEvidencePointers).map(normalizeEvidencePointer),
         ...normalizeObjectArrayStrings(record.evidence_pointer_entries ?? record.evidencePointerEntries ?? record.evidence, ["pointer", "path", "artifact_path", "artifactPath", "reference", "ref"], 12),
+        ...asStringArray(record.bridge_path_ids ?? record.bridgePathIds).map((entry) => `paper_nexus:bridge_path:${normalizeEvidencePointer(entry)}`),
+        ...normalizeObjectArrayStrings(record.evidence_chain_refs ?? record.evidenceChainRefs, ["ref_id", "refId", "node_id", "nodeId", "source", "reference", "ref"], 16).map((entry) => `paper_nexus:evidence_ref:${entry}`),
+        ...normalizeObjectArrayStrings(record.source_spans ?? record.sourceSpans, [
+            "span_id",
+            "spanId",
+            "snippet_node_id",
+            "snippetNodeId",
+            "paper_id",
+            "paperId",
+        ], 16).map((entry) => `paper_nexus:source_span:${entry}`),
     ]).slice(0, 12);
 }
 function collectLinkedGraphNodes(record) {
@@ -67,6 +77,13 @@ function collectLinkedGraphNodes(record) {
             record.graphNodeEntries ??
             record.graph_innovation_node_entries ??
             record.graphInnovationNodeEntries, ["node_id", "nodeId", "paper_id", "paperId", "id"], 16),
+        ...normalizeObjectArrayStrings(record.evidence_chain_refs ?? record.evidenceChainRefs, ["node_id", "nodeId", "snippet_node_id", "snippetNodeId"], 16),
+        ...normalizeObjectArrayStrings(record.source_spans ?? record.sourceSpans, [
+            "snippet_node_id",
+            "snippetNodeId",
+            "paper_id",
+            "paperId",
+        ], 16),
     ]).slice(0, 16);
 }
 function collectRelationPatterns(record) {
@@ -79,6 +96,15 @@ function collectRelationPatterns(record) {
             record.relations ??
             record.graph_innovation_relations ??
             record.graphInnovationRelations, ["pattern", "relation_pattern", "relationPattern", "relation"], 16),
+        ...asStringArray(record.bridge_path_ids ?? record.bridgePathIds).map((entry) => `paper_nexus_bridge_path:${entry}`),
+        ...(pickString(record, ["transferred_mechanism", "transferredMechanism"])
+            ? [
+                `paper_nexus_transferred_mechanism:${pickString(record, [
+                    "transferred_mechanism",
+                    "transferredMechanism",
+                ])}`,
+            ]
+            : []),
     ]).slice(0, 16);
 }
 function buildDiagnostics(evidencePointers, linkedGraphNodes, relationPatterns, options) {

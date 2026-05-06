@@ -1243,6 +1243,70 @@ async function shouldMaterializePapernexusPacketContracts(params: {
   return artifacts.anyArtifactsPresent;
 }
 
+function normalizeDiscoveryPacketStatus(packet: Record<string, unknown>): string | null {
+  const raw =
+    typeof packet.status === "string"
+      ? packet.status
+      : typeof packet.state === "string"
+        ? packet.state
+        : null;
+  const normalized = String(raw ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  return normalized || null;
+}
+
+function hasActionableLiteratureDiscoveryPacket(packet: Record<string, unknown> | null): boolean {
+  if (!packet) {
+    return false;
+  }
+  if (
+    ["completed", "satisfied", "closed", "cancelled", "canceled", "superseded"].includes(
+      normalizeDiscoveryPacketStatus(packet) ?? ""
+    )
+  ) {
+    return false;
+  }
+  if (packet.evidence_gap_closed === true || packet.evidenceGapClosed === true) {
+    return false;
+  }
+  return (
+    Array.isArray(packet.candidate_queries) ||
+    Array.isArray(packet.search_queries) ||
+    Array.isArray(packet.missing_evidence_types) ||
+    Array.isArray(packet.required_stage_reentry) ||
+    typeof packet.discovery_id === "string" ||
+    typeof packet.discoveryId === "string"
+  );
+}
+
+function hasExistingLiteratureDiscoveryRequestForPacket(params: {
+  manifest: ManifestLike;
+  packet: Record<string, unknown>;
+}): boolean {
+  const discoveryId =
+    typeof params.packet.discovery_id === "string"
+      ? params.packet.discovery_id
+      : typeof params.packet.discoveryId === "string"
+        ? params.packet.discoveryId
+        : null;
+  const state = normalizePaperIngestionState(params.manifest.paper_ingestion);
+  return state.queuedRequests.some((request) => {
+    if (!isLiteratureDiscoveryTriggerKind(request.triggerKind)) {
+      return false;
+    }
+    if (!discoveryId) {
+      return true;
+    }
+    return (
+      request.requestId.includes(discoveryId) ||
+      request.detail?.includes(discoveryId) === true
+    );
+  });
+}
+
 async function shouldQueueLiteratureDiscoveryRequisition(params: {
   projectRoot: string;
   manifest: ManifestLike;
@@ -1256,13 +1320,23 @@ async function shouldQueueLiteratureDiscoveryRequisition(params: {
     DEFAULT_LITERATURE_DISCOVERY_PACKET_PATH
   );
   const packetExists = Boolean(packetResolvedPath && (await pathExists(packetResolvedPath)));
+  const packet =
+    packetResolvedPath && packetExists
+      ? ((await readJsonIfExists<Record<string, unknown>>(packetResolvedPath)) ?? null)
+      : null;
   const literatureDiscoveryNeed = await getWorkflowLiteratureDiscoveryNeed({
     projectRoot: params.projectRoot,
     manifest: params.manifest,
     stage: params.stage,
   });
   if (!literatureDiscoveryNeed.required) {
-    return false;
+    return (
+      hasActionableLiteratureDiscoveryPacket(packet) &&
+      !hasExistingLiteratureDiscoveryRequestForPacket({
+        manifest: params.manifest,
+        packet: packet as Record<string, unknown>,
+      })
+    );
   }
   if (!packetExists) {
     return true;
