@@ -318,9 +318,14 @@ function resolveEmbeddedAgentModelCandidates(params: {
   config: unknown;
   agentId: string;
 }): Array<{ provider: string; model: string; ref: string }> {
+  const configuredRefs = collectAgentModelRefs(params);
+  const externalRefs =
+    configuredRefs.length > 1
+      ? []
+      : readExternalOpenClawModelRefs(params.agentId);
   const candidates = uniqueStrings([
-    ...collectAgentModelRefs(params),
-    ...readExternalOpenClawModelRefs(params.agentId),
+    ...configuredRefs,
+    ...externalRefs,
   ]);
   const selections: Array<{ provider: string; model: string; ref: string }> = [];
   for (const candidate of candidates) {

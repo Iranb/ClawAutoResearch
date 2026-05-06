@@ -9,6 +9,10 @@
 3. [Module Map](./module-map.md)
 4. [Configuration](./configuration.md)
 
+如果你在准备 AutoResearch 的 NMI / Nature Machine Intelligence 投稿，先读：
+
+- [NMI AutoResearch Go/No-Go Evidence Memo](./2026-05-06-nmi-autoresearch-go-no-go-memo.zh-CN.md)
+
 如果你正在看新的 conference / journal 广覆盖论文搜索实现，建议先读：
 
 - [Broad Paper Search 设计详解](/architecture/broad-paper-search)

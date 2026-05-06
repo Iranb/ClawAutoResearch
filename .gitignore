@@ -54,6 +54,7 @@ openclaw-research-suggested-changes.txt
 
 # macOS/iCloud conflict copies
 * [0-9]/
+* [0-9]
 * [0-9].*
 
 # Project data (if accidentally created in repo root)
@@ -86,3 +87,4 @@ install.sh.bak
 jest-results/
 test-results/
 .omx/
+.gitnexus
