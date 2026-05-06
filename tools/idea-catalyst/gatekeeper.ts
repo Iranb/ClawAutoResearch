@@ -8,6 +8,20 @@ type ScoutingDomain = {
   bridge_path_ids?: string[] | null;
   source_spans?: unknown[] | null;
   source_span_count?: number | null;
+  evidence_chain_refs?: unknown[] | null;
+  evidenceChainRefs?: unknown[] | null;
+  evidence_refs?: unknown[] | null;
+  evidenceRefs?: unknown[] | null;
+  supporting_evidence_refs?: unknown[] | null;
+  supportingEvidenceRefs?: unknown[] | null;
+  evidence_pointers?: unknown[] | null;
+  evidencePointers?: unknown[] | null;
+  graph_evidence_pointers?: unknown[] | null;
+  graphEvidencePointers?: unknown[] | null;
+  linked_graph_nodes?: unknown[] | null;
+  linkedGraphNodes?: unknown[] | null;
+  path_trace?: unknown[] | null;
+  pathTrace?: unknown[] | null;
   path_completeness?: number | null;
   evidence_density?: number | null;
   mechanism_support_density?: number | null;
@@ -30,6 +44,9 @@ type ScoutingReportLike = {
   evidence_summary?: {
     source_span_count?: number | null;
     bridge_path_count?: number | null;
+    evidence_chain_ref_count?: number | null;
+    evidence_ref_count?: number | null;
+    graph_evidence_pointer_count?: number | null;
     max_path_completeness?: number | null;
     max_evidence_density?: number | null;
     max_mechanism_support_density?: number | null;
@@ -87,6 +104,18 @@ function countTakeawayField(entry: ScoutingDomain, field: string): number {
   }, 0);
 }
 
+function countTakeawayFields(entry: ScoutingDomain, fields: string[]): number {
+  if (!Array.isArray(entry.takeaways)) {
+    return 0;
+  }
+  return entry.takeaways.reduce<number>((sum, takeaway) => {
+    const record = takeaway && typeof takeaway === "object"
+      ? (takeaway as Record<string, unknown>)
+      : {};
+    return sum + Math.max(...fields.map((field) => objectCount(record[field])), 0);
+  }, 0);
+}
+
 function countSourceSpans(entry: ScoutingDomain): number {
   return Math.max(
     Math.floor(Number(entry.source_span_count ?? 0)),
@@ -95,13 +124,102 @@ function countSourceSpans(entry: ScoutingDomain): number {
   );
 }
 
+const EVIDENCE_REF_FIELDS = [
+  "evidence_chain_refs",
+  "evidenceChainRefs",
+  "evidence_refs",
+  "evidenceRefs",
+  "supporting_evidence_refs",
+  "supportingEvidenceRefs",
+];
+
+const GRAPH_EVIDENCE_POINTER_FIELDS = [
+  "evidence_pointers",
+  "evidencePointers",
+  "graph_evidence_pointers",
+  "graphEvidencePointers",
+  "linked_graph_nodes",
+  "linkedGraphNodes",
+  "path_trace",
+  "pathTrace",
+];
+
+const SOURCE_SPAN_POINTER_FIELDS = [
+  "span_id",
+  "spanId",
+  "snippet_node_id",
+  "snippetNodeId",
+  "source_node_id",
+  "sourceNodeId",
+  "evidence_node_id",
+  "evidenceNodeId",
+  "paper_id",
+  "paperId",
+  "node_id",
+  "nodeId",
+];
+
+function countRecordArrayFields(
+  record: Record<string, unknown>,
+  fields: string[]
+): number {
+  return fields.reduce((sum, field) => sum + objectCount(record[field]), 0);
+}
+
+function countSourceSpanPointers(value: unknown): number {
+  if (!Array.isArray(value)) {
+    return 0;
+  }
+  return value.filter((span) => {
+    if (!span || typeof span !== "object") {
+      return false;
+    }
+    const record = span as Record<string, unknown>;
+    return SOURCE_SPAN_POINTER_FIELDS.some((field) =>
+      String(record[field] ?? "").trim()
+    );
+  }).length;
+}
+
+function countTakeawaySourceSpanPointers(entry: ScoutingDomain): number {
+  if (!Array.isArray(entry.takeaways)) {
+    return 0;
+  }
+  return entry.takeaways.reduce<number>((sum, takeaway) => {
+    const record = takeaway && typeof takeaway === "object"
+      ? (takeaway as Record<string, unknown>)
+      : {};
+    return sum + countSourceSpanPointers(record.source_spans ?? record.sourceSpans);
+  }, 0);
+}
+
+function countEvidenceRefs(entry: ScoutingDomain): number {
+  const record = entry as Record<string, unknown>;
+  return (
+    countRecordArrayFields(record, EVIDENCE_REF_FIELDS) +
+    countTakeawayFields(entry, EVIDENCE_REF_FIELDS)
+  );
+}
+
+function countGraphEvidencePointers(entry: ScoutingDomain): number {
+  const record = entry as Record<string, unknown>;
+  return (
+    countRecordArrayFields(record, GRAPH_EVIDENCE_POINTER_FIELDS) +
+    countTakeawayFields(entry, GRAPH_EVIDENCE_POINTER_FIELDS) +
+    countSourceSpanPointers(entry.source_spans) +
+    countTakeawaySourceSpanPointers(entry)
+  );
+}
+
 function domainEvidenceMetrics(entry: ScoutingDomain, scoutingReport: ScoutingReportLike) {
   const bridgePathCount = Math.max(
     objectCount(entry.bridge_path_ids),
-    objectCount(entry.retrieved_nodes),
     countTakeawayField(entry, "bridge_path_ids")
   );
   const sourceSpanCount = countSourceSpans(entry);
+  const evidenceRefCount = countEvidenceRefs(entry);
+  const graphEvidencePointerCount = countGraphEvidencePointers(entry);
+  const evidenceGroundingCount = evidenceRefCount + graphEvidencePointerCount;
   const pathCompleteness = Math.max(
     normalizeScore(entry.path_completeness),
     bridgePathCount > 0 ? 0.5 : 0
@@ -128,6 +246,9 @@ function domainEvidenceMetrics(entry: ScoutingDomain, scoutingReport: ScoutingRe
     evidenceCount: countEvidence(entry, scoutingReport),
     bridgePathCount,
     sourceSpanCount,
+    evidenceRefCount,
+    graphEvidencePointerCount,
+    evidenceGroundingCount,
     pathCompleteness,
     evidenceDensity,
     mechanismSupportDensity,
@@ -136,6 +257,7 @@ function domainEvidenceMetrics(entry: ScoutingDomain, scoutingReport: ScoutingRe
     evidenceChainSufficient:
       bridgePathCount > 0 &&
       sourceSpanCount > 0 &&
+      evidenceGroundingCount > 0 &&
       pathCompleteness >= 0.5 &&
       evidenceDensity > 0 &&
       evidenceTier !== "weak",
@@ -146,6 +268,7 @@ function collectMissingEvidenceTypes(params: {
   candidateDomains: ScoutingDomain[];
   totalSourceSpanCount: number;
   totalBridgePathCount: number;
+  totalEvidenceGroundingCount: number;
   bridgeNodeCount: number;
   maxPathCompleteness: number;
   maxEvidenceDensity: number;
@@ -155,11 +278,14 @@ function collectMissingEvidenceTypes(params: {
   if (params.candidateDomains.length === 0) {
     missing.add("domain_coverage");
   }
-  if (params.totalBridgePathCount === 0 && params.bridgeNodeCount === 0) {
+  if (params.totalBridgePathCount === 0) {
     missing.add("bridge_path");
   }
   if (params.totalSourceSpanCount === 0) {
     missing.add("source_span");
+  }
+  if (params.totalEvidenceGroundingCount === 0) {
+    missing.add("evidence_chain_ref_or_graph_pointer");
   }
   if (params.maxPathCompleteness < 0.5) {
     missing.add("path_completeness");
@@ -238,18 +364,33 @@ export function buildIdeaCatalystGateDecision(
     ).length,
     unresolved_questions: questionGaps.length,
   };
-  const sufficientDomains = candidateDomains
-    .filter((entry) => entry?.pruned !== true)
-    .filter((entry) => {
-      const evidenceCount = countEvidence(entry, scoutingReport);
-      const relevanceRatio = Number(entry?.relevance_ratio ?? 0);
-      const bridgeQuality = Number(entry?.bridge_quality ?? 0);
-      const metrics = domainEvidenceMetrics(entry, scoutingReport);
-      const legacyHypothesisReady =
-        evidenceCount >= 1 && relevanceRatio >= 0.34 && bridgeQuality >= 0.5;
-      return metrics.evidenceChainSufficient || legacyHypothesisReady;
-    })
-    .map((entry) => String(entry?.domain ?? "").trim())
+  const domainAssessments = candidateDomains.map((entry) => {
+    const evidenceCount = countEvidence(entry, scoutingReport);
+    const relevanceRatio = Number(entry?.relevance_ratio ?? 0);
+    const bridgeQuality = Number(entry?.bridge_quality ?? 0);
+    const metrics = domainEvidenceMetrics(entry, scoutingReport);
+    return {
+      entry,
+      domain: String(entry?.domain ?? "").trim(),
+      metrics,
+      evidenceCount,
+      legacyHypothesisReady:
+        evidenceCount >= 1 && relevanceRatio >= 0.34 && bridgeQuality >= 0.5,
+    };
+  });
+  const sufficientDomains = domainAssessments
+    .filter((assessment) => assessment.entry?.pruned !== true)
+    .filter((assessment) => assessment.metrics.evidenceChainSufficient)
+    .map((assessment) => assessment.domain)
+    .filter(Boolean);
+  const legacyHypothesisDomains = domainAssessments
+    .filter((assessment) => assessment.entry?.pruned !== true)
+    .filter(
+      (assessment) =>
+        assessment.legacyHypothesisReady &&
+        !assessment.metrics.evidenceChainSufficient
+    )
+    .map((assessment) => assessment.domain)
     .filter(Boolean);
   const insufficientDomains = candidateDomains
     .map((entry) => String(entry?.domain ?? "").trim())
@@ -261,9 +402,7 @@ export function buildIdeaCatalystGateDecision(
   const bridgeNodeCount = Array.isArray(scoutingReport.bridge_nodes)
     ? scoutingReport.bridge_nodes.length
     : 0;
-  const domainMetrics = candidateDomains.map((entry) =>
-    domainEvidenceMetrics(entry, scoutingReport)
-  );
+  const domainMetrics = domainAssessments.map((assessment) => assessment.metrics);
   const totalSourceSpanCount = domainMetrics.reduce(
     (sum, entry) => sum + entry.sourceSpanCount,
     Number(scoutingReport.evidence_summary?.source_span_count ?? 0)
@@ -272,6 +411,19 @@ export function buildIdeaCatalystGateDecision(
     (sum, entry) => sum + entry.bridgePathCount,
     Number(scoutingReport.evidence_summary?.bridge_path_count ?? 0)
   );
+  const totalEvidenceRefCount = domainMetrics.reduce(
+    (sum, entry) => sum + entry.evidenceRefCount,
+    Math.max(
+      Number(scoutingReport.evidence_summary?.evidence_chain_ref_count ?? 0),
+      Number(scoutingReport.evidence_summary?.evidence_ref_count ?? 0)
+    )
+  );
+  const totalGraphEvidencePointerCount = domainMetrics.reduce(
+    (sum, entry) => sum + entry.graphEvidencePointerCount,
+    Number(scoutingReport.evidence_summary?.graph_evidence_pointer_count ?? 0)
+  );
+  const totalEvidenceGroundingCount =
+    totalEvidenceRefCount + totalGraphEvidencePointerCount;
   const maxPathCompleteness = Math.max(
     Number(scoutingReport.evidence_summary?.max_path_completeness ?? 0),
     ...domainMetrics.map((entry) => entry.pathCompleteness),
@@ -291,12 +443,13 @@ export function buildIdeaCatalystGateDecision(
     candidateDomains,
     totalSourceSpanCount,
     totalBridgePathCount,
+    totalEvidenceGroundingCount,
     bridgeNodeCount,
     maxPathCompleteness,
     maxEvidenceDensity,
     maxMechanismSupportDensity,
   });
-  const claimCap =
+  const rawClaimCap =
     domainMetrics.some((entry) => entry.claimCap === "confirmatory")
       ? "confirmatory"
       : domainMetrics.some((entry) => entry.claimCap === "exploratory")
@@ -305,15 +458,43 @@ export function buildIdeaCatalystGateDecision(
   const thresholdMet =
     sufficientDomains.length >= 1 &&
     totalRelevantNodes >= 1 &&
-    (totalBridgePathCount > 0 || bridgeNodeCount > 0);
+    totalBridgePathCount > 0 &&
+    totalSourceSpanCount > 0 &&
+    totalEvidenceGroundingCount > 0 &&
+    maxPathCompleteness >= 0.5 &&
+    maxEvidenceDensity > 0;
   const llmJudgment = options?.llmJudgment ?? null;
-  const hardEvidenceBlocked = totalRelevantNodes === 0 || (totalBridgePathCount === 0 && bridgeNodeCount === 0);
   const llmOverride =
-    llmJudgment && llmJudgment.confidence >= 0.8 && !hardEvidenceBlocked
+    llmJudgment && llmJudgment.confidence >= 0.8
       ? llmJudgment
       : null;
+  const llmBrainstormBlockedByGrounding =
+    llmOverride?.preferredDecision === "brainstorm" && !thresholdMet;
+  const llmOverrideUsed =
+    Boolean(llmOverride) &&
+    (llmOverride?.preferredDecision === "requisition" ||
+      (llmOverride?.preferredDecision === "brainstorm" && thresholdMet));
   const decision =
-    llmOverride?.preferredDecision ?? (thresholdMet ? "brainstorm" : "requisition");
+    llmOverride?.preferredDecision === "requisition"
+      ? "requisition"
+      : thresholdMet
+        ? "brainstorm"
+        : "requisition";
+  const decisionMode =
+    decision === "brainstorm"
+      ? "full_graph_backed_brainstorm"
+      : legacyHypothesisDomains.length > 0
+        ? "hypothesis_only"
+        : "requisition";
+  const claimCap = decision === "brainstorm" ? rawClaimCap : "hypothesis";
+  const gatePassReason = thresholdMet
+    ? "At least one non-pruned source domain has bridge path evidence, source span evidence, evidence-chain refs or equivalent graph pointers, nonzero evidence density, and meaningful path completeness."
+    : null;
+  const gateFailureReason = thresholdMet
+    ? null
+    : legacyHypothesisDomains.length > 0
+      ? "Legacy bridge relevance and quality signals are present, but graph-backed source-span and evidence-chain grounding is incomplete; only hypothesis-only handling is allowed until requisition evidence is satisfied."
+      : "Normal brainstorm requires bridge path evidence, source spans, evidence-chain refs or graph pointers, nonzero evidence density, and path completeness of at least 0.5.";
 
   const requisitionMissingDomains =
     llmOverride?.missingDomains?.length
@@ -354,29 +535,41 @@ export function buildIdeaCatalystGateDecision(
   return {
     decision,
     rationale:
-      llmOverride?.reasoning ??
+      (llmOverrideUsed ? llmOverride?.reasoning : null) ??
       (thresholdMet
-      ? "Sufficient cross-domain bridge evidence exists to continue IDEA-CATALYST integration."
-      : actionable
-        ? "Cross-domain bridge evidence is still insufficient for unresolved catalyst questions; request more ingestion before proceeding."
-        : nonActionableReason),
+        ? "Sufficient graph-backed cross-domain evidence exists to continue IDEA-CATALYST integration."
+        : actionable
+          ? gateFailureReason
+          : nonActionableReason),
     evidence: {
       sufficient_domains: sufficientDomains,
       insufficient_domains: insufficientDomains,
+      graph_backed_domains: sufficientDomains,
+      legacy_hypothesis_domains: legacyHypothesisDomains,
       total_relevant_nodes: totalRelevantNodes,
       threshold_met: thresholdMet,
+      decision_mode: decisionMode,
+      gate_pass_reason: gatePassReason,
+      gate_failure_reason: gateFailureReason,
+      full_graph_backed_brainstorm: decisionMode === "full_graph_backed_brainstorm",
+      hypothesis_only: decisionMode === "hypothesis_only",
       bridge_node_count: bridgeNodeCount,
       bridge_path_count: totalBridgePathCount,
       source_span_count: totalSourceSpanCount,
+      evidence_chain_ref_count: totalEvidenceRefCount,
+      graph_evidence_pointer_count: totalGraphEvidencePointerCount,
+      evidence_grounding_count: totalEvidenceGroundingCount,
       path_completeness: maxPathCompleteness,
       evidence_density: maxEvidenceDensity,
       mechanism_support_density: maxMechanismSupportDensity,
       missing_evidence_types: missingEvidenceTypes,
       claim_cap: claimCap,
+      max_claim_cap_from_inputs: rawClaimCap,
       coverage_summary: coverageSummary,
-      gating_mode: llmOverride
-        ? "graph-bridge-sufficiency+llm"
-        : "evidence-chain-sufficiency",
+      gating_mode: llmOverrideUsed
+        ? `${decisionMode}+llm`
+        : decisionMode,
+      llm_brainstorm_blocked_by_grounding: llmBrainstormBlockedByGrounding,
       llm_confidence: llmOverride?.confidence ?? null,
       llm_reasoning: llmOverride?.reasoning ?? null,
     },

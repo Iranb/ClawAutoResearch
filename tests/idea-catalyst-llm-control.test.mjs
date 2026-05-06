@@ -35,7 +35,7 @@ test("llm sufficiency prompt includes unresolved questions and target domain", (
   assert.match(prompt, /brainstorm|requisition/i);
 });
 
-test("llm sufficiency judgment can override threshold gating when confidence is high", () => {
+test("llm sufficiency judgment cannot promote legacy-only evidence into normal brainstorm", () => {
   const judgment = parseSufficiencyJudgment(
     JSON.stringify({
       preferred_decision: "brainstorm",
@@ -57,8 +57,8 @@ test("llm sufficiency judgment can override threshold gating when confidence is 
           pruned: false,
           retrieved_nodes: ["bridge-psych-1"],
           takeaways: [{ takeaway_id: "tk-1" }],
-          relevance_ratio: 0.3,
-          bridge_quality: 0.45,
+          relevance_ratio: 0.8,
+          bridge_quality: 0.9,
         },
       ],
       bridge_nodes: [{ domain: "Psychology" }],
@@ -77,9 +77,92 @@ test("llm sufficiency judgment can override threshold gating when confidence is 
     }
   );
 
-  assert.equal(decision.decision, "brainstorm");
-  assert.equal(decision.evidence.gating_mode, "graph-bridge-sufficiency+llm");
+  assert.equal(decision.decision, "requisition");
+  assert.equal(decision.evidence.decision_mode, "hypothesis_only");
+  assert.equal(decision.evidence.claim_cap, "hypothesis");
+  assert.equal(decision.evidence.llm_brainstorm_blocked_by_grounding, true);
+  assert.ok(decision.evidence.missing_evidence_types.includes("source_span"));
+  assert.ok(
+    decision.evidence.missing_evidence_types.includes(
+      "evidence_chain_ref_or_graph_pointer"
+    )
+  );
   assert.equal(decision.evidence.llm_confidence, 0.92);
+});
+
+test("graph-backed gate passes only with bridge paths, source spans, and evidence refs", () => {
+  const decision = buildIdeaCatalystGateDecision(
+    {
+      target_domain: "Computer Science",
+      challenge_clusters: ["memory preservation under domain shift"],
+      candidate_domains: [
+        {
+          domain: "Psychology",
+          pruned: false,
+          bridge_path_ids: ["bridge-psych-1"],
+          source_spans: [
+            { span_id: "span-psych-1", snippet_node_id: "snippet-psych-1" },
+          ],
+          evidence_chain_refs: [
+            { ref_id: "chain-psych-1", node_id: "node-psych-1" },
+          ],
+          takeaways: [{ takeaway_id: "tk-1", mechanism: "metacontrol" }],
+          path_completeness: 0.82,
+          evidence_density: 0.74,
+          mechanism_support_density: 0.68,
+          evidence_tier: "strong",
+          claim_cap: "confirmatory",
+          relevance_ratio: 0.8,
+          bridge_quality: 0.9,
+        },
+      ],
+      bridge_nodes: [{ domain: "Psychology" }],
+    },
+    {
+      questions: [
+        {
+          question_id: "q1",
+          domain_specific_question: "memory preservation under domain shift",
+          coverage_status: "partial",
+        },
+      ],
+    }
+  );
+
+  assert.equal(decision.decision, "brainstorm");
+  assert.equal(decision.evidence.decision_mode, "full_graph_backed_brainstorm");
+  assert.equal(decision.evidence.full_graph_backed_brainstorm, true);
+  assert.equal(decision.evidence.claim_cap, "confirmatory");
+  assert.equal(decision.evidence.bridge_path_count >= 1, true);
+  assert.equal(decision.evidence.source_span_count >= 1, true);
+  assert.equal(decision.evidence.evidence_chain_ref_count >= 1, true);
+  assert.deepEqual(decision.evidence.missing_evidence_types, []);
+});
+
+test("bridge paths without source spans cannot pass normal brainstorm", () => {
+  const decision = buildIdeaCatalystGateDecision({
+    target_domain: "Computer Science",
+    challenge_clusters: ["memory preservation under domain shift"],
+    candidate_domains: [
+      {
+        domain: "Psychology",
+        pruned: false,
+        bridge_path_ids: ["bridge-psych-1"],
+        evidence_chain_refs: [
+          { ref_id: "chain-psych-1", node_id: "node-psych-1" },
+        ],
+        relevance_ratio: 0.8,
+        bridge_quality: 0.9,
+      },
+    ],
+    bridge_nodes: [{ domain: "Psychology" }],
+  });
+
+  assert.equal(decision.decision, "requisition");
+  assert.equal(decision.evidence.decision_mode, "hypothesis_only");
+  assert.equal(decision.evidence.claim_cap, "hypothesis");
+  assert.ok(decision.evidence.missing_evidence_types.includes("source_span"));
+  assert.match(decision.evidence.gate_failure_reason, /hypothesis-only/i);
 });
 
 test("llm question generator prompt and parser support decomposition augmentation", () => {

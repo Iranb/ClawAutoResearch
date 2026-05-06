@@ -219,3 +219,29 @@ test("candidate tournament persists scorecards, diversity-aware selected ideas, 
   assert.ok(rejectionReasons.includes("duplicate_mechanism"));
   assert.ok(rejectionReasons.includes("missing_metric"));
 });
+
+test("confirmatory candidates without source spans remain blocked from experiment entry", () => {
+  const result = buildIdeaCatalystTournament({
+    topK: 1,
+    candidatePool: {
+      candidates: [
+        tournamentCandidate({
+          candidate_id: "cand-confirmatory-no-span",
+          source_spans: [],
+          bridge_path_ids: ["bridge-no-span"],
+          evidence_chain_refs: [{ ref_id: "chain-no-span" }],
+          claim_cap: "confirmatory",
+          evidence_tier: "strong",
+        }),
+      ],
+    },
+  });
+
+  const scorecard = result.scorecard.candidates.find(
+    (candidate) => candidate.candidate_id === "cand-confirmatory-no-span"
+  );
+  assert.ok(scorecard);
+  assert.ok(scorecard.hard_filters.rejection_reasons.includes("claim_unsafe"));
+  assert.equal(scorecard.hard_filters.eligible_for_experiment, false);
+  assert.equal(result.selectedIdeas.selected_count, 0);
+});
