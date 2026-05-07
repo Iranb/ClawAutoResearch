@@ -4716,6 +4716,155 @@ test("auto iterator completes the IDEA-CATALYST requisition rerun loop back into
   assert.equal(finalManifest.ideation_contract.selected_track_id, trackId);
 });
 
+test("auto iterator does not reopen a degradably satisfied IDEA-CATALYST requisition after graph reentry", async (t) => {
+  const projectRoot = await makeTempProject();
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  const { trackId } = await seedProjectReadyForCode(projectRoot);
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.current_stage = "idea";
+  manifest.current_micro_stage = "gatekeeping";
+  manifest.owner_agent = "researcher";
+  manifest.idea_catalyst = {
+    ...manifest.idea_catalyst,
+    status: "requisition",
+    micro_stage: "gatekeeping",
+    requisition_required: true,
+    pending_reason: "Cross-domain bridge evidence needs a bounded graph reentry pass.",
+  };
+  delete manifest.paper_ingestion;
+  await writeJson(manifestPath, manifest);
+
+  await writeJson(
+    path.join(projectRoot, "researcher", "idea-catalyst", "INVESTIGATION_REQUISITION.json"),
+    {
+      requisition_id: "req-catalyst-degraded",
+      target_domain: "Computer Science",
+      missing_domains: ["Numerical stability"],
+      challenge_clusters: ["finite-value handling"],
+      coverage_gap_questions: [
+        {
+          question_id: "q1",
+          question: "How should bounded EML branches handle numerical failure?",
+          coverage_status: "partial",
+          required_domain_evidence: ["Numerical stability"],
+        },
+      ],
+      search_queries: [
+        {
+          domain: "Numerical stability",
+          query: "bounded neural operator numerical stability finite value checks",
+        },
+      ],
+      minimum_sources_per_domain: 2,
+      minimum_bridge_nodes: 2,
+      retry_budget: 2,
+      required_stage_reentry: ["graph_build", "frontier_mapping", "idea"],
+    }
+  );
+
+  const first = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+  });
+  assert.equal(first.stageAfter, "graph_build");
+
+  const queuedManifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  const request = queuedManifest.paper_ingestion.queued_requests[0];
+  const now = "2026-04-03T00:00:00.000Z";
+  const reportPath = `${path.dirname(request.manifest_path)}/REQUISITION_SATISFACTION_REPORT.json`;
+  await writeJson(path.join(projectRoot, reportPath), {
+    schema_version: 1,
+    status: "warning",
+    decision: "degraded_satisfied_current_graph",
+    request_id: request.request_id,
+    trigger_kind: "idea_catalyst_requisition",
+    graph_presence_status: "ready",
+    selected_paper_count: 0,
+    candidate_paper_count: 0,
+    reason:
+      "Graph presence is ready and the bounded no-Discord requisition did not produce additional durable import evidence.",
+  });
+  queuedManifest.current_stage = "graph_build";
+  queuedManifest.current_micro_stage = "uploading";
+  queuedManifest.paper_ingestion.graph_presence_checked_at = now;
+  queuedManifest.paper_ingestion.graph_presence_status = "ready";
+  queuedManifest.paper_ingestion.graph_presence_expected_papers = 1;
+  queuedManifest.paper_ingestion.graph_presence_present_papers = 1;
+  queuedManifest.paper_ingestion.graph_presence_missing_papers = [];
+  queuedManifest.paper_ingestion.refresh_required = false;
+  queuedManifest.paper_ingestion.runtime_status = "ready";
+  queuedManifest.paper_ingestion.queued_requests =
+    queuedManifest.paper_ingestion.queued_requests.map((entry) => ({
+      ...entry,
+      status: "completed",
+      finished_at: now,
+      validation_status: "warning",
+      validation_summary:
+        "Current ready graph accepted with a durable warning report.",
+      validation_report_path: reportPath,
+      last_error: null,
+    }));
+  queuedManifest.paper_ingestion.completed_papers = [];
+  queuedManifest.paper_ingestion.import_task_ids = [];
+  queuedManifest.paper_ingestion.batch_items = [];
+  queuedManifest.paper_ingestion.active_batches = [];
+  await writeJson(manifestPath, queuedManifest);
+
+  const second = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+  });
+  assert.equal(second.stageAfter, "frontier_mapping");
+
+  const third = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+  });
+  assert.equal(third.stageAfter, "idea");
+
+  const fourth = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+  });
+
+  await activatePreparedHandoff(projectRoot, "orchestrator");
+
+  const finalManifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  assert.equal(fourth.stageBefore, "idea");
+  assert.equal(
+    fourth.stageAfter,
+    "plan",
+    `stageAfter=${fourth.stageAfter}; missing=${JSON.stringify(fourth.missingStageSignals)}; catalyst=${JSON.stringify(finalManifest.idea_catalyst)}`
+  );
+  assert.equal(
+    finalManifest.current_stage,
+    "plan",
+    `stageAfter=${fourth.stageAfter}; missing=${JSON.stringify(fourth.missingStageSignals)}; blocking=${finalManifest.blocking_reason ?? ""}; next=${finalManifest.next_action ?? ""}; catalyst=${JSON.stringify(finalManifest.idea_catalyst)}`
+  );
+  assert.equal(finalManifest.idea_catalyst.status, "ready");
+  assert.equal(finalManifest.idea_catalyst.requisition_required, false);
+  assert.equal(finalManifest.idea_catalyst.last_requisition_cycle, "req-catalyst-degraded");
+  assert.equal(finalManifest.ideation_contract.selected_track_id, trackId);
+  assert.equal(
+    finalManifest.paper_ingestion.queued_requests[0].validation_status,
+    "warning"
+  );
+  await fs.access(
+    path.join(projectRoot, "researcher", "idea-catalyst", "IDEA_FRAGMENTS.json")
+  );
+  await fs.access(
+    path.join(projectRoot, "researcher", "idea-catalyst", "RANKED_FRAGMENTS.json")
+  );
+});
+
 test("auto iterator reconciles non-actionable catalyst requisitions instead of regressing idea back to graph_build", async (t) => {
   const projectRoot = await makeTempProject();
   t.after(async () => {

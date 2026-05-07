@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import path from "node:path";
 import {
   readJsonIfExists,
@@ -88,6 +89,7 @@ type WorkflowPolicyLike = {
 
 const ACTIVE_SESSION_INSPECTION_GRACE_MS = 30 * 1000;
 const ACTIVE_RUN_FAILURE_PROBE_TIMEOUT_MS = 25;
+const RECOVERABLE_TRACKING_LOSS_EXTRA_REPLAY_ATTEMPTS = 1;
 const ACTIVE_PAPER_INGESTION_REQUEST_STATUSES = new Set([
   "launching",
   "running",
@@ -835,6 +837,105 @@ function getQueueRetryDelayMs(entry: WorkflowRuntimeQueueEntry, currentMs: numbe
     return 0;
   }
   return Math.max(0, nextRetryMs - currentMs);
+}
+
+function isRecoverableRuntimeTrackingLoss(value: unknown): boolean {
+  const direct = readString(value);
+  if (direct && isWorkflowRuntimeTrackingMissError(direct)) {
+    return true;
+  }
+  const text = direct ?? String(value ?? "");
+  return /workflow runtime session is missing from the underlying session store/i.test(
+    text
+  );
+}
+
+function getRecoverableTrackingLossReplayBudget(maxRepairAttempts: number): number {
+  return maxRepairAttempts + RECOVERABLE_TRACKING_LOSS_EXTRA_REPLAY_ATTEMPTS;
+}
+
+function hasRecoverableTrackingLossReplayBudget(params: {
+  entry: WorkflowRuntimeQueueEntry;
+  maxRepairAttempts: number;
+}): boolean {
+  if (!isRecoverableRuntimeTrackingLoss(params.entry.lastError)) {
+    return false;
+  }
+  return (
+    params.entry.attemptCount <
+    getRecoverableTrackingLossReplayBudget(params.maxRepairAttempts)
+  );
+}
+
+function isQueueRepairBudgetExhausted(params: {
+  entry: WorkflowRuntimeQueueEntry;
+  maxRepairAttempts: number;
+}): boolean {
+  const maxAttempts = hasRecoverableTrackingLossReplayBudget(params)
+    ? getRecoverableTrackingLossReplayBudget(params.maxRepairAttempts)
+    : params.maxRepairAttempts;
+  return params.entry.attemptCount >= maxAttempts;
+}
+
+function sanitizeSessionKeySegment(value: string | null | undefined): string {
+  const normalized = String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return normalized || "unknown";
+}
+
+function shortHash(value: string): string {
+  return createHash("sha1").update(value).digest("hex").slice(0, 12);
+}
+
+function buildRuntimeTrackingLossRepairSessionKey(
+  entry: WorkflowRuntimeQueueEntry
+): string {
+  const ownerAgent = sanitizeSessionKeySegment(toDispatchableRole(entry.ownerAgent));
+  const projectLabel = sanitizeSessionKeySegment(
+    readString(entry.projectId) ??
+      (entry.projectRoot ? path.basename(entry.projectRoot) : null) ??
+      "project"
+  ).slice(0, 48);
+  const kind = sanitizeSessionKeySegment(readString(entry.kind) ?? "workflow").slice(
+    0,
+    32
+  );
+  const repairAttempt = Math.max(1, entry.attemptCount + 1);
+  return [
+    "agent",
+    ownerAgent,
+    "runtime-repair",
+    projectLabel,
+    kind,
+    shortHash(entry.queueKey),
+    String(repairAttempt),
+  ].join(":");
+}
+
+function buildRuntimeTrackingLossRepairIdempotencyKey(params: {
+  entry: WorkflowRuntimeQueueEntry;
+  sessionKey: string;
+}): string {
+  return [
+    "workflow-runtime-tracking-loss-repair",
+    shortHash(params.entry.queueKey),
+    shortHash(params.sessionKey),
+    String(Math.max(1, params.entry.attemptCount + 1)),
+  ].join(":");
+}
+
+function withRuntimeTrackingLossRecoveryPrompt(
+  value: string | null | undefined
+): string {
+  return [
+    readString(value),
+    "Runtime recovery note: the previous workflow session disappeared from the underlying session store or local run registry. This replay uses a new session and must resume only from durable project state; do not assume prior in-memory context exists.",
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 function buildProviderCapacityCooldownUntil(): string {
@@ -1732,6 +1833,121 @@ async function normalizeProviderCapacityQueueFailures(params: {
   return cooledDownQueueKeys;
 }
 
+async function requeueRecoverableRuntimeTrackingLossFailures(params: {
+  projectRoot: string;
+  projectId: string | null;
+  maxRepairAttempts: number;
+}): Promise<string[]> {
+  const queueStore = await readWorkflowRuntimeQueueStore(params.projectRoot);
+  const recoverableEntries = queueStore.entries.filter(
+    (entry) =>
+      entry.status === "failed" &&
+      hasRecoverableTrackingLossReplayBudget({
+        entry,
+        maxRepairAttempts: params.maxRepairAttempts,
+      })
+  );
+  if (recoverableEntries.length === 0) {
+    return [];
+  }
+
+  const currentAt = nowIso();
+  const repairByQueueKey = new Map<
+    string,
+    {
+      sessionKey: string;
+      idempotencyKey: string;
+    }
+  >();
+  for (const entry of recoverableEntries) {
+    const sessionKey = buildRuntimeTrackingLossRepairSessionKey(entry);
+    repairByQueueKey.set(entry.queueKey, {
+      sessionKey,
+      idempotencyKey: buildRuntimeTrackingLossRepairIdempotencyKey({
+        entry,
+        sessionKey,
+      }),
+    });
+  }
+
+  await updateWorkflowRuntimeQueueStore({
+    projectRoot: params.projectRoot,
+    projectId: params.projectId,
+    updater: (store) =>
+      store.entries.map((entry) => {
+        const repair = repairByQueueKey.get(entry.queueKey);
+        if (!repair) {
+          return entry;
+        }
+        return {
+          ...entry,
+          status: "needs_repair",
+          preferredSessionKey: repair.sessionKey,
+          lastCheckedAt: currentAt,
+          nextRetryAt: null,
+          lastError: [
+            "Runtime maintenance will recreate the missing workflow session and replay this transition.",
+            entry.lastError,
+          ]
+            .filter(Boolean)
+            .join(" Previous error: "),
+          runPayload: entry.runPayload
+            ? {
+                ...entry.runPayload,
+                idempotencyKey: repair.idempotencyKey,
+                extraSystemPrompt: withRuntimeTrackingLossRecoveryPrompt(
+                  entry.runPayload.extraSystemPrompt
+                ),
+              }
+            : null,
+          dispatchPayload: entry.dispatchPayload
+            ? {
+                ...entry.dispatchPayload,
+                preferredSessionKeys: uniqueStrings([
+                  repair.sessionKey,
+                  ...entry.dispatchPayload.preferredSessionKeys,
+                ]),
+              }
+            : null,
+        };
+      }),
+  });
+
+  const requeuedQueueKeys = recoverableEntries.map((entry) => entry.queueKey);
+  await appendWorkflowRuntimeEvent({
+    projectRoot: params.projectRoot,
+    projectId: params.projectId,
+    kind: "runtime_tracking_loss_queue_requeued",
+    summary:
+      `Requeued ${requeuedQueueKeys.length} failed workflow transition(s) ` +
+      "after recoverable runtime session tracking loss.",
+    details: {
+      requeuedQueueKeys,
+      maxRepairAttempts: params.maxRepairAttempts,
+      trackingLossReplayBudget: getRecoverableTrackingLossReplayBudget(
+        params.maxRepairAttempts
+      ),
+    },
+  });
+  await appendWorkflowDiagnosticEvent({
+    projectRoot: params.projectRoot,
+    projectId: params.projectId,
+    component: "runtime_maintenance",
+    action: "tracking_loss_failed_queue_requeued",
+    status: "waiting",
+    summary:
+      "Runtime maintenance requeued failed transitions whose only terminal error was recoverable runtime tracking loss.",
+    details: {
+      requeuedQueueKeys,
+      maxRepairAttempts: params.maxRepairAttempts,
+      trackingLossReplayBudget: getRecoverableTrackingLossReplayBudget(
+        params.maxRepairAttempts
+      ),
+    },
+  });
+  return requeuedQueueKeys;
+}
+
 async function markLinkedSessionsFailed(params: {
   projectRoot: string;
   queueKey: string;
@@ -1948,9 +2164,11 @@ async function reconcileSupersededRepairSessions(params: {
 
 function buildPreferredSessionKeys(
   entry: WorkflowRuntimeQueueEntry,
-  dispatchPayload: WorkflowRuntimeQueueDispatchPayload
+  dispatchPayload: WorkflowRuntimeQueueDispatchPayload,
+  recoverySessionKey?: string | null
 ): string[] {
   return uniqueStrings([
+    recoverySessionKey,
     entry.preferredSessionKey,
     ...dispatchPayload.preferredSessionKeys,
   ]);
@@ -1971,8 +2189,13 @@ async function replayQueueEntry(params: {
   }
   const entry = params.entry;
   const dispatchPayload = entry.dispatchPayload;
+  const recoverySessionKey = isRecoverableRuntimeTrackingLoss(entry.lastError)
+    ? buildRuntimeTrackingLossRepairSessionKey(entry)
+    : null;
   const preferredSessionKeys =
-    dispatchPayload != null ? buildPreferredSessionKeys(entry, dispatchPayload) : [];
+    dispatchPayload != null
+      ? buildPreferredSessionKeys(entry, dispatchPayload, recoverySessionKey)
+      : [];
   const resumed = await resumeWorkflowTransition({
     projectRoot: String(entry.projectRoot),
     projectId: entry.projectId,
@@ -1981,6 +2204,7 @@ async function replayQueueEntry(params: {
       if (entry.entryType === "background_run") {
         const runPayload = entry.runPayload;
         const sessionKey =
+          recoverySessionKey ??
           readString(entry.preferredSessionKey) ??
           readString(entry.requesterSessionKey) ??
           `agent:${entry.ownerAgent}:main`;
@@ -1993,9 +2217,16 @@ async function replayQueueEntry(params: {
           lane: runPayload.lane,
           deliver: runPayload.deliver,
           idempotencyKey:
-            runPayload.idempotencyKey ??
-            `workflow-repair:${entry.queueKey}:${Date.now()}`,
-          extraSystemPrompt: runPayload.extraSystemPrompt ?? undefined,
+            recoverySessionKey
+              ? buildRuntimeTrackingLossRepairIdempotencyKey({
+                  entry,
+                  sessionKey: recoverySessionKey,
+                })
+              : (runPayload.idempotencyKey ??
+                `workflow-repair:${entry.queueKey}:${Date.now()}`),
+          extraSystemPrompt: recoverySessionKey
+            ? withRuntimeTrackingLossRecoveryPrompt(runPayload.extraSystemPrompt)
+            : runPayload.extraSystemPrompt ?? undefined,
           projectRoot: entry.projectRoot,
           projectId: entry.projectId,
           ownerAgent: entry.ownerAgent,
@@ -2411,6 +2642,12 @@ export async function runWorkflowRuntimeMaintenancePass(params: {
       projectRoot,
       projectId,
     });
+  const requeuedTrackingLossQueueKeys =
+    await requeueRecoverableRuntimeTrackingLossFailures({
+      projectRoot,
+      projectId,
+      maxRepairAttempts,
+    });
   const paperIngestionMaintenance =
     await markStalePaperIngestionRequestsNeedsRepair({
       projectRoot,
@@ -2638,7 +2875,10 @@ export async function runWorkflowRuntimeMaintenancePass(params: {
       continue;
     }
 
-    if (entry.attemptCount >= maxRepairAttempts && !entryCapacityFailure) {
+    if (
+      isQueueRepairBudgetExhausted({ entry, maxRepairAttempts }) &&
+      !entryCapacityFailure
+    ) {
       const error =
         entry.lastError ??
         `Workflow transition exhausted the repair budget (${maxRepairAttempts}).`;
@@ -2667,6 +2907,9 @@ export async function runWorkflowRuntimeMaintenancePass(params: {
           details: {
             attemptCount: entry.attemptCount,
             maxRepairAttempts,
+            trackingLossReplayBudget: getRecoverableTrackingLossReplayBudget(
+              maxRepairAttempts
+            ),
             source: entry.source,
             kind: entry.kind,
           },
@@ -2699,7 +2942,10 @@ export async function runWorkflowRuntimeMaintenancePass(params: {
     const refreshedStore = await readWorkflowRuntimeQueueStore(projectRoot);
     const refreshedEntry =
       refreshedStore.entries.find((candidate) => candidate.queueKey === entry.queueKey) ?? entry;
-    const exhausted = refreshedEntry.attemptCount >= maxRepairAttempts;
+    const exhausted = isQueueRepairBudgetExhausted({
+      entry: refreshedEntry,
+      maxRepairAttempts,
+    });
     const error =
       readString(replay.error) ??
       refreshedEntry.lastError ??
@@ -2743,6 +2989,9 @@ export async function runWorkflowRuntimeMaintenancePass(params: {
           details: {
             attemptCount: refreshedEntry.attemptCount,
             maxRepairAttempts,
+            trackingLossReplayBudget: getRecoverableTrackingLossReplayBudget(
+              maxRepairAttempts
+            ),
             source: refreshedEntry.source,
             kind: refreshedEntry.kind,
           },
@@ -2911,6 +3160,7 @@ export async function runWorkflowRuntimeMaintenancePass(params: {
       replayedQueueKeys,
       exhaustedQueueKeys,
       cooldownQueueKeys,
+      requeuedTrackingLossQueueKeys,
       terminalPaperRetiredQueueKeys,
       exhaustedSessionKeys,
       handoffMaintenance,
@@ -2946,6 +3196,7 @@ export async function runWorkflowRuntimeMaintenancePass(params: {
       replayedQueueKeys,
       exhaustedQueueKeys,
       cooldownQueueKeys,
+      requeuedTrackingLossQueueKeys,
       terminalPaperRetiredQueueKeys,
       exhaustedSessionKeys,
       repairedSessionKeys,

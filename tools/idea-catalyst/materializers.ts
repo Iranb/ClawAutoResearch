@@ -520,6 +520,155 @@ function buildSupersededProfileRequisition(params: {
   };
 }
 
+function sanitizeRequisitionIdFragment(value: string | null | undefined): string {
+  const normalized = String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "");
+  return normalized || "unknown";
+}
+
+function buildIdeaCatalystRequisitionRequestId(
+  requisitionId: string | null | undefined
+): string | null {
+  if (!requisitionId) {
+    return null;
+  }
+  return `idea-catalyst-${sanitizeRequisitionIdFragment(requisitionId)}`;
+}
+
+function isTerminalIdeaCatalystRequisitionSatisfactionStatus(value: unknown): boolean {
+  const status = String(value ?? "").trim().toLowerCase();
+  return status === "valid" || status === "warning";
+}
+
+async function readIdeaCatalystRequisitionSatisfaction(params: {
+  projectRoot: string;
+  manifest: Record<string, unknown>;
+  requisitionId: string | null;
+  existingInvestigationRequisition: Record<string, unknown> | null;
+}): Promise<{
+  satisfied: boolean;
+  requestId: string | null;
+  validationReportPath: string | null;
+  validationStatus: string | null;
+  validationSummary: string | null;
+}> {
+  const existingStatus = pickString(params.existingInvestigationRequisition ?? {}, [
+    "status",
+    "requisition_status",
+    "requisitionStatus",
+  ])?.trim().toLowerCase();
+  const existingReportPath = pickString(params.existingInvestigationRequisition ?? {}, [
+    "validation_report_path",
+    "validationReportPath",
+    "satisfaction_report_path",
+    "satisfactionReportPath",
+  ]);
+  if (
+    ["satisfied", "completed", "not_required", "not-required"].includes(
+      existingStatus ?? ""
+    )
+  ) {
+    return {
+      satisfied: true,
+      requestId: buildIdeaCatalystRequisitionRequestId(params.requisitionId),
+      validationReportPath: existingReportPath ?? null,
+      validationStatus: existingStatus ?? null,
+      validationSummary:
+        pickString(params.existingInvestigationRequisition ?? {}, [
+          "validation_summary",
+          "validationSummary",
+          "satisfaction_summary",
+          "satisfactionSummary",
+        ]) ?? null,
+    };
+  }
+
+  const expectedRequestId = buildIdeaCatalystRequisitionRequestId(params.requisitionId);
+  const expectedFragment = params.requisitionId
+    ? sanitizeRequisitionIdFragment(params.requisitionId)
+    : null;
+  const paperIngestion = normalizePaperIngestionState(params.manifest.paper_ingestion);
+  for (const request of paperIngestion.queuedRequests) {
+    if (request.triggerKind !== "idea_catalyst_requisition") {
+      continue;
+    }
+    if (String(request.status ?? "").trim().toLowerCase() !== "completed") {
+      continue;
+    }
+    if (!isTerminalIdeaCatalystRequisitionSatisfactionStatus(request.validationStatus)) {
+      continue;
+    }
+    const requestMatches =
+      !expectedRequestId ||
+      request.requestId === expectedRequestId ||
+      (expectedFragment ? request.requestId.includes(expectedFragment) : false);
+    if (!requestMatches) {
+      continue;
+    }
+    if (!request.validationReportPath) {
+      continue;
+    }
+    const reportPath = resolveProjectArtifactPath(
+      params.projectRoot,
+      request.validationReportPath
+    );
+    const report = await readJsonIfExists<Record<string, unknown>>(reportPath ?? "");
+    const reportStatus = pickString(report ?? {}, ["status"])?.trim().toLowerCase();
+    const reportDecision = pickString(report ?? {}, ["decision"])?.trim().toLowerCase();
+    const reportAccepted =
+      reportStatus === "valid" ||
+      reportStatus === "warning" ||
+      reportDecision === "degraded_satisfied_current_graph";
+    if (!reportAccepted) {
+      continue;
+    }
+    return {
+      satisfied: true,
+      requestId: request.requestId,
+      validationReportPath: request.validationReportPath,
+      validationStatus: request.validationStatus ?? null,
+      validationSummary: request.validationSummary ?? null,
+    };
+  }
+
+  return {
+    satisfied: false,
+    requestId: expectedRequestId,
+    validationReportPath: null,
+    validationStatus: null,
+    validationSummary: null,
+  };
+}
+
+function buildDegradedSatisfiedRequisition(params: {
+  requisition: Record<string, unknown>;
+  trigger: string | null | undefined;
+  requestId: string | null;
+  validationReportPath: string | null;
+  validationStatus: string | null;
+  validationSummary: string | null;
+  materializedAt: string;
+}) {
+  return {
+    ...params.requisition,
+    status: "completed",
+    actionable: false,
+    satisfaction_decision: "degraded_satisfied_current_graph",
+    request_id: params.requestId,
+    validation_status: params.validationStatus,
+    validation_summary:
+      params.validationSummary ??
+      "IDEA-CATALYST requisition was degradably satisfied by the current ready graph.",
+    validation_report_path: params.validationReportPath,
+    trigger: params.trigger ?? "idea_catalyst",
+    completed_at: params.materializedAt,
+    updated_at: params.materializedAt,
+  };
+}
+
 function markdownBulletsToList(rawText: unknown): string[] {
   return String(rawText || "")
     .split(/\r?\n/)
@@ -1258,8 +1407,25 @@ export async function materializeIdeaCatalystState(params: {
     unknown
   >;
   const requisitionActionable = requisitionRecord.actionable !== false;
+  const requisitionId = pickString(requisitionRecord, [
+    "requisition_id",
+    "requisitionId",
+  ]);
+  const requisitionSatisfaction = await readIdeaCatalystRequisitionSatisfaction({
+    projectRoot,
+    manifest,
+    requisitionId: requisitionId ?? current.lastRequisitionCycle,
+    existingInvestigationRequisition,
+  });
+  const requisitionSatisfiedByCurrentGraph =
+    gateDecision.decision !== "brainstorm" &&
+    requisitionActionable &&
+    requisitionSatisfaction.satisfied;
+  const effectiveGateDecision = requisitionSatisfiedByCurrentGraph
+    ? "brainstorm"
+    : gateDecision.decision;
   const shouldIntegrateFragments =
-    gateDecision.decision === "brainstorm" && selectedIdeaCandidates.length > 0;
+    effectiveGateDecision === "brainstorm" && selectedIdeaCandidates.length > 0;
   const ideaFragmentsPacket = shouldIntegrateFragments
     ? buildIdeaCatalystIdeaFragments({
         candidates: selectedIdeaCandidates,
@@ -1283,29 +1449,26 @@ export async function materializeIdeaCatalystState(params: {
     ...serializeIdeaCatalystState(current),
     ...patch,
     status:
-      gateDecision.decision === "brainstorm"
+      effectiveGateDecision === "brainstorm"
         ? "ready"
         : requisitionActionable
           ? "requisition"
           : "pending",
     mode: "graph-first",
     micro_stage:
-      gateDecision.decision === "brainstorm" ? "judging" : "gatekeeping",
+      effectiveGateDecision === "brainstorm" ? "judging" : "gatekeeping",
     target_domain: targetDomain,
     source_domains: sourceDomains,
     bridge_count: bridgeNodeRecords.length,
     top_fragment_id: rankedFragmentsPacket?.ranking?.[0]?.fragment_id ?? null,
     requisition_required:
-      gateDecision.decision !== "brainstorm" && requisitionActionable,
+      effectiveGateDecision !== "brainstorm" && requisitionActionable,
     last_requisition_cycle:
-      gateDecision.decision === "brainstorm" || !requisitionActionable
+      effectiveGateDecision === "brainstorm" || !requisitionActionable
         ? current.lastRequisitionCycle
-        : pickString(requisitionRecord, [
-            "requisition_id",
-            "requisitionId",
-          ]),
+        : requisitionId,
     requisition_retry_budget:
-      gateDecision.decision === "brainstorm" || !requisitionActionable
+      effectiveGateDecision === "brainstorm" || !requisitionActionable
         ? current.requisitionRetryBudget
         : pickNumber(requisitionRecord, [
             "retry_budget",
@@ -1313,7 +1476,9 @@ export async function materializeIdeaCatalystState(params: {
           ]),
     requisition_saturated: false,
     pending_reason:
-      gateDecision.decision === "brainstorm"
+      requisitionSatisfiedByCurrentGraph
+        ? "IDEA-CATALYST requisition was satisfied with a durable warning against the current ready graph; downstream claims remain capped by the recorded evidence tier."
+        : effectiveGateDecision === "brainstorm"
         ? null
         : pickString(requisitionRecord, [
             "non_actionable_reason",
@@ -1350,7 +1515,7 @@ export async function materializeIdeaCatalystState(params: {
   });
 
   const shouldRetireProfileRequisition =
-    gateDecision.decision === "brainstorm" &&
+    effectiveGateDecision === "brainstorm" &&
     Boolean(recoveryProfile) &&
     (hasFixMatchGcdDrift(existingInvestigationRequisition) ||
       (useProfileRecovery &&
@@ -1369,8 +1534,18 @@ export async function materializeIdeaCatalystState(params: {
     [next.rankedFragmentsPath, rankedFragmentsPacket],
     [
       next.investigationRequisitionPath,
-      gateDecision.decision === "brainstorm"
-        ? shouldRetireProfileRequisition && recoveryProfile
+      effectiveGateDecision === "brainstorm"
+        ? requisitionSatisfiedByCurrentGraph
+          ? buildDegradedSatisfiedRequisition({
+              requisition: requisitionRecord,
+              trigger: params.trigger,
+              requestId: requisitionSatisfaction.requestId,
+              validationReportPath: requisitionSatisfaction.validationReportPath,
+              validationStatus: requisitionSatisfaction.validationStatus,
+              validationSummary: requisitionSatisfaction.validationSummary,
+              materializedAt,
+            })
+          : shouldRetireProfileRequisition && recoveryProfile
           ? buildSupersededProfileRequisition({
               profile: recoveryProfile,
               targetDomain,
