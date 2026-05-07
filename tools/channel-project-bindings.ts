@@ -490,6 +490,18 @@ function normalizeRecord(record: Partial<ChannelProjectBindingRecord>): ChannelP
   if (!channelKey || !projectRoot) {
     return null;
   }
+  if (
+    !shouldUseChannelProjectBindingForWorkflow({
+      messageChannel: record.messageChannel,
+      channelKey,
+      sessionKey:
+        asString(record.sessionKeySample) ??
+        asString(record.workflowSessionKey) ??
+        asString(record.workflowBroadcastSessionKey),
+    })
+  ) {
+    return null;
+  }
   return {
     channelKey,
     projectRoot: path.resolve(expandHome(projectRoot)),
@@ -1130,6 +1142,20 @@ export function getChannelProjectBinding(params: {
   if (!policy.enableChannelProjectBindings || !lookup.primaryKey) {
     return {
       enabled: policy.enableChannelProjectBindings,
+      storePath,
+      channelKey: lookup.primaryKey,
+      binding: null,
+    };
+  }
+  if (
+    !shouldUseChannelProjectBindingForWorkflow({
+      messageChannel: context.messageChannel,
+      channelKey: lookup.primaryKey,
+      sessionKey: context.sessionKey,
+    })
+  ) {
+    return {
+      enabled: true,
       storePath,
       channelKey: lookup.primaryKey,
       binding: null,

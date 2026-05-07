@@ -3033,6 +3033,17 @@ test("queued auto mitigation dispatch replay is suppressed without a project bin
     current_stage: "graph_build",
     owner_agent: "researcher",
   });
+  await bindChannelProjectForWorkflow({
+    policy: {
+      enableChannelProjectBindings: true,
+      projectsRoot,
+    },
+    workspaceDir: workspaceRoot,
+    sessionKey: "agent:researcher:main",
+    projectRoot,
+    projectId: "missing-binding-project",
+    boundByAgent: "researcher",
+  });
 
   await enqueueQueuedBackgroundWorkflowRun({
     source: "workflow_auto_mitigation",

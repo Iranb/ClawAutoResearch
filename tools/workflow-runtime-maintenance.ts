@@ -47,6 +47,7 @@ import {
   evaluateChannelProjectBindingGate,
   listChannelProjectBindings,
 } from "./channel-project-bindings";
+import { isWeakWorkflowBindingChannelKey } from "./workflow-commands/parsers.js";
 import { appendWorkflowDiagnosticEvent } from "./workflow-diagnostics.js";
 import { writePapernexusProgressFromManifest } from "./papernexus-progress";
 import {
@@ -63,6 +64,7 @@ import { appendWorkflowLocalOperatorRelay } from "./workflow-local-operator-rela
 import { isWorkflowRuntimeTrackingMissError } from "./workflow-background-run-reconcile.js";
 import { inspectRecentSessionProviderCapacity } from "./workflow-session-provider-capacity.js";
 import { detectWorkflowPaperArtifactTerminal } from "./workflow-paper-terminal";
+import { shouldUseChannelProjectBindingForWorkflow } from "./workflow-message-channels.js";
 import type {
   WorkflowExecutionRuntime,
   WorkflowExecutionSessionInspection,
@@ -265,7 +267,17 @@ function hasDurableProjectBindingForWorkflowQueue(params: {
     },
   });
   return bindings.bindings.some(
-    (entry) => path.resolve(entry.projectRoot) === path.resolve(projectRoot)
+    (entry) =>
+      path.resolve(entry.projectRoot) === path.resolve(projectRoot) &&
+      !isWeakWorkflowBindingChannelKey(entry.channelKey) &&
+      shouldUseChannelProjectBindingForWorkflow({
+        messageChannel: entry.messageChannel,
+        channelKey: entry.channelKey,
+        sessionKey:
+          entry.sessionKeySample ??
+          entry.workflowSessionKey ??
+          entry.workflowBroadcastSessionKey,
+      })
   );
 }
 

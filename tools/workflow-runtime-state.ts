@@ -842,7 +842,7 @@ function normalizeBroadcastEntry(value: unknown): WorkflowRuntimeBroadcastEntry 
   };
 }
 
-function shouldCoerceProjectScopedEntry(
+function belongsToProjectScopedStore(
   entryProjectRoot: string | null | undefined,
   normalizedProjectRoot: string
 ): boolean {
@@ -856,29 +856,30 @@ function normalizeQueueEntriesForProject(
   projectId: string | null
 ): WorkflowRuntimeQueueEntry[] {
   const normalizedProjectRoot = normalizeProjectRoot(projectRoot);
-  return entries.map((entry) => {
-    if (!shouldCoerceProjectScopedEntry(entry.projectRoot, normalizedProjectRoot)) {
-      return entry;
-    }
-    const dispatchPayload =
-      entry.dispatchPayload &&
-      shouldCoerceProjectScopedEntry(
-        entry.dispatchPayload.projectRoot,
-        normalizedProjectRoot
-      )
+  return entries
+    .filter(
+      (entry) =>
+        belongsToProjectScopedStore(entry.projectRoot, normalizedProjectRoot) &&
+        belongsToProjectScopedStore(
+          entry.dispatchPayload?.projectRoot,
+          normalizedProjectRoot
+        )
+    )
+    .map((entry) => {
+      const dispatchPayload = entry.dispatchPayload
         ? {
             ...entry.dispatchPayload,
             projectRoot: normalizedProjectRoot,
             projectId,
           }
         : entry.dispatchPayload;
-    return {
-      ...entry,
-      projectId,
-      projectRoot: normalizedProjectRoot,
-      dispatchPayload,
-    };
-  });
+      return {
+        ...entry,
+        projectId,
+        projectRoot: normalizedProjectRoot,
+        dispatchPayload,
+      };
+    });
 }
 
 function normalizeSessionEntriesForProject(
@@ -887,15 +888,13 @@ function normalizeSessionEntriesForProject(
   projectId: string | null
 ): WorkflowRuntimeSessionEntry[] {
   const normalizedProjectRoot = normalizeProjectRoot(projectRoot);
-  return entries.map((entry) =>
-    shouldCoerceProjectScopedEntry(entry.projectRoot, normalizedProjectRoot)
-      ? {
-          ...entry,
-          projectId,
-          projectRoot: normalizedProjectRoot,
-        }
-      : entry
-  );
+  return entries
+    .filter((entry) => belongsToProjectScopedStore(entry.projectRoot, normalizedProjectRoot))
+    .map((entry) => ({
+      ...entry,
+      projectId,
+      projectRoot: normalizedProjectRoot,
+    }));
 }
 
 function normalizeAnnounceEntriesForProject(
@@ -904,15 +903,13 @@ function normalizeAnnounceEntriesForProject(
   projectId: string | null
 ): WorkflowRuntimeAnnounceEntry[] {
   const normalizedProjectRoot = normalizeProjectRoot(projectRoot);
-  return entries.map((entry) =>
-    shouldCoerceProjectScopedEntry(entry.projectRoot, normalizedProjectRoot)
-      ? {
-          ...entry,
-          projectId,
-          projectRoot: normalizedProjectRoot,
-        }
-      : entry
-  );
+  return entries
+    .filter((entry) => belongsToProjectScopedStore(entry.projectRoot, normalizedProjectRoot))
+    .map((entry) => ({
+      ...entry,
+      projectId,
+      projectRoot: normalizedProjectRoot,
+    }));
 }
 
 function normalizeBroadcastEntriesForProject(
@@ -921,15 +918,13 @@ function normalizeBroadcastEntriesForProject(
   projectId: string | null
 ): WorkflowRuntimeBroadcastEntry[] {
   const normalizedProjectRoot = normalizeProjectRoot(projectRoot);
-  return entries.map((entry) =>
-    shouldCoerceProjectScopedEntry(entry.projectRoot, normalizedProjectRoot)
-      ? {
-          ...entry,
-          projectId,
-          projectRoot: normalizedProjectRoot,
-        }
-      : entry
-  );
+  return entries
+    .filter((entry) => belongsToProjectScopedStore(entry.projectRoot, normalizedProjectRoot))
+    .map((entry) => ({
+      ...entry,
+      projectId,
+      projectRoot: normalizedProjectRoot,
+    }));
 }
 
 function normalizeQueueStore(

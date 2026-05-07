@@ -2087,6 +2087,17 @@ test("runWorkflowRuntimeMaintenancePass suppresses auto dispatch replay when pro
   });
 
   await makeProject(projectRoot, "missing-binding-maintenance");
+  await bindChannelProjectForWorkflow({
+    policy: {
+      enableChannelProjectBindings: true,
+      projectsRoot,
+    },
+    workspaceDir: workspaceRoot,
+    sessionKey: "agent:researcher:main",
+    projectRoot,
+    projectId: "missing-binding-maintenance",
+    boundByAgent: "researcher",
+  });
   await migrateWorkflowRuntimeState({
     projectRoot,
     projectId: "missing-binding-maintenance",
