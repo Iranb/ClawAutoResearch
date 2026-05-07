@@ -20,6 +20,7 @@ import {
 } from "../tools/workflow-subagent-sessions.ts";
 import {
   ensureProjectsBindingIndex,
+  listChannelProjectBindings,
   readProjectBindingAuditTail,
   readProjectsBindingAuditTail,
   getProjectBindingAuditPath,
@@ -172,6 +173,104 @@ test("low-level channel binding writer rejects discord project bindings", async 
     messageChannel: "discord",
   });
   assert.equal(lookup.binding, null);
+});
+
+test("legacy discord channel bindings stay notification-only during lookup and index rebuild", async (t) => {
+  const workspaceRoot = await makeTempWorkspace();
+  const projectsRoot = path.join(workspaceRoot, "projects");
+  const projectRoot = await makeTempProject(workspaceRoot, "legacy-discord-track");
+  const storePath = path.join(
+    projectRoot,
+    ".openclaw-research",
+    "channel-project-bindings.json"
+  );
+  const indexPath = getProjectsBindingIndexPath(projectsRoot);
+  const channelKey = "discord:channel:1481502141293002946";
+  const sessionKey = "agent:researcher:discord:channel:1481502141293002946";
+  const legacyBinding = {
+    channelKey,
+    projectRoot,
+    projectId: "legacy-discord-track",
+    messageChannel: "discord",
+    sessionKeySample: sessionKey,
+    sessionId: null,
+    boundAt: "2026-04-20T00:00:00.000Z",
+    updatedAt: "2026-04-20T00:00:00.000Z",
+    boundByAgent: "researcher",
+  };
+
+  t.after(async () => {
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  });
+
+  await fs.mkdir(path.dirname(storePath), { recursive: true });
+  await fs.writeFile(
+    storePath,
+    `${JSON.stringify(
+      {
+        schemaVersion: 1,
+        updatedAt: "2026-04-20T00:00:00.000Z",
+        bindings: [legacyBinding],
+      },
+      null,
+      2
+    )}\n`,
+    "utf8"
+  );
+  await fs.mkdir(path.dirname(indexPath), { recursive: true });
+  await fs.writeFile(
+    indexPath,
+    `${JSON.stringify(
+      {
+        schemaVersion: 1,
+        updatedAt: "2026-04-20T00:00:01.000Z",
+        bindings: [
+          {
+            ...legacyBinding,
+            storePath,
+          },
+        ],
+      },
+      null,
+      2
+    )}\n`,
+    "utf8"
+  );
+
+  const lookup = getChannelProjectBindingForWorkflow({
+    policy: {
+      enableChannelProjectBindings: true,
+      projectsRoot,
+    },
+    workspaceDir: workspaceRoot,
+    sessionKey,
+    messageChannel: "discord",
+    channelKey,
+  });
+  assert.equal(lookup.binding, null);
+
+  const listing = listChannelProjectBindings({
+    policy: {
+      enableChannelProjectBindings: true,
+      projectsRoot,
+    },
+    context: {
+      workspaceDir: workspaceRoot,
+    },
+  });
+  assert.deepEqual(
+    listing.bindings.map((entry) => entry.channelKey),
+    []
+  );
+
+  const rebuiltIndex = await ensureProjectsBindingIndex({
+    projectsRoot,
+    maxAgeMs: 0,
+  });
+  assert.deepEqual(
+    rebuiltIndex.bindings.map((entry) => entry.channelKey),
+    []
+  );
 });
 
 test("non-workflow agents do not inherit project workflow bindings from the shared channel", async (t) => {

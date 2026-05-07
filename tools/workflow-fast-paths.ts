@@ -49,7 +49,10 @@ import {
   looksLikePapernexusHeavyCommand,
   normalizeWorkflowSubagentParentSessionKey,
 } from "./workflow-subagent-sessions";
-import { normalizeWorkflowBindingChannelKey } from "./workflow-commands/parsers.js";
+import {
+  isWeakWorkflowBindingChannelKey,
+  normalizeWorkflowBindingChannelKey,
+} from "./workflow-commands/parsers.js";
 import {
   appendWorkflowRuntimeEvent,
   listWorkflowRuntimeProjectRoots,
@@ -678,7 +681,17 @@ function hasDurableProjectBindingForWorkflowQueue(params: {
     workspaceDir: projectRoot,
   });
   return bindings.bindings.some(
-    (entry) => path.resolve(entry.projectRoot) === path.resolve(projectRoot)
+    (entry) =>
+      path.resolve(entry.projectRoot) === path.resolve(projectRoot) &&
+      !isWeakWorkflowBindingChannelKey(entry.channelKey) &&
+      shouldUseChannelProjectBindingForWorkflow({
+        messageChannel: entry.messageChannel,
+        channelKey: entry.channelKey,
+        sessionKey:
+          entry.sessionKeySample ??
+          entry.workflowSessionKey ??
+          entry.workflowBroadcastSessionKey,
+      })
   );
 }
 
