@@ -198,6 +198,60 @@ test("graph_build stage accepts local source fallback after terminal PaperNexus 
   assert.deepEqual(missing, []);
 });
 
+test("paper ingestion decision ignores stale graph-build PaperNexus batches once graph presence is ready", () => {
+  const state = normalizePaperIngestionState({
+    runtime_status: "waiting_import",
+    graph_presence_status: "ready",
+    queued_requests: [
+      {
+        request_id: "graph-build-source-catchup-demo",
+        request_kind: "upload_manifest",
+        status: "queued",
+        wrapper: "pn_batch_import.py",
+        manifest_path:
+          "researcher/paper-staging/queued-imports/graph-build-source-catchup-demo/batch-import.json",
+        created_at: "2026-05-06T00:00:00.000Z",
+        updated_at: "2026-05-06T00:00:00.000Z",
+        last_run_id: "direct-papernexus-batch-graph-build-source-catchup-demo",
+        last_session_key: "local:papernexus:direct-batch-import",
+        trigger_kind: "graph_build_source_catchup",
+        attempt_count: 1,
+      },
+    ],
+    active_batches: [
+      {
+        manifest_path:
+          "researcher/paper-staging/queued-imports/graph-build-source-catchup-demo/batch-import.json",
+        status: "running",
+        total: 6,
+      },
+    ],
+    paper_operations: [
+      {
+        canonical_id: "arxiv:2603.21852",
+        import_task_id: "imp:eml",
+        phase: "import",
+        status: "running",
+        started_at: "2026-05-06T00:00:00.000Z",
+        finished_at: "2026-05-06T00:05:00.000Z",
+      },
+    ],
+  });
+
+  const decision = derivePaperIngestionWorkflowDecision({
+    state,
+    graphPresenceStatus: "ready",
+  });
+
+  assert.equal(decision.action, "continue");
+  assert.equal(decision.blocking, false);
+  assert.match(decision.reason ?? "", /graph presence is ready/i);
+  assert.equal(decision.activeBatchCount, 1);
+  assert.equal(decision.queuedRequestCount, 1);
+  assert.equal(decision.dormantQueuedRequestCount, 0);
+  assert.equal(decision.activeOperationCount, 0);
+});
+
 test("graph_build prerequisite stays satisfied downstream after local source fallback", async () => {
   const manifest = {
     project_id: "downstream-local-source-fallback-demo",

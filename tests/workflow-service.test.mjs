@@ -235,6 +235,21 @@ async function recordDiscordNotificationTarget(
   });
 }
 
+function makeWorkflowProjectBinding(projectRoot, projectId = path.basename(projectRoot)) {
+  return {
+    channelKey: `local:conversation:${projectId}`,
+    projectRoot,
+    projectId,
+    messageChannel: "local",
+    sessionKeySample: `agent:researcher:local:conversation:${projectId}`,
+    sessionId: null,
+    boundAt: "2026-03-25T00:00:00.000Z",
+    updatedAt: "2026-03-25T00:05:00.000Z",
+    boundByAgent: "researcher",
+    notes: null,
+  };
+}
+
 async function seedProjectPapers(projectRoot, extraManifest = {}) {
   await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
     project_id: path.basename(projectRoot),
@@ -948,6 +963,66 @@ test("maybeLaunchAutoStageForProject dispatches the current stage owner in auto 
   assert.equal(launch.dispatchStrategy, "sessions_spawn");
   assert.equal(runs.length, 1);
   assert.match(runs[0].message, /Immediate command: \/implement-experiment/);
+});
+
+test("maybeLaunchAutoStageForProject blocks auto dispatch when project binding is missing", async (t) => {
+  const projectsRoot = await makeProjectsRoot();
+  const projectRoot = path.join(projectsRoot, "alpha");
+  const runs = [];
+  t.after(async () => {
+    await fs.rm(projectsRoot, { recursive: true, force: true });
+  });
+  await fs.mkdir(projectRoot, { recursive: true });
+
+  const launch = await maybeLaunchAutoStageForProject({
+    workflowRuntime: {
+      async run(params) {
+        runs.push(params);
+        return { runId: `stage-run-${runs.length}` };
+      },
+    },
+    workflowPolicy: {
+      autoMode: "conservative",
+      autoGate: defaultAutoGateConfig(),
+      enableChannelProjectBindings: true,
+      projectsRoot,
+      heartbeatBackgroundChecks: true,
+      agentContactCooldownSeconds: 300,
+      enableWorkflowMailbox: true,
+    },
+    projectRoot,
+    projectId: "alpha",
+    autoIteratorResult: {
+      gateBlocking: false,
+      stageAfter: "code",
+      recommendedActions: [
+        {
+          kind: "drive_stage",
+          owner: "coder",
+          stage: "code",
+          summary: "Implement the approved experiments as runnable bundles.",
+          command: "/implement-experiment",
+          mailboxMessageId: null,
+          cooldownRemainingSeconds: 0,
+          blocking: false,
+        },
+      ],
+    },
+    launchedStageKeys: new Map(),
+    deps: {
+      listChannelProjectBindingsForWorkflow() {
+        return {
+          enabled: true,
+          storePath: projectsRoot,
+          bindings: [],
+        };
+      },
+    },
+  });
+
+  assert.equal(launch.launched, false);
+  assert.equal(launch.reason, "binding_missing");
+  assert.equal(runs.length, 0);
 });
 
 test("maybeLaunchAutoStageForProject claims the next matching task for the launched owner session", async (t) => {
@@ -2265,6 +2340,62 @@ test("maybeLaunchAutoStageForProject waits for risk discussion before generic st
   assert.equal(runs.length, 0);
 });
 
+test("maybeAdvanceAutoModeDiscussionForProject blocks runtime discussion when project binding is missing", async (t) => {
+  const projectRoot = await makeProject(await makeProjectsRoot(), "alpha", "write");
+  const runtimeCalls = [];
+
+  t.after(async () => {
+    await fs.rm(path.dirname(projectRoot), { recursive: true, force: true });
+  });
+
+  const result = await maybeAdvanceAutoModeDiscussionForProject({
+    workflowRuntime: {
+      async run(params) {
+        runtimeCalls.push(params);
+        return { runId: `discussion-run-${runtimeCalls.length}` };
+      },
+    },
+    workflowPolicy: {
+      autoMode: "aggressive",
+      autoGate: {
+        ...defaultAutoGateConfig(),
+        enabled: true,
+      },
+      enableChannelProjectBindings: true,
+      projectsRoot: path.dirname(projectRoot),
+      heartbeatBackgroundChecks: true,
+      agentContactCooldownSeconds: 300,
+      enableWorkflowMailbox: true,
+    },
+    projectRoot,
+    projectId: "alpha",
+    autoIteratorResult: {
+      configuredAutoMode: "aggressive",
+      autoModeRiskLevel: "severe",
+      autoModeRiskFingerprint: "risk-fingerprint-1",
+      autoModeReasons: ["Citation integrity reports hallucinated citations."],
+      stageAfter: "write",
+      ownerAfter: "academic_writer",
+      nextAction: "/write-paper",
+      blockingReason: "Citation verification is not complete.",
+      missingStageSignals: ["citation_integrity.verification_status must be verified"],
+    },
+    deps: {
+      listChannelProjectBindingsForWorkflow() {
+        return {
+          enabled: true,
+          storePath: path.dirname(projectRoot),
+          bindings: [],
+        };
+      },
+    },
+  });
+
+  assert.equal(result.launched, false);
+  assert.equal(result.reason, "binding_missing");
+  assert.equal(runtimeCalls.length, 0);
+});
+
 test("maybeAdvanceAutoModeDiscussionForProject creates and resolves a risk discussion round", async (t) => {
   const projectRoot = await makeProject(await makeProjectsRoot(), "alpha", "write");
   const runtimeCalls = [];
@@ -2287,6 +2418,7 @@ test("maybeAdvanceAutoModeDiscussionForProject creates and resolves a risk discu
       status: "fresh",
     },
   });
+  await recordDiscordNotificationTarget(projectRoot, "alpha");
 
   const start = await maybeAdvanceAutoModeDiscussionForProject({
     workflowRuntime: {
@@ -2325,7 +2457,7 @@ test("maybeAdvanceAutoModeDiscussionForProject creates and resolves a risk discu
         return {
           enabled: true,
           storePath: path.dirname(projectRoot),
-          bindings: [],
+          bindings: [makeWorkflowProjectBinding(projectRoot, "alpha")],
         };
       },
     },
@@ -2402,7 +2534,7 @@ test("maybeAdvanceAutoModeDiscussionForProject creates and resolves a risk discu
         return {
           enabled: true,
           storePath: path.dirname(projectRoot),
-          bindings: [],
+          bindings: [makeWorkflowProjectBinding(projectRoot, "alpha")],
         };
       },
     },
@@ -2441,6 +2573,7 @@ test("maybeAdvanceAutoModeDiscussionForProject prefers announce payloads over tr
       status: "fresh",
     },
   });
+  await recordDiscordNotificationTarget(projectRoot, "alpha");
 
   const policy = {
     autoMode: "aggressive",
@@ -2459,7 +2592,7 @@ test("maybeAdvanceAutoModeDiscussionForProject prefers announce payloads over tr
       return {
         enabled: true,
         storePath: path.dirname(projectRoot),
-        bindings: [],
+        bindings: [makeWorkflowProjectBinding(projectRoot, "alpha")],
       };
     },
   };
@@ -2663,6 +2796,7 @@ test("maybeAdvanceAutoModeDiscussionForProject replaces stale runtime discussion
       status: "fresh",
     },
   });
+  await recordDiscordNotificationTarget(projectRoot, "alpha");
 
   const policy = {
     autoMode: "aggressive",
@@ -2681,7 +2815,7 @@ test("maybeAdvanceAutoModeDiscussionForProject replaces stale runtime discussion
       return {
         enabled: true,
         storePath: path.dirname(projectRoot),
-        bindings: [],
+        bindings: [makeWorkflowProjectBinding(projectRoot, "alpha")],
       };
     },
   };
@@ -2759,6 +2893,7 @@ test("maybeAdvanceAutoModeDiscussionForProject retires superseded runtime state 
       template_status: "pending",
     },
   });
+  await recordDiscordNotificationTarget(projectRoot, "alpha");
 
   const policy = {
     autoMode: "aggressive",
@@ -2777,7 +2912,7 @@ test("maybeAdvanceAutoModeDiscussionForProject retires superseded runtime state 
       return {
         enabled: true,
         storePath: path.dirname(projectRoot),
-        bindings: [],
+        bindings: [makeWorkflowProjectBinding(projectRoot, "alpha")],
       };
     },
   };
@@ -2894,6 +3029,7 @@ test("maybeAdvanceAutoModeDiscussionForProject retires stale runtime state when 
       template_status: "ready",
     },
   });
+  await recordDiscordNotificationTarget(projectRoot, "alpha");
 
   const policy = {
     autoMode: "aggressive",
@@ -2912,7 +3048,7 @@ test("maybeAdvanceAutoModeDiscussionForProject retires stale runtime state when 
       return {
         enabled: true,
         storePath: path.dirname(projectRoot),
-        bindings: [],
+        bindings: [makeWorkflowProjectBinding(projectRoot, "alpha")],
       };
     },
   };
@@ -3400,6 +3536,80 @@ test("maybeAdvanceSurveyBriefRefinementForProject launches a survey brief refine
   assert.equal(result.launched, true);
   assert.equal(result.discussionId, "survey-brief-refinement");
   assert.equal(runtimeCalls.length, 4);
+});
+
+test("maybeDispatchAutoModeMitigationForProject blocks mitigation when project binding is missing", async (t) => {
+  const projectsRoot = await makeProjectsRoot();
+  const projectRoot = path.join(projectsRoot, "alpha");
+  const runs = [];
+  t.after(async () => {
+    await fs.rm(projectsRoot, { recursive: true, force: true });
+  });
+  await fs.mkdir(projectRoot, { recursive: true });
+
+  const dispatch = await maybeDispatchAutoModeMitigationForProject({
+    workflowRuntime: {
+      async run(params) {
+        runs.push(params);
+        return { runId: `mitigation-run-${runs.length}` };
+      },
+    },
+    workflowPolicy: {
+      autoMode: "aggressive",
+      autoGate: defaultAutoGateConfig(),
+      enableChannelProjectBindings: true,
+      projectsRoot,
+      heartbeatBackgroundChecks: true,
+      agentContactCooldownSeconds: 300,
+      enableWorkflowMailbox: true,
+    },
+    projectRoot,
+    projectId: "alpha",
+    autoIteratorResult: {
+      stageAfter: "write",
+      nextAction: "/write-paper",
+      ownerAfter: "academic_writer",
+    },
+    discussionAttempt: {
+      launched: false,
+      reason: "updated",
+      projectId: "alpha",
+      projectRoot,
+      fingerprint: "risk-fingerprint-1",
+      stage: "write",
+      riskLevel: "severe",
+      status: "needs_changes",
+      reviewCount: 3,
+      roundsStarted: 1,
+      recommendedOwner: "academic_writer",
+      actionItems: ["Refresh reviewer/CITATION_VERIFICATION.md with the final evidence audit."],
+      blockers: ["Citation verification is still incomplete."],
+      summary: "One more bounded writing pass is needed before auto mode should continue.",
+      roundId: "round-1",
+      packetPath: path.join(
+        projectRoot,
+        "reviewer",
+        "auto-mode-discussion",
+        "AUTO_MODE_DISCUSSION_PACKET.md"
+      ),
+      resolved: false,
+    },
+    launchedMitigationKeys: new Map(),
+    deps: {
+      listChannelProjectBindingsForWorkflow() {
+        return {
+          enabled: true,
+          storePath: projectsRoot,
+          bindings: [],
+        };
+      },
+    },
+  });
+
+  assert.equal(dispatch.launched, false);
+  assert.equal(dispatch.reason, "binding_missing");
+  assert.equal(dispatch.owner, "academic_writer");
+  assert.equal(runs.length, 0);
 });
 
 test("maybeDispatchAutoModeMitigationForProject routes the remediation plan to the chosen owner", async (t) => {

@@ -357,10 +357,19 @@ export async function setExperimentSearchState(params: {
     searchStatePath:
       pickString(patch, ["searchStatePath", "search_state_path"]) ??
       current.searchStatePath,
+    baselineExperimentId:
+      pickString(patch, ["baselineExperimentId", "baseline_experiment_id"]) ??
+      current.baselineExperimentId,
     frontierNodeIds:
       patch.frontierNodeIds || patch.frontier_node_ids
         ? asStringArray(patch.frontierNodeIds ?? patch.frontier_node_ids)
         : current.frontierNodeIds,
+    frontierExperimentIds:
+      patch.frontierExperimentIds || patch.frontier_experiment_ids
+        ? asStringArray(
+            patch.frontierExperimentIds ?? patch.frontier_experiment_ids
+          )
+        : current.frontierExperimentIds,
     bestNodeId: pickString(patch, ["bestNodeId", "best_node_id"]) ?? current.bestNodeId,
     incumbentExperimentId:
       pickString(patch, ["incumbentExperimentId", "incumbent_experiment_id"]) ??
@@ -375,10 +384,26 @@ export async function setExperimentSearchState(params: {
       patch.completedNodeIds || patch.completed_node_ids
         ? asStringArray(patch.completedNodeIds ?? patch.completed_node_ids)
         : current.completedNodeIds,
+    completedExperimentIds:
+      patch.completedExperimentIds || patch.completed_experiment_ids
+        ? asStringArray(
+            patch.completedExperimentIds ?? patch.completed_experiment_ids
+          )
+        : current.completedExperimentIds,
     failedNodeIds:
       patch.failedNodeIds || patch.failed_node_ids
         ? asStringArray(patch.failedNodeIds ?? patch.failed_node_ids)
         : current.failedNodeIds,
+    failedExperimentIds:
+      patch.failedExperimentIds || patch.failed_experiment_ids
+        ? asStringArray(patch.failedExperimentIds ?? patch.failed_experiment_ids)
+        : current.failedExperimentIds,
+    discardedExperimentIds:
+      patch.discardedExperimentIds || patch.discarded_experiment_ids
+        ? asStringArray(
+            patch.discardedExperimentIds ?? patch.discarded_experiment_ids
+          )
+        : current.discardedExperimentIds,
     triedHyperparams:
       patch.triedHyperparams || patch.tried_hyperparams
         ? asStringArray(patch.triedHyperparams ?? patch.tried_hyperparams)

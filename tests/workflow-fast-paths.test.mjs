@@ -1489,6 +1489,109 @@ test("maybeTriggerQueuedPaperIngestionRequest injects configured PaperNexus toke
   );
 });
 
+test("maybeTriggerQueuedPaperIngestionRequest materializes command text for manifest-only batch requests", async (t) => {
+  const workspaceRoot = await makeTempWorkspace();
+  const projectRoot = path.join(workspaceRoot, "projects", "manifest-only-batch-project");
+  const fakeScriptDir = path.join(workspaceRoot, "fake-papernexus-scripts");
+  const batchManifestPath =
+    "researcher/paper-staging/queued-imports/req-manifest-only/batch-import.json";
+  const stagedMarkdownPath = path.join(
+    projectRoot,
+    "researcher",
+    "paper-staging",
+    "manifest-only-paper.md"
+  );
+  const previousScriptDir = process.env.OPENCLAW_PAPERNEXUS_SCRIPT_DIR;
+
+  t.after(async () => {
+    if (previousScriptDir === undefined) {
+      delete process.env.OPENCLAW_PAPERNEXUS_SCRIPT_DIR;
+    } else {
+      process.env.OPENCLAW_PAPERNEXUS_SCRIPT_DIR = previousScriptDir;
+    }
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  });
+
+  process.env.OPENCLAW_PAPERNEXUS_SCRIPT_DIR = fakeScriptDir;
+  await writeFakePapernexusBatchScript(fakeScriptDir);
+  await fs.mkdir(path.dirname(stagedMarkdownPath), { recursive: true });
+  await fs.writeFile(
+    stagedMarkdownPath,
+    "# Manifest Only Paper\n\nThis staged markdown fixture is long enough for upload validation. ".repeat(30),
+    "utf8"
+  );
+  await writeJson(path.join(projectRoot, batchManifestPath), {
+    version: 1,
+    papers: [
+      {
+        paperId: "paper-manifest-only",
+        source: stagedMarkdownPath,
+        sourceKind: "markdown",
+      },
+    ],
+  });
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "manifest-only-batch-project",
+    title: "Manifest-only batch project",
+    current_stage: "graph_build",
+    owner_agent: "researcher",
+    paper_ingestion: {
+      runtime_status: "waiting_import",
+      queued_requests: [
+        {
+          request_id: "req-manifest-only",
+          request_kind: "upload_manifest",
+          status: "queued",
+          wrapper: "pn_batch_import.py",
+          manifest_path: batchManifestPath,
+          shared_corpus: "EML",
+          paper_count: 1,
+          summary: "Queue manifest-only batch import.",
+          validation_status: "valid",
+        },
+      ],
+    },
+  });
+
+  const result = await maybeTriggerQueuedPaperIngestionRequest({
+    workflowPolicy: {
+      projectsRoot: path.join(workspaceRoot, "projects"),
+      enableChannelProjectBindings: false,
+      papernexusMcpUrl: "http://papernexus.test/mcp",
+      papernexusRemoteStagingRoot: "/tmp/papernexus-import-staging",
+    },
+    agentCtx: {
+      agentId: "researcher",
+      workspaceDir: workspaceRoot,
+      sessionKey: "agent:researcher:local:conversation:manifest-only",
+      messageChannel: "local",
+      channelKey: "local:manifest-only",
+    },
+    snapshot: {
+      role: "researcher",
+      projectRoot,
+      projectId: "manifest-only-batch-project",
+      currentStage: "graph_build",
+      channelProjectBindingsEnabled: false,
+    },
+    triggerKind: "graph_build",
+    projectRoot,
+    projectId: "manifest-only-batch-project",
+  });
+
+  assert.equal(result?.started, true);
+  assert.equal(result?.sessionKey, "local:papernexus:direct-batch-import");
+
+  const manifest = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "PROJECT_MANIFEST.json"), "utf8")
+  );
+  const request = manifest.paper_ingestion.queued_requests[0];
+  assert.equal(request.status, "completed");
+  assert.match(request.command_text, /--mcp-url http:\/\/papernexus\.test\/mcp/);
+  assert.match(request.command_text, /--corpus EML/);
+  assert.match(request.command_text, /--manifest researcher\/paper-staging\/queued-imports\/req-manifest-only\/batch-import\.json/);
+});
+
 test("startBackgroundWorkflowRun gives graph-build continuations explicit Zotero bot sync instructions", async (t) => {
   const workspaceRoot = await makeTempWorkspace();
   const projectsRoot = path.join(workspaceRoot, "projects");
@@ -2911,6 +3014,92 @@ test("queued dispatch replay accepts already-active owner sessions without a fre
   assert.equal(
     queue.entries.find((entry) => entry.queueKey === "already-active-dispatch")?.status,
     "running"
+  );
+});
+
+test("queued auto mitigation dispatch replay is suppressed without a project binding", async (t) => {
+  const workspaceRoot = await makeTempWorkspace();
+  const projectsRoot = path.join(workspaceRoot, "projects");
+  const projectRoot = path.join(projectsRoot, "missing-binding-project");
+  const sessionKey = "agent:researcher:discord:group:missing-binding-room";
+  const handoffCalls = [];
+
+  t.after(async () => {
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  });
+
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "missing-binding-project",
+    current_stage: "graph_build",
+    owner_agent: "researcher",
+  });
+
+  await enqueueQueuedBackgroundWorkflowRun({
+    source: "workflow_auto_mitigation",
+    ownerAgent: "researcher",
+    requesterSessionKey: sessionKey,
+    messageChannel: "discord",
+    preferredSessionKey: `${sessionKey}:subagent:workflow-mitigation`,
+    family: "research",
+    kind: "workflow_mitigation_dispatch",
+    projectId: "missing-binding-project",
+    projectRoot,
+    projectsRoot,
+    queueKey: "missing-binding-mitigation",
+    summary: "Resolve the auto-mode risk.",
+    dispatchPayload: {
+      requesterChannel: "discord",
+      requesterAccountId: null,
+      preferredSessionKeys: [`${sessionKey}:subagent:workflow-mitigation`],
+      fromRole: "researcher",
+      toRole: "researcher",
+      projectRoot,
+      projectId: "missing-binding-project",
+      stage: "graph_build",
+      summary: "Resolve the auto-mode risk.",
+      command: "/graph-build --repair-import true",
+      mailboxMessageId: null,
+      requireMailboxAcknowledgement: true,
+      extraBody: null,
+      waitTimeoutMs: 5000,
+      retryOnTimeout: true,
+      enableSpawnFallback: true,
+      useWorkflowHandoff: true,
+      autoModeActive: true,
+    },
+  });
+
+  const drained = await drainQueuedBackgroundWorkflowRuns({
+    workflowRuntime: {
+      async run() {
+        throw new Error("missing-binding mitigation should not start");
+      },
+    },
+    workflowPolicy: {
+      enableChannelProjectBindings: true,
+      projectsRoot,
+    },
+    projectsRoot,
+    handoffWorkflowTaskToAgent: async (params) => {
+      handoffCalls.push(params);
+      throw new Error("missing-binding mitigation should not dispatch");
+    },
+  });
+
+  assert.equal(handoffCalls.length, 0);
+  assert.equal(drained.started.length, 0);
+  assert.equal(drained.remaining.length, 0);
+
+  const queue = await readWorkflowRuntimeQueueStore(projectRoot);
+  const entry = queue.entries.find(
+    (candidate) => candidate.queueKey === "missing-binding-mitigation"
+  );
+  assert.equal(entry?.status, "failed");
+  assert.match(entry?.lastError ?? "", /missing an active project binding/);
+
+  const events = await readWorkflowRuntimeEvents(projectRoot);
+  assert.ok(
+    events.some((event) => event.kind === "background_queue_binding_missing")
   );
 });
 

@@ -114,7 +114,6 @@ const IN_FLIGHT_PAPER_INGESTION_REQUEST_STATUSES = new Set([
 
 const ACTIVE_PAPER_INGESTION_REQUEST_STATUSES = new Set([
   ...IN_FLIGHT_PAPER_INGESTION_REQUEST_STATUSES,
-  "needs_repair",
 ]);
 
 const COMPLETED_PAPER_INGESTION_REQUEST_STATUSES = new Set([
@@ -1136,6 +1135,8 @@ function resolveSharedCorpus(params: {
       pickString(paperIngestion ?? {}, [
         "shared_corpus",
         "sharedCorpus",
+        "locked_shared_corpus",
+        "lockedSharedCorpus",
         "repair_target_corpus",
         "repairTargetCorpus",
       ]),

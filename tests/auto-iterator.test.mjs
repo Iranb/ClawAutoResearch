@@ -3028,7 +3028,7 @@ test("auto iterator refreshes remote graph presence with the plugin-configured s
   manifest.paper_ingestion = {
     corpus_name: "gcd-confirmation-bias-mitigation",
     graph_presence_status: "missing_papers",
-    refresh_required: true,
+    refresh_required: false,
   };
   await writeJson(manifestPath, manifest);
   await seedRemoteGraphStatus(projectRoot, {
@@ -5076,6 +5076,130 @@ test("auto iterator degrades stale queued literature discovery requisitions once
   );
 });
 
+test("auto iterator ignores stale graph_build catch-up queue once graph presence is ready", async (t) => {
+  const projectRoot = await makeTempProject();
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  const now = await seedSetupCompleteProject(projectRoot, "graph_build");
+  await writeText(path.join(projectRoot, "graph", "GRAPH_BUILD_REPORT.md"));
+  await writeJson(path.join(projectRoot, "graph", "PAPERNEXUS_STATUS.json"), {
+    status: "ready",
+    corpus_name: "EML",
+    expected_paper_count: 1,
+    present_paper_count: 1,
+  });
+  await writeJson(path.join(projectRoot, "graph", "GRAPH_PRESENCE_CHECK.json"), {
+    status: "ready",
+    expected_paper_count: 1,
+    present_paper_count: 1,
+    missing_paper_count: 0,
+  });
+  await seedPaperSourceIndex(projectRoot, [
+    {
+      canonical_id: "arxiv:2603.21852",
+      arxiv_id: "2603.21852",
+      title: "EML Operator",
+      source_path: path.join(
+        projectRoot,
+        "researcher",
+        "paper_source",
+        "md",
+        "2603.21852--eml-operator.md"
+      ),
+    },
+  ]);
+  const sourceRoot = path.join(
+    projectRoot,
+    ".papernexus-home",
+    "corpora",
+    "shared-global-graph"
+  );
+  await seedGraphCorpus(projectRoot, [
+    {
+      sourceKey: path.join(sourceRoot, "md", "2603.21852--eml-operator.md"),
+      inputPath: path.join(sourceRoot, "md", "2603.21852--eml-operator.md"),
+      kind: "markdown",
+      paperId: "paper:eml",
+      paperTitle: "EML Operator",
+      sourcePath: path.join(sourceRoot, "md", "2603.21852--eml-operator.md"),
+      sourceMarkdownPath: path.join(
+        sourceRoot,
+        "md",
+        "2603.21852--eml-operator.md"
+      ),
+      activeInGraph: true,
+      canonicalSourceKey: path.join(sourceRoot, "md", "2603.21852--eml-operator.md"),
+    },
+  ]);
+  await seedReadyBrainstormCycle(projectRoot);
+
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.paper_ingestion = {
+    runtime_status: "waiting_import",
+    waiting_reason: "Graph-build source catch-up queued PaperNexus import.",
+    queued_requests: [
+      {
+        request_id: "graph-build-source-catchup-stale",
+        request_kind: "upload_manifest",
+        status: "queued",
+        wrapper: "pn_batch_import.py",
+        manifest_path:
+          "researcher/paper-staging/queued-imports/graph-build-source-catchup-stale/batch-import.json",
+        summary: "stale graph-build source catch-up",
+        trigger_kind: "graph_build_source_catchup",
+        last_run_id: "direct-papernexus-batch-graph-build-source-catchup-stale",
+        last_session_key: "local:papernexus:direct-batch-import",
+        created_at: now,
+        updated_at: now,
+        attempt_count: 1,
+      },
+    ],
+    active_batches: [
+      {
+        manifest_path:
+          "researcher/paper-staging/queued-imports/graph-build-source-catchup-stale/batch-import.json",
+        status: "running",
+        total: 1,
+      },
+    ],
+    paper_operations: [
+      {
+        canonical_id: "arxiv:2603.21852",
+        import_task_id: "imp:eml",
+        phase: "import",
+        status: "running",
+        started_at: now,
+        finished_at: now,
+      },
+    ],
+    graph_presence_checked_at: now,
+    graph_presence_status: "ready",
+    graph_presence_report_path: "graph/GRAPH_PRESENCE_CHECK.json",
+    graph_presence_expected_papers: 1,
+    graph_presence_present_papers: 1,
+    graph_presence_missing_papers: [],
+    refresh_required: false,
+  };
+  await writeJson(manifestPath, manifest);
+
+  const result = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+  });
+
+  const updatedManifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  assert.equal(result.stageBefore, "graph_build");
+  assert.equal(result.stageAfter, "frontier_mapping");
+  assert.doesNotMatch(
+    updatedManifest.blocking_reason ?? "",
+    /workflow-owned PaperNexus ingestion is running/i
+  );
+});
+
 test("auto iterator degrades terminal PaperNexus upload failures once graph presence is ready", async (t) => {
   const projectRoot = await makeTempProject();
   t.after(async () => {
@@ -6125,6 +6249,216 @@ test("auto iterator regresses frontier_mapping back to graph_build when graph mi
   assert.ok(
     aggressiveResult.autoModeReasons.some((reason) =>
       /Auto discussion rounds remaining before downgrade/i.test(reason)
+    )
+  );
+});
+
+test("auto iterator routes frontier_mapping back to graph_build when the graph corpus is unavailable", async (t) => {
+  const projectRoot = await makeTempProject();
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  const { now } = await seedProjectReadyForCode(projectRoot);
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.current_stage = "frontier_mapping";
+  manifest.owner_agent = "researcher";
+  manifest.paper_ingestion = {
+    ...manifest.paper_ingestion,
+    runtime_status: "waiting_import",
+    waiting_reason: "Remote PaperNexus corpus EML is unavailable.",
+    graph_presence_checked_at: now,
+    graph_presence_status: "missing_corpus",
+    graph_presence_expected_papers: 2,
+    graph_presence_present_papers: 0,
+    graph_presence_missing_papers: [],
+    graph_build_workflow_status: "blocked",
+    graph_build_can_continue: false,
+    graph_build_requires_import: true,
+    repair_required: true,
+    repair_reason: "Could not resolve corpus \"EML\".",
+    repair_target_corpus: "EML",
+    refresh_required: false,
+  };
+  await writeJson(manifestPath, manifest);
+
+  const result = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "service",
+    queueMailbox: false,
+    now,
+    policy: {
+      autoMode: "aggressive",
+      autoGate: {
+        ...defaultAutoGateConfig(),
+        enabled: true,
+      },
+      papernexusSharedCorpus: "EML",
+    },
+  });
+
+  assert.equal(result.stageBefore, "frontier_mapping");
+  assert.equal(result.stageEffective, "graph_build");
+  assert.equal(result.stageAfter, "graph_build");
+  assert.match(result.blockingReason ?? "", /graph_presence_status = ready/);
+  assert.ok(
+    result.missingStageSignals.some((signal) =>
+      /graph_presence_status = ready \(current: missing_corpus\)/i.test(signal)
+    ),
+    JSON.stringify(result.missingStageSignals)
+  );
+});
+
+test("auto iterator routes idea back to graph_build when graph loses canonical papers", async (t) => {
+  const projectRoot = await makeTempProject();
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  const { now } = await seedProjectReadyForCode(projectRoot);
+  await seedPaperSourceIndex(projectRoot, [
+    {
+      canonical_id: "arxiv:2501.00001",
+      arxiv_id: "2501.00001",
+      title: "Alpha Paper",
+      source_path: path.join(
+        projectRoot,
+        "researcher",
+        "paper_source",
+        "md",
+        "2501.00001--alpha-paper.md"
+      ),
+    },
+    {
+      canonical_id: "arxiv:2501.00002",
+      arxiv_id: "2501.00002",
+      title: "Beta Paper",
+      source_path: path.join(
+        projectRoot,
+        "researcher",
+        "paper_source",
+        "md",
+        "2501.00002--beta-paper.md"
+      ),
+    },
+  ]);
+  const sourceRoot = path.join(
+    projectRoot,
+    ".papernexus-home",
+    "corpora",
+    "shared-global-graph"
+  );
+  await seedGraphCorpus(projectRoot, [
+    {
+      sourceKey: path.join(sourceRoot, "md", "2501.00001--alpha-paper.md"),
+      inputPath: path.join(sourceRoot, "md", "2501.00001--alpha-paper.md"),
+      kind: "markdown",
+      paperId: "paper:alpha",
+      paperTitle: "Alpha Paper",
+      sourcePath: path.join(sourceRoot, "md", "2501.00001--alpha-paper.md"),
+      sourceMarkdownPath: path.join(sourceRoot, "md", "2501.00001--alpha-paper.md"),
+      activeInGraph: true,
+      canonicalSourceKey: path.join(sourceRoot, "md", "2501.00001--alpha-paper.md"),
+    },
+  ]);
+
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.current_stage = "idea";
+  manifest.owner_agent = "researcher";
+  manifest.paper_ingestion = {
+    ...manifest.paper_ingestion,
+    runtime_status: "blocked",
+    waiting_reason: "PaperNexus batch import failed: Could not resolve corpus \"EML\".",
+    graph_presence_checked_at: now,
+    graph_presence_status: "missing_papers",
+    graph_presence_expected_papers: 2,
+    graph_presence_present_papers: 1,
+    graph_presence_missing_papers: [
+      {
+        canonical_id: "arxiv:2501.00002",
+        title: "Beta Paper",
+        arxiv_id: "2501.00002",
+      },
+    ],
+    graph_build_workflow_status: "blocked",
+    graph_build_can_continue: false,
+    graph_build_requires_import: true,
+    repair_required: true,
+    repair_reason: "Could not resolve corpus \"EML\".",
+    refresh_required: true,
+  };
+  await writeJson(manifestPath, manifest);
+
+  const result = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+    policy: {
+      autoMode: "aggressive",
+      autoGate: {
+        ...defaultAutoGateConfig(),
+        enabled: true,
+      },
+    },
+  });
+
+  assert.equal(result.stageBefore, "idea");
+  assert.equal(result.stageEffective, "graph_build");
+  assert.equal(result.stageAfter, "graph_build");
+  assert.equal(result.graphPresenceCheck?.status, "missing_papers");
+  assert.match(result.blockingReason ?? "", /graph_presence_status = ready/);
+});
+
+test("auto iterator keeps graph_build blocked when downstream reentry finds a missing corpus", async (t) => {
+  const projectRoot = await makeTempProject();
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  const { now } = await seedProjectReadyForCode(projectRoot);
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.current_stage = "idea";
+  manifest.owner_agent = "researcher";
+  manifest.paper_ingestion = {
+    ...manifest.paper_ingestion,
+    runtime_status: "waiting_import",
+    waiting_reason: "Graph-build source catch-up queued PaperNexus import.",
+    graph_presence_checked_at: now,
+    graph_presence_status: "missing_corpus",
+    graph_presence_expected_papers: 2,
+    graph_presence_present_papers: 0,
+    graph_presence_missing_papers: [],
+    graph_build_workflow_status: "waiting",
+    graph_build_can_continue: false,
+    graph_build_requires_import: false,
+    refresh_required: false,
+  };
+  await writeJson(manifestPath, manifest);
+
+  const result = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+    now,
+    policy: {
+      autoMode: "aggressive",
+      autoGate: {
+        ...defaultAutoGateConfig(),
+        enabled: true,
+      },
+    },
+  });
+
+  assert.equal(result.stageBefore, "idea");
+  assert.equal(result.stageEffective, "graph_build");
+  assert.equal(result.stageAfter, "graph_build");
+  assert.match(result.blockingReason ?? "", /graph_presence_status = ready/);
+  assert.ok(
+    result.missingStageSignals.some((signal) =>
+      /graph_presence_status = ready \(current: missing_corpus\)/i.test(signal)
     )
   );
 });

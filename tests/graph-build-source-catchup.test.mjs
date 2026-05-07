@@ -247,6 +247,75 @@ ${"The staged source discusses semi-supervised consistency, pseudo-label stabili
   );
 });
 
+test("graph-build source catch-up preserves manifest locked shared corpus for remote imports", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await writeJson(path.join(projectRoot, "researcher", "PAPER_SOURCE_INDEX.json"), {
+    papers: [
+      {
+        canonical_id: "arxiv:2603.21852",
+        arxiv_id: "2603.21852",
+        title: "All elementary functions from a single binary operator",
+        source_provider: "arxiv_api",
+        retrieval_providers: ["arxiv_api"],
+        staging_path: "researcher/paper-staging/md/2603.21852.md",
+        import_status: "pending",
+      },
+    ],
+  });
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "source-catchup-demo",
+    current_stage: "graph_build",
+    owner_agent: "researcher",
+    paper_ingestion: {
+      locked_shared_corpus: "EML",
+      graph_presence_status: "missing_papers",
+    },
+  });
+
+  const markdown = `# All elementary functions from a single binary operator
+
+## Abstract
+
+This fixture stands in for the EML operator paper and contains enough full-text
+material for source validation.
+
+## Method
+
+${"The EML operator is discussed with safe-domain constraints, residual integration, and small-model validation details. ".repeat(35)}
+`;
+
+  const result = await maybeMaterializeGraphBuildPaperSources({
+    projectRoot,
+    projectId: "source-catchup-demo",
+    workflowPolicy: {
+      papernexusMcpUrl: "http://127.0.0.1:9123/mcp",
+      papernexusSshTarget: "hyq@10.126.56.30",
+      papernexusRemoteStagingRoot: "/tmp/papernexus-import-staging",
+    },
+    now: "2026-04-24T09:45:00.000Z",
+    fetchImpl: makeFetch(markdown),
+  });
+
+  assert.equal(result.queued, true);
+  const batchManifest = JSON.parse(
+    await fs.readFile(path.join(projectRoot, result.batchManifestPath), "utf8")
+  );
+  assert.equal(batchManifest.defaults.corpus, "EML");
+
+  const manifest = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "PROJECT_MANIFEST.json"), "utf8")
+  );
+  const queued = manifest.paper_ingestion.queued_requests[0];
+  assert.equal(queued.shared_corpus, "EML");
+  assert.match(queued.command_text, /--corpus EML/);
+  assert.match(queued.command_text, /--ssh-target hyq@10\.126\.56\.30/);
+  assert.match(queued.command_text, /--remote-staging-root \/tmp\/papernexus-import-staging/);
+});
+
 test("graph-build source catch-up resolves researcher md_path through paper-staging", async (t) => {
   const projectRoot = await makeProjectRoot();
   t.after(async () => {
@@ -638,6 +707,14 @@ ${"The method section contains enough source content for staged import validatio
   const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
   const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
   manifest.paper_ingestion.queued_requests[0].status = "completed";
+  manifest.paper_ingestion.queued_requests[0].finished_at = "2026-04-24T10:03:00.000Z";
+  manifest.paper_ingestion.queued_requests[0].last_error = "Previous import exhausted.";
+  manifest.paper_ingestion.queued_requests[0].attempt_count = 3;
+  manifest.paper_ingestion.queued_requests[0].dead_letter_at = "2026-04-24T10:03:00.000Z";
+  manifest.paper_ingestion.queued_requests[0].dead_letter_reason = "Remote corpus missing.";
+  manifest.paper_ingestion.queued_requests[0].validation_status = "warning";
+  manifest.paper_ingestion.queued_requests[0].validation_report_path =
+    "graph/paper-ingestion-validation/stale-report.json";
   manifest.paper_ingestion.graph_presence_status = "missing_corpus";
   await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
 
@@ -667,6 +744,49 @@ ${"The method section contains enough source content for staged import validatio
     (entry) => entry.request_id === first.requestId
   );
   assert.equal(request.status, "queued");
+  assert.equal(request.created_at, "2026-04-24T10:05:00.000Z");
+  assert.equal(request.finished_at, null);
+  assert.equal(request.last_error, null);
+  assert.equal(request.attempt_count, 0);
+  assert.equal(request.dead_letter_at, null);
+  assert.equal(request.dead_letter_reason, null);
+  assert.equal(request.validation_status, "unknown");
+  assert.equal(request.validation_report_path, null);
+
+  request.status = "needs_repair";
+  request.finished_at = "2026-04-24T10:05:30.000Z";
+  request.last_error = "Local MCP URLs are disabled.";
+  request.attempt_count = 1;
+  request.validation_status = "valid";
+  request.validation_report_path = "graph/paper-ingestion-validation/local-url.json";
+  await fs.writeFile(manifestPath, `${JSON.stringify(updatedManifest, null, 2)}\n`, "utf8");
+
+  const third = await maybeMaterializeGraphBuildPaperSources({
+    projectRoot,
+    projectId: "source-catchup-demo",
+    workflowPolicy: {
+      papernexusSharedCorpus: "GCD",
+      papernexusMcpUrl: "http://papernexus.example/mcp",
+    },
+    now: "2026-04-24T10:06:00.000Z",
+    fetchImpl: makeFetch(markdown),
+  });
+
+  assert.equal(third.queued, true);
+  assert.equal(third.skippedReason, null);
+  assert.equal(third.requestId, first.requestId);
+
+  const repairedManifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  const repairedRequest = repairedManifest.paper_ingestion.queued_requests.find(
+    (entry) => entry.request_id === first.requestId
+  );
+  assert.equal(repairedRequest.status, "queued");
+  assert.equal(repairedRequest.created_at, "2026-04-24T10:06:00.000Z");
+  assert.equal(repairedRequest.finished_at, null);
+  assert.equal(repairedRequest.last_error, null);
+  assert.equal(repairedRequest.attempt_count, 0);
+  assert.equal(repairedRequest.validation_status, "unknown");
+  assert.equal(repairedRequest.validation_report_path, null);
 });
 
 test("graph-build source catch-up can recover past unrelated needs-repair import requests", async (t) => {

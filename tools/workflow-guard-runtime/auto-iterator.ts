@@ -106,6 +106,13 @@ function hasOutstandingGraphBuildIngestionWork(
   manifest: ManifestLike | null | undefined
 ): boolean {
   const state = normalizePaperIngestionState(manifest?.paper_ingestion);
+  const graphPresenceStatus = normalizeStage(
+    asRecord(manifest?.paper_ingestion)?.graph_presence_status ??
+      asRecord(manifest?.paper_ingestion)?.graphPresenceStatus
+  );
+  if (graphPresenceStatus === "ready") {
+    return false;
+  }
   if (state.repairRequired || state.reconcileRequired) {
     return true;
   }
@@ -132,6 +139,52 @@ function hasOutstandingGraphBuildIngestionWork(
   }
   return state.paperOperations.some((operation) =>
     ["queued", "running"].includes(normalizeStage(operation.status) ?? "")
+  );
+}
+
+type AutoIteratorGraphContext = ReturnType<typeof deriveWorkflowGraphContext>;
+
+function graphPresenceIsNotReadyForDownstream(
+  context: AutoIteratorGraphContext
+): boolean {
+  return (
+    (context.graphPresenceStatus != null && context.graphPresenceStatus !== "ready") ||
+    (context.graphPresenceCheckStatus != null &&
+      context.graphPresenceCheckStatus !== "ready")
+  );
+}
+
+function graphPresenceRequiresGraphBuildReentry(
+  context: AutoIteratorGraphContext
+): boolean {
+  const missingSources =
+    context.graphPresenceStatus === "missing_sources" ||
+    context.graphPresenceCheckStatus === "missing_sources";
+  const canonicalPapersMissing =
+    context.graphPresenceStatus === "missing_papers" ||
+    context.graphPresenceCheckStatus === "missing_papers";
+  const blockedWithoutSourceRepairOnly =
+    graphPresenceIsNotReadyForDownstream(context) &&
+    !missingSources &&
+    (context.graphBuildWorkflowStatus === "blocked" ||
+      context.graphBuildCanContinue === false ||
+      context.graphBuildRequiresImport === true ||
+      context.graphBuildRequiresSourceRepair === true ||
+      context.repairRequired);
+  return canonicalPapersMissing || blockedWithoutSourceRepairOnly;
+}
+
+function graphBuildPresenceBlocksAdvance(
+  context: AutoIteratorGraphContext
+): boolean {
+  return (
+    graphPresenceIsNotReadyForDownstream(context) &&
+    (context.graphBuildCanContinue === false ||
+      context.graphBuildWorkflowStatus === "blocked" ||
+      context.graphPresenceStatus === "missing_corpus" ||
+      context.graphPresenceStatus === "missing_papers" ||
+      context.graphPresenceCheckStatus === "missing_corpus" ||
+      context.graphPresenceCheckStatus === "missing_papers")
   );
 }
 
@@ -1367,9 +1420,42 @@ export async function runWorkflowAutoIteratorImpl(
       paperIngestion: paperIngestionStateBeforeRouting,
       graphPresenceStatus: graphContextBeforeRouting.graphPresenceStatus,
     });
+  const graphPresenceRequestedGraphReentry =
+    !surveyWorkflow &&
+    stageBefore !== "setup" &&
+    stageBefore !== "graph_build" &&
+    stageBefore !== "done" &&
+    graphContextBeforeRouting.graphSensitive &&
+    graphPresenceRequiresGraphBuildReentry(graphContextBeforeRouting);
   const requestedGraphReentry =
     !surveyWorkflow &&
-    (catalystRequestedGraphReentry || literatureDiscoveryRequestedGraphReentry);
+    (catalystRequestedGraphReentry ||
+      literatureDiscoveryRequestedGraphReentry ||
+      graphPresenceRequestedGraphReentry);
+  if (graphPresenceRequestedGraphReentry) {
+    await appendWorkflowDiagnosticEvent({
+      projectRoot,
+      projectId,
+      component: "auto_iterator",
+      action: "graph_presence_reentry_requested",
+      status: "waiting",
+      stage: stageBefore,
+      owner: asString(manifest.owner_agent),
+      summary:
+        "Graph presence is not ready; routing downstream graph-sensitive stage back to graph_build.",
+      details: {
+        graphPresenceStatus: graphContextBeforeRouting.graphPresenceStatus,
+        graphPresenceCheckStatus: graphContextBeforeRouting.graphPresenceCheckStatus,
+        graphBuildWorkflowStatus: graphContextBeforeRouting.graphBuildWorkflowStatus,
+        graphBuildCanContinue: graphContextBeforeRouting.graphBuildCanContinue,
+        graphBuildRequiresImport: graphContextBeforeRouting.graphBuildRequiresImport,
+        graphBuildRequiresSourceRepair:
+          graphContextBeforeRouting.graphBuildRequiresSourceRepair,
+        repairRequired: graphContextBeforeRouting.repairRequired,
+        repairReason: graphContextBeforeRouting.repairReason,
+      },
+    });
+  }
   let stageEffective = requestedGraphReentry ? "graph_build" : stageBefore;
   let regressed = requestedGraphReentry;
   const visited = new Set<string>();
@@ -1425,13 +1511,52 @@ export async function runWorkflowAutoIteratorImpl(
     regressionDepth += 1;
   }
 
-  const effectiveMissingSignals = await deps.getMissingStageSignals({
+  let effectiveMissingSignals = await deps.getMissingStageSignals({
     projectRoot,
     manifest,
     trackRegistry,
     experimentLedger,
     currentStage: stageEffective,
   });
+  const graphBuildPresenceBlocksCurrentStage =
+    !surveyWorkflow &&
+    stageEffective === "graph_build" &&
+    graphBuildPresenceBlocksAdvance(graphContextBeforeRouting);
+  if (
+    graphBuildPresenceBlocksCurrentStage &&
+    !effectiveMissingSignals.some((signal) =>
+      /paper_ingestion\.graph_presence_status = ready/i.test(signal)
+    )
+  ) {
+    const graphPresenceStatus =
+      graphContextBeforeRouting.graphPresenceCheckStatus ??
+      graphContextBeforeRouting.graphPresenceStatus ??
+      "unset";
+    effectiveMissingSignals = [
+      ...effectiveMissingSignals,
+      `PROJECT_MANIFEST.json.paper_ingestion.graph_presence_status = ready (current: ${graphPresenceStatus})`,
+    ];
+    await appendWorkflowDiagnosticEvent({
+      projectRoot,
+      projectId,
+      component: "auto_iterator",
+      action: "graph_build_presence_block_enforced",
+      status: "waiting",
+      stage: stageEffective,
+      owner: asString(manifest.owner_agent),
+      summary:
+        "Graph build cannot advance because graph presence is not ready.",
+      details: {
+        graphPresenceStatus,
+        graphBuildWorkflowStatus: graphContextBeforeRouting.graphBuildWorkflowStatus,
+        graphBuildCanContinue: graphContextBeforeRouting.graphBuildCanContinue,
+        graphBuildRequiresImport: graphContextBeforeRouting.graphBuildRequiresImport,
+        graphBuildRequiresSourceRepair:
+          graphContextBeforeRouting.graphBuildRequiresSourceRepair,
+        repairRequired: graphContextBeforeRouting.repairRequired,
+      },
+    });
+  }
   const autoModeRiskEvaluation = deps.evaluateWorkflowAutoModeRisk({
     configuredMode: configuredAutoMode,
     stage: stageEffective,

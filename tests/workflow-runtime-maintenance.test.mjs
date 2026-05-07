@@ -2076,6 +2076,115 @@ test("runWorkflowRuntimeMaintenancePass suppresses stale queue replays when the 
   );
 });
 
+test("runWorkflowRuntimeMaintenancePass suppresses auto dispatch replay when project binding is missing", async (t) => {
+  const workspaceRoot = await makeProjectRoot();
+  const projectsRoot = path.join(workspaceRoot, "projects");
+  const projectRoot = path.join(projectsRoot, "missing-binding-maintenance");
+  const queueKey = "repair:dispatch:binding-missing";
+
+  t.after(async () => {
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  });
+
+  await makeProject(projectRoot, "missing-binding-maintenance");
+  await migrateWorkflowRuntimeState({
+    projectRoot,
+    projectId: "missing-binding-maintenance",
+    compatibilityMode: "sessions_spawn_runtime",
+    reason: "test_bootstrap",
+  });
+
+  await createWorkflowTransitionIntent({
+    projectRoot,
+    projectId: "missing-binding-maintenance",
+    queueKey,
+    source: "workflow_auto_mitigation",
+    entryType: "dispatch_task",
+    ownerAgent: "researcher",
+    channelKey: "discord",
+    requesterSessionKey: "agent:researcher:discord:group:missing-binding",
+    preferredSessionKey:
+      "agent:researcher:discord:group:missing-binding:subagent:workflow-mitigation",
+    family: "research",
+    kind: "workflow_mitigation_dispatch",
+    summary: "Replay a stale mitigation dispatch.",
+    dispatchPayload: {
+      requesterChannel: "discord",
+      requesterAccountId: null,
+      preferredSessionKeys: [
+        "agent:researcher:discord:group:missing-binding:subagent:workflow-mitigation",
+      ],
+      fromRole: "researcher",
+      toRole: "researcher",
+      projectRoot,
+      projectId: "missing-binding-maintenance",
+      stage: "graph_build",
+      summary: "Replay a stale mitigation dispatch.",
+      command: "/graph-build --repair-import true",
+      mailboxMessageId: null,
+      requireMailboxAcknowledgement: true,
+      extraBody: "Continue only the assigned stage.",
+      waitTimeoutMs: 5_000,
+      retryOnTimeout: true,
+      enableSpawnFallback: true,
+      useWorkflowHandoff: true,
+      autoModeActive: true,
+    },
+  });
+  const queueStore = await readWorkflowRuntimeQueueStore(projectRoot);
+  await writeWorkflowRuntimeQueueStore({
+    projectRoot,
+    projectId: "missing-binding-maintenance",
+    entries: queueStore.entries.map((entry) =>
+      entry.queueKey === queueKey
+        ? {
+            ...entry,
+            status: "needs_repair",
+            attemptCount: 0,
+            lastAttemptedAt: "2026-04-10T09:00:00.000Z",
+            lastCheckedAt: "2026-04-10T09:00:00.000Z",
+          }
+        : entry
+    ),
+  });
+
+  const result = await runWorkflowRuntimeMaintenancePass({
+    projectRoot,
+    projectId: "missing-binding-maintenance",
+    workflowPolicy: {
+      enableChannelProjectBindings: true,
+      projectsRoot,
+    },
+    workflowRuntime: {
+      async run() {
+        throw new Error("missing-binding replay should not start");
+      },
+    },
+    staleSessionAgeMs: 0,
+  });
+
+  assert.equal(result.exhaustedQueueKeys.includes(queueKey), true);
+  assert.equal(result.replayedQueueKeys.includes(queueKey), false);
+  const refreshedQueue = await readWorkflowRuntimeQueueStore(projectRoot);
+  const entry = refreshedQueue.entries.find(
+    (candidate) => candidate.queueKey === queueKey
+  );
+  assert.equal(entry?.status, "failed");
+  assert.match(entry?.lastError ?? "", /requires an active project binding/);
+  const incidents = await readWorkflowRuntimeIncidentsStore(
+    projectRoot,
+    "missing-binding-maintenance"
+  );
+  assert.equal(
+    incidents.entries.some(
+      (entry) =>
+        entry.kind === "binding_gate_mismatch" &&
+        entry.details?.gateReason === "binding_missing"
+    ),
+    true
+  );
+});
+
 test("runWorkflowRuntimeMaintenancePass routes terminal PaperNexus retry failures to repair handoff", async (t) => {
   const projectRoot = await makeProjectRoot();
   t.after(async () => {

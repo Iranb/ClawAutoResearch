@@ -43,7 +43,10 @@ import {
   transitionWorkflowHandoffIntent,
 } from "./workflow-handoff/handoff-store";
 import { routeWorkflowFailure } from "./workflow-handoff/failure-router";
-import { evaluateChannelProjectBindingGate } from "./channel-project-bindings";
+import {
+  evaluateChannelProjectBindingGate,
+  listChannelProjectBindings,
+} from "./channel-project-bindings";
 import { appendWorkflowDiagnosticEvent } from "./workflow-diagnostics.js";
 import { writePapernexusProgressFromManifest } from "./papernexus-progress";
 import {
@@ -77,6 +80,7 @@ type LoggerLike = {
 type WorkflowPolicyLike = {
   lobsterHandoff?: WorkflowLobsterHandoffConfig;
   enableChannelProjectBindings?: boolean;
+  channelProjectBindingsPath?: string;
   projectsRoot?: string;
 } | null;
 
@@ -236,6 +240,52 @@ function isDispatchEntrySupersededByProjectRouting(params: {
     return true;
   }
   return false;
+}
+
+function isAutoDispatchQueueEntry(entry: WorkflowRuntimeQueueEntry): boolean {
+  return (
+    entry.entryType === "dispatch_task" &&
+    (entry.source === "workflow_auto_stage" ||
+      entry.source === "workflow_auto_mitigation")
+  );
+}
+
+function hasDurableProjectBindingForWorkflowQueue(params: {
+  workflowPolicy?: WorkflowPolicyLike;
+  projectRoot: string | null | undefined;
+}): boolean {
+  const projectRoot = readString(params.projectRoot);
+  if (!projectRoot) {
+    return false;
+  }
+  const bindings = listChannelProjectBindings({
+    policy: params.workflowPolicy ?? undefined,
+    context: {
+      workspaceDir: projectRoot,
+    },
+  });
+  return bindings.bindings.some(
+    (entry) => path.resolve(entry.projectRoot) === path.resolve(projectRoot)
+  );
+}
+
+function shouldSuppressAutoDispatchQueueForMissingBinding(params: {
+  entry: WorkflowRuntimeQueueEntry;
+  workflowPolicy?: WorkflowPolicyLike;
+}): boolean {
+  if (params.workflowPolicy?.enableChannelProjectBindings !== true) {
+    return false;
+  }
+  if (!isAutoDispatchQueueEntry(params.entry)) {
+    return false;
+  }
+  const projectRoot =
+    readString(params.entry.projectRoot) ??
+    readString(params.entry.dispatchPayload?.projectRoot);
+  return !hasDurableProjectBindingForWorkflowQueue({
+    workflowPolicy: params.workflowPolicy,
+    projectRoot,
+  });
 }
 
 function readRecordArray(value: unknown): Record<string, unknown>[] {
@@ -2393,6 +2443,48 @@ export async function runWorkflowRuntimeMaintenancePass(params: {
           lastError: entry.lastError ?? null,
         },
       });
+      continue;
+    }
+    if (
+      shouldSuppressAutoDispatchQueueForMissingBinding({
+        entry,
+        workflowPolicy: params.workflowPolicy ?? null,
+      })
+    ) {
+      const error =
+        "Workflow repair replay was suppressed because automatic dispatch requires an active project binding.";
+      await markQueueFailed({
+        projectRoot,
+        projectId,
+        entry,
+        error,
+      });
+      await markLinkedSessionsFailed({
+        projectRoot,
+        queueKey: entry.queueKey,
+        error,
+      });
+      exhaustedQueueKeys.push(entry.queueKey);
+      incidents.push(
+        await recordWorkflowRuntimeIncident({
+          projectRoot,
+          projectId,
+          idempotencyKey: `binding-missing:${entry.queueKey}`,
+          kind: "binding_gate_mismatch",
+          severity: "warning",
+          summary:
+            "Workflow repair replay was suppressed because the project has no active workflow binding.",
+          queueKey: entry.queueKey,
+          sessionKey: entry.requesterSessionKey,
+          error,
+          details: {
+            gateReason: "binding_missing",
+            expectedProjectRoot: projectRoot,
+            source: entry.source,
+            kind: entry.kind,
+          },
+        })
+      );
       continue;
     }
     const bindingGate = await evaluateChannelProjectBindingGate({

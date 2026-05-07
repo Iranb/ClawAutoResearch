@@ -944,6 +944,29 @@ function isDormantQueuedRequest(request: PaperIngestionQueuedRequest): boolean {
   );
 }
 
+function isGraphBuildUploadRepairTrigger(
+  triggerKind: string | null | undefined
+): boolean {
+  const normalized = String(triggerKind ?? "").trim().toLowerCase();
+  return (
+    normalized === "graph_build_source_catchup" ||
+    normalized === "graph_build_repair_import" ||
+    normalized === "coordinator_heartbeat"
+  );
+}
+
+function isIgnorableGraphReadyQueuedUploadRequest(
+  request: PaperIngestionQueuedRequest
+): boolean {
+  return (
+    isPaperIngestionExecutableUploadRequest(request) &&
+    request.status === "queued" &&
+    (isGraphBuildUploadRepairTrigger(request.triggerKind) ||
+      request.requestId.startsWith("graph-build-source-catchup-") ||
+      request.requestId.startsWith("graph-build-repair-import-"))
+  );
+}
+
 function isDormantRequisitionRequest(request: PaperIngestionQueuedRequest): boolean {
   return (
     isPaperIngestionRequisitionRequest(request) &&
@@ -1110,13 +1133,26 @@ export function derivePaperIngestionWorkflowDecision(params: {
     (request) => request.status === "failed"
   );
   const dormantQueuedRequests = queuedRequests.filter(isDormantQueuedRequest);
+  const graphReadyIgnoredQueuedRequests = queuedRequests.filter(
+    (request) =>
+      isDormantQueuedRequest(request) ||
+      isIgnorableGraphReadyQueuedUploadRequest(request)
+  );
   const terminalManifestPaths = getTerminalPaperIngestionRequestManifestPaths(params.state);
   const activeBatches = params.state.activeBatches.filter((batch) =>
     ["queued", "running"].includes(normalizeStage(batch.status) ?? "") &&
+    !batch.finishedAt &&
     !isBatchShadowedByTerminalRequest(batch, terminalManifestPaths)
   );
+  const queuedActiveBatches = activeBatches.filter(
+    (batch) => normalizeStage(batch.status) === "queued"
+  );
+  const runningActiveBatches = activeBatches.filter(
+    (batch) => normalizeStage(batch.status) === "running"
+  );
   const activeOperations = params.state.paperOperations.filter((operation) =>
-    ["queued", "running"].includes(normalizeStage(operation.status) ?? "")
+    ["queued", "running"].includes(normalizeStage(operation.status) ?? "") &&
+    !operation.finishedAt
   );
   const failedOperations = params.state.paperOperations.filter((operation) =>
     ["failed", "timed_out"].includes(normalizeStage(operation.status) ?? "")
@@ -1131,13 +1167,14 @@ export function derivePaperIngestionWorkflowDecision(params: {
     failedBatchItems.length +
     needsRepairRequests.length +
     invalidCompletedRequisitionRequests.length;
+  const blockingActiveBatches = graphPresenceReady ? [] : activeBatches;
   const hasConcreteActiveWork =
     launchingOrRunningRequests.length > 0 ||
-    activeBatches.length > 0 ||
+    blockingActiveBatches.length > 0 ||
     activeOperations.length > 0;
   const hardActiveCount =
     launchingOrRunningRequests.length +
-    activeBatches.length +
+    blockingActiveBatches.length +
     activeOperations.length +
     (runtimeActive && hasConcreteActiveWork ? 1 : 0);
 
@@ -1223,6 +1260,34 @@ export function derivePaperIngestionWorkflowDecision(params: {
       launchingOrRunningRequestCount: launchingOrRunningRequests.length,
       dormantQueuedRequestCount: dormantQueuedRequests.length,
       ignoredDormantQueuedRequestCount: 0,
+      needsRepairRequestCount: needsRepairRequests.length,
+      failedRequestCount: failedRequests.length,
+      activeBatchCount: activeBatches.length,
+      activeOperationCount: activeOperations.length,
+      failedOperationCount: failedOperations.length + failedBatchItems.length,
+    };
+  }
+
+  if (
+    graphPresenceReady &&
+    (queuedActiveBatches.length > 0 || runningActiveBatches.length > 0) &&
+    launchingOrRunningRequests.length === 0 &&
+    activeOperations.length === 0 &&
+    graphReadyIgnoredQueuedRequests.length === queuedRequests.length
+  ) {
+    return {
+      action: "continue",
+      blocking: false,
+      reason:
+        "graph presence is ready; ignoring stale graph-build PaperNexus batches that no longer gate frontier mapping",
+      graphPresenceReady,
+      requisitionRequestCount: requisitionRequests.length,
+      invalidCompletedRequisitionRequestCount:
+        invalidCompletedRequisitionRequests.length,
+      queuedRequestCount: queuedRequests.length,
+      launchingOrRunningRequestCount: launchingOrRunningRequests.length,
+      dormantQueuedRequestCount: dormantQueuedRequests.length,
+      ignoredDormantQueuedRequestCount: graphReadyIgnoredQueuedRequests.length,
       needsRepairRequestCount: needsRepairRequests.length,
       failedRequestCount: failedRequests.length,
       activeBatchCount: activeBatches.length,
@@ -1963,6 +2028,9 @@ function mergePaperIngestionQueuedRequestValues(
   current: PaperIngestionQueuedRequest,
   patch: PaperIngestionQueuedRequest
 ): PaperIngestionQueuedRequest {
+  const lifecycleRestart =
+    ["queued", "launching"].includes(patch.status) &&
+    ["completed", "failed", "needs_repair"].includes(current.status);
   const merged: PaperIngestionQueuedRequest = {
     requestId: current.requestId,
     requestKind: patch.requestKind ?? current.requestKind,
@@ -1974,13 +2042,25 @@ function mergePaperIngestionQueuedRequestValues(
     sharedCorpus: patch.sharedCorpus ?? current.sharedCorpus,
     paperCount: patch.paperCount ?? current.paperCount,
     summary: patch.summary ?? current.summary,
-    createdAt: current.createdAt ?? patch.createdAt,
+    createdAt: lifecycleRestart
+      ? patch.createdAt ?? current.createdAt
+      : current.createdAt ?? patch.createdAt,
     updatedAt: patch.updatedAt ?? current.updatedAt,
-    startedAt: patch.startedAt ?? current.startedAt,
-    finishedAt: patch.finishedAt ?? current.finishedAt,
-    lastRunId: patch.lastRunId ?? current.lastRunId,
-    lastSessionKey: patch.lastSessionKey ?? current.lastSessionKey,
-    lastError: patch.lastError ?? current.lastError,
+    startedAt: lifecycleRestart
+      ? patch.startedAt
+      : patch.startedAt ?? current.startedAt,
+    finishedAt: lifecycleRestart
+      ? patch.finishedAt
+      : patch.finishedAt ?? current.finishedAt,
+    lastRunId: lifecycleRestart
+      ? patch.lastRunId
+      : patch.lastRunId ?? current.lastRunId,
+    lastSessionKey: lifecycleRestart
+      ? patch.lastSessionKey
+      : patch.lastSessionKey ?? current.lastSessionKey,
+    lastError: lifecycleRestart
+      ? patch.lastError
+      : patch.lastError ?? current.lastError,
     detail: patch.detail ?? current.detail,
     triggerKind: patch.triggerKind ?? current.triggerKind,
     progress: mergePaperIngestionRemoteTaskProgress(
@@ -1992,18 +2072,31 @@ function mergePaperIngestionQueuedRequestValues(
       patch.queueProgress
     ),
     validationStatus:
-      patch.validationStatus !== "unknown"
+      lifecycleRestart || patch.validationStatus !== "unknown"
         ? patch.validationStatus
         : current.validationStatus,
-    validationSummary: patch.validationSummary ?? current.validationSummary,
-    validationReportPath:
-      patch.validationReportPath ?? current.validationReportPath,
-    attemptCount: Math.max(current.attemptCount, patch.attemptCount),
+    validationSummary: lifecycleRestart
+      ? patch.validationSummary
+      : patch.validationSummary ?? current.validationSummary,
+    validationReportPath: lifecycleRestart
+      ? patch.validationReportPath
+      : patch.validationReportPath ?? current.validationReportPath,
+    attemptCount: lifecycleRestart
+      ? patch.attemptCount
+      : Math.max(current.attemptCount, patch.attemptCount),
     maxAttempts: patch.maxAttempts ?? current.maxAttempts,
-    lastAttemptAt: patch.lastAttemptAt ?? current.lastAttemptAt,
-    nextRetryAt: patch.nextRetryAt ?? current.nextRetryAt,
-    deadLetterAt: patch.deadLetterAt ?? current.deadLetterAt,
-    deadLetterReason: patch.deadLetterReason ?? current.deadLetterReason,
+    lastAttemptAt: lifecycleRestart
+      ? patch.lastAttemptAt
+      : patch.lastAttemptAt ?? current.lastAttemptAt,
+    nextRetryAt: lifecycleRestart
+      ? patch.nextRetryAt
+      : patch.nextRetryAt ?? current.nextRetryAt,
+    deadLetterAt: lifecycleRestart
+      ? patch.deadLetterAt
+      : patch.deadLetterAt ?? current.deadLetterAt,
+    deadLetterReason: lifecycleRestart
+      ? patch.deadLetterReason
+      : patch.deadLetterReason ?? current.deadLetterReason,
   };
   return {
     ...merged,

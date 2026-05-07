@@ -77,6 +77,11 @@ test("research setter module persists manifest updates", async (t) => {
     projectRoot,
     experimentSearch: {
       status: "ready_for_analysis",
+      baselineExperimentId: "exp-baseline",
+      frontierExperimentIds: ["exp-frontier"],
+      completedExperimentIds: ["exp-done"],
+      failedExperimentIds: ["exp-failed"],
+      discardedExperimentIds: ["exp-discarded"],
       multiSeedStatus: "ready",
       plotPackStatus: "ready",
       evaluationSummaryPath: "researcher/EXPERIMENT_EVAL.md",
@@ -85,6 +90,19 @@ test("research setter module persists manifest updates", async (t) => {
   });
   assert.equal(searchResult.stateFileExists, true);
   assert.equal(searchResult.readyForAnalysis, true);
+  assert.equal(searchResult.state.baselineExperimentId, "exp-baseline");
+  assert.deepEqual(searchResult.state.frontierExperimentIds, ["exp-frontier"]);
+  assert.deepEqual(searchResult.state.completedExperimentIds, ["exp-done"]);
+  assert.deepEqual(searchResult.state.failedExperimentIds, ["exp-failed"]);
+  assert.deepEqual(searchResult.state.discardedExperimentIds, ["exp-discarded"]);
+  const persistedSearch = JSON.parse(
+    await fs.readFile(searchResult.stateFilePath, "utf8")
+  );
+  assert.equal(persistedSearch.baseline_experiment_id, "exp-baseline");
+  assert.deepEqual(persistedSearch.frontier_experiment_ids, ["exp-frontier"]);
+  assert.deepEqual(persistedSearch.completed_experiment_ids, ["exp-done"]);
+  assert.deepEqual(persistedSearch.failed_experiment_ids, ["exp-failed"]);
+  assert.deepEqual(persistedSearch.discarded_experiment_ids, ["exp-discarded"]);
 
   const brainstormResult = await setBrainstormCycleState({
     projectRoot,

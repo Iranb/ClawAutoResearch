@@ -426,6 +426,7 @@ type AutoStageLaunchAttempt = {
     | "auto_mode_disabled"
     | "risk_discussion_pending"
     | "no_runtime_subagent"
+    | "binding_missing"
     | "session_pool_full"
     | "gate_blocked"
     | "no_drive_stage_action"
@@ -498,6 +499,7 @@ type AutoModeDiscussionAttempt = {
     | "disabled"
     | "stable"
     | "no_runtime_subagent"
+    | "binding_missing"
     | "reviewing"
     | "started"
     | "updated"
@@ -577,6 +579,7 @@ type AutoModeMitigationDispatchAttempt = {
   reason:
     | "not_needed"
     | "no_runtime_subagent"
+    | "binding_missing"
     | "session_pool_full"
     | "already_dispatched"
     | "dispatch_failed"
@@ -1102,6 +1105,20 @@ function resolveWorkflowRequesterBinding(params: {
     messageChannel: binding?.messageChannel ?? null,
     channelKey: binding?.channelKey ?? null,
   };
+}
+
+function hasWorkflowProjectBinding(params: {
+  projectRoot: string;
+  workflowPolicy?: ReturnType<PluginRegistrationContext["getWorkflowPolicy"]>;
+  deps?: Partial<WorkflowCoordinatorDependencies>;
+}): boolean {
+  const deps = resolveWorkflowCoordinatorDependencies(params.deps);
+  const bindings = deps.listChannelProjectBindingsForWorkflow({
+    policy: params.workflowPolicy,
+  });
+  return bindings.bindings.some(
+    (entry) => path.resolve(entry.projectRoot) === path.resolve(params.projectRoot)
+  );
 }
 
 function resolveWorkflowCoordinationKey(params: {
@@ -2968,6 +2985,7 @@ export async function maybeLaunchAutoStageForProject(params: {
                     "auto_mode_disabled",
                     "risk_discussion_pending",
                     "gate_blocked",
+                    "binding_missing",
                     "cooldown_active",
                     "already_launched",
                     "session_pool_full",
@@ -3057,6 +3075,37 @@ export async function maybeLaunchAutoStageForProject(params: {
           dispatchStrategy: null,
           launchKey: null,
           error: null,
+          reusedServiceSession: false,
+          activeResearcherSessionsInChannel: null,
+        });
+      }
+      const requesterBinding = resolveWorkflowRequesterBinding({
+        projectRoot: params.projectRoot,
+        workflowPolicy: params.workflowPolicy,
+        deps,
+      });
+      if (
+        params.workflowPolicy.enableChannelProjectBindings === true &&
+        !hasWorkflowProjectBinding({
+          projectRoot: params.projectRoot,
+          workflowPolicy: params.workflowPolicy,
+          deps,
+        })
+      ) {
+        params.launchedStageKeys.delete(params.projectRoot);
+        return finalizeAttempt({
+          launched: false,
+          reason: "binding_missing",
+          projectId: params.projectId,
+          projectRoot: params.projectRoot,
+          stage: params.autoIteratorResult.stageAfter ?? null,
+          owner: null,
+          sessionKey: null,
+          runId: null,
+          dispatchStrategy: null,
+          launchKey: null,
+          error:
+            "Channel-project bindings are enabled, but this project has no active workflow binding.",
           reusedServiceSession: false,
           activeResearcherSessionsInChannel: null,
         });
@@ -3203,11 +3252,6 @@ export async function maybeLaunchAutoStageForProject(params: {
         });
       }
 
-      const requesterBinding = resolveWorkflowRequesterBinding({
-        projectRoot: params.projectRoot,
-        workflowPolicy: params.workflowPolicy,
-        deps,
-      });
       const requesterSessionKey = requesterBinding.sessionKey;
       const defaultResearcherRequesterSessionKey =
         requesterSessionKey ?? "agent:researcher:main";
@@ -5363,7 +5407,6 @@ export async function maybeAdvanceAutoModeDiscussionForProject(params: {
           resolved: false,
         });
       }
-
       const packet = await materializeAutoModeDiscussionPacket({
         projectRoot: params.projectRoot,
         projectId: params.projectId,
@@ -5619,6 +5662,35 @@ export async function maybeAdvanceAutoModeDiscussionForProject(params: {
         return completeWithLocalAutoModeDiscussion(
           "local_static_discussion_no_runtime"
         );
+      }
+      if (
+        params.workflowPolicy.enableChannelProjectBindings === true &&
+        !hasWorkflowProjectBinding({
+          projectRoot: params.projectRoot,
+          workflowPolicy: params.workflowPolicy,
+          deps,
+        })
+      ) {
+        return finish({
+          launched: false,
+          reason: "binding_missing",
+          projectId: params.projectId,
+          projectRoot: params.projectRoot,
+          fingerprint: packet.packetFingerprint,
+          stage: params.autoIteratorResult.stageAfter ?? null,
+          riskLevel,
+          status: null,
+          reviewCount: 0,
+          roundsStarted,
+          recommendedOwner: null,
+          actionItems: [],
+          blockers: [],
+          summary:
+            "Channel-project bindings are enabled, but this project has no active workflow binding.",
+          roundId: null,
+          packetPath: packet.packetPath,
+          resolved: false,
+        });
       }
 
       const requesterBinding = resolveWorkflowRequesterBinding({
@@ -5930,6 +6002,37 @@ export async function maybeDispatchAutoModeMitigationForProject(params: {
         params.discussionAttempt.recommendedOwner ??
         params.autoIteratorResult.ownerAfter ??
         "researcher";
+      const requesterBinding = resolveWorkflowRequesterBinding({
+        projectRoot: params.projectRoot,
+        workflowPolicy: params.workflowPolicy,
+        deps,
+      });
+      if (
+        params.workflowPolicy.enableChannelProjectBindings === true &&
+        !hasWorkflowProjectBinding({
+          projectRoot: params.projectRoot,
+          workflowPolicy: params.workflowPolicy,
+          deps,
+        })
+      ) {
+        params.launchedMitigationKeys.delete(params.projectRoot);
+        return {
+          launched: false,
+          reason: "binding_missing",
+          projectId: params.projectId,
+          projectRoot: params.projectRoot,
+          fingerprint: params.discussionAttempt.fingerprint,
+          stage: params.discussionAttempt.stage,
+          owner,
+          sessionKey: null,
+          runId: null,
+          dispatchStrategy: null,
+          error:
+            "Channel-project bindings are enabled, but this project has no active workflow binding.",
+          reusedServiceSession: false,
+          activeResearcherSessionsInChannel: null,
+        };
+      }
       const launchKey = buildAutoMitigationLaunchKey({
         projectRoot: params.projectRoot,
         fingerprint: params.discussionAttempt.fingerprint,
@@ -5962,11 +6065,6 @@ export async function maybeDispatchAutoModeMitigationForProject(params: {
         };
       }
 
-      const requesterBinding = resolveWorkflowRequesterBinding({
-        projectRoot: params.projectRoot,
-        workflowPolicy: params.workflowPolicy,
-        deps,
-      });
       const requesterSessionKey = requesterBinding.sessionKey;
       const defaultResearcherRequesterSessionKey =
         requesterSessionKey ?? "agent:researcher:main";

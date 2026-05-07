@@ -15,6 +15,7 @@ import {
   bindChannelProjectForWorkflow,
   ensureWorkflowProjectRoot,
   getPaperIngestionStateSummary,
+  listChannelProjectBindingsForWorkflow,
   setPaperIngestionState,
   type PaperIngestionQueuedRequest,
   type PaperIngestionState,
@@ -142,6 +143,23 @@ function buildPapernexusRemoteAccessConfigFromPolicy(
     sshTarget: workflowPolicy.papernexusSshTarget,
     remoteStagingRoot: workflowPolicy.papernexusRemoteStagingRoot,
   };
+}
+
+function appendBatchImportSubmitRemoteStagingArgsForPolicy(
+  args: string[],
+  workflowPolicy: WorkflowGuardPolicy
+) {
+  if (!args.includes("submit")) {
+    return;
+  }
+  const sshTarget = readString(workflowPolicy.papernexusSshTarget);
+  if (sshTarget && !args.includes("--ssh-target")) {
+    args.push("--ssh-target", sshTarget);
+  }
+  const remoteStagingRoot = readString(workflowPolicy.papernexusRemoteStagingRoot);
+  if (remoteStagingRoot && !args.includes("--remote-staging-root")) {
+    args.push("--remote-staging-root", remoteStagingRoot);
+  }
 }
 
 function readAgentIdFromSessionKey(sessionKey: string | null | undefined): string | null {
@@ -637,6 +655,50 @@ function backgroundRunRegistryEntryMatchesProject(
 
 function isBackgroundQueueEntryPending(entry: BackgroundWorkflowQueueEntry): boolean {
   return ["queued", "launching", "degraded", "needs_repair"].includes(entry.status);
+}
+
+function isAutoDispatchQueueEntry(entry: BackgroundWorkflowQueueEntry): boolean {
+  return (
+    entry.entryType === "dispatch_task" &&
+    (entry.source === "workflow_auto_stage" ||
+      entry.source === "workflow_auto_mitigation")
+  );
+}
+
+function hasDurableProjectBindingForWorkflowQueue(params: {
+  workflowPolicy?: WorkflowGuardPolicy | null;
+  projectRoot: string | null | undefined;
+}): boolean {
+  const projectRoot = readString(params.projectRoot);
+  if (!projectRoot) {
+    return false;
+  }
+  const bindings = listChannelProjectBindingsForWorkflow({
+    policy: params.workflowPolicy ?? undefined,
+    workspaceDir: projectRoot,
+  });
+  return bindings.bindings.some(
+    (entry) => path.resolve(entry.projectRoot) === path.resolve(projectRoot)
+  );
+}
+
+function shouldSuppressAutoDispatchQueueForMissingBinding(params: {
+  entry: BackgroundWorkflowQueueEntry;
+  workflowPolicy?: WorkflowGuardPolicy | null;
+}): boolean {
+  if (params.workflowPolicy?.enableChannelProjectBindings !== true) {
+    return false;
+  }
+  if (!isAutoDispatchQueueEntry(params.entry)) {
+    return false;
+  }
+  const projectRoot =
+    readString(params.entry.projectRoot) ??
+    readString(params.entry.dispatchPayload?.projectRoot);
+  return !hasDurableProjectBindingForWorkflowQueue({
+    workflowPolicy: params.workflowPolicy,
+    projectRoot,
+  });
 }
 
 function isBackgroundQueueEntryBlockingPending(
@@ -2208,10 +2270,9 @@ export async function enqueueQueuedBackgroundWorkflowRun(params: {
 
 export async function drainQueuedBackgroundWorkflowRuns(params: {
   workflowRuntime?: WorkflowRuntimeApi;
-  workflowPolicy?: {
+  workflowPolicy?: (WorkflowGuardPolicy & {
     lobsterHandoff?: WorkflowLobsterHandoffConfig;
-    projectsRoot?: string;
-  } | null;
+  }) | null;
   projectsRoot?: string | null;
   ignoreRetryBackoff?: boolean;
   handoffWorkflowTaskToAgent?: typeof handoffWorkflowTaskToAgent;
@@ -2287,6 +2348,34 @@ export async function drainQueuedBackgroundWorkflowRuns(params: {
       Number.isFinite(lastAttemptedAtMs) &&
       Date.now() - lastAttemptedAtMs < BACKGROUND_QUEUE_RETRY_BACKOFF_MS
     ) {
+      continue;
+    }
+    if (
+      shouldSuppressAutoDispatchQueueForMissingBinding({
+        entry,
+        workflowPolicy: params.workflowPolicy ?? null,
+      })
+    ) {
+      const error =
+        "Queued workflow auto-dispatch is missing an active project binding; notification-only targets cannot replay automatic work.";
+      await touchBackgroundWorkflowQueueEntry({
+        entry,
+        error,
+        status: "failed",
+      });
+      await appendBackgroundWorkflowRuntimeEvent({
+        projectRoot: entry.projectRoot,
+        projectId: entry.projectId,
+        kind: "background_queue_binding_missing",
+        summary: error,
+        details: {
+          queueKey: entry.queueKey,
+          source: entry.source,
+          entryType: entry.entryType,
+          projectRoot: entry.projectRoot,
+          projectId: entry.projectId,
+        },
+      });
       continue;
     }
 
@@ -3056,6 +3145,52 @@ function hasDirectPapernexusBatchExecutionConfig(
   );
 }
 
+function materializeQueuedPapernexusBatchRequestCommand(params: {
+  request: PaperIngestionQueuedRequest;
+  workflowPolicy: WorkflowGuardPolicy;
+}): PaperIngestionQueuedRequest {
+  if (params.request.commandText) {
+    return params.request;
+  }
+  if (!isPapernexusBatchImportLifecycleRequest(params.request)) {
+    return params.request;
+  }
+  const existingArgs = params.request.args.length > 0 ? [...params.request.args] : [];
+  const manifestPath = readString(params.request.manifestPath);
+  const args = existingArgs.length > 0 ? existingArgs : [];
+  if (args.length === 0) {
+    const mcpUrl = readString(params.workflowPolicy.papernexusMcpUrl);
+    const apiBaseUrl = readString(params.workflowPolicy.papernexusApiBaseUrl);
+    if (mcpUrl) {
+      args.push("--mcp-url", mcpUrl);
+    } else if (apiBaseUrl) {
+      args.push("--api-base", apiBaseUrl);
+    }
+    const sharedCorpus =
+      readString(params.request.sharedCorpus) ??
+      readString(params.workflowPolicy.papernexusSharedCorpus);
+    if (sharedCorpus) {
+      args.push("--corpus", sharedCorpus);
+    }
+    if (manifestPath) {
+      args.push("--manifest", manifestPath, "submit");
+    }
+  }
+  appendBatchImportSubmitRemoteStagingArgsForPolicy(args, params.workflowPolicy);
+  if (args.length === 0) {
+    return params.request;
+  }
+  return {
+    ...params.request,
+    wrapper: params.request.wrapper ?? "pn_batch_import.py",
+    args,
+    commandText: buildPapernexusWrapperCommand({
+      wrapper: "pn_batch_import.py",
+      args,
+    }),
+  };
+}
+
 function readPapernexusArgValue(args: string[], names: string[]): string | null {
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
@@ -3623,7 +3758,7 @@ export async function maybeTriggerQueuedPaperIngestionRequest(params: {
   const executableRequests = ingestion.state.queuedRequests.filter((entry) =>
     isPaperIngestionExecutableUploadRequest(entry)
   );
-  const queuedCandidate =
+  const queuedCandidateRaw =
     executableRequests.find((entry) =>
       isQueuedPaperIngestionRetryDue(entry, now)
     ) ??
@@ -3632,6 +3767,12 @@ export async function maybeTriggerQueuedPaperIngestionRequest(params: {
           ["launching", "running"].includes(entry.status)
         ) ?? null
       : null);
+  const queuedCandidate = queuedCandidateRaw
+    ? materializeQueuedPapernexusBatchRequestCommand({
+        request: queuedCandidateRaw,
+        workflowPolicy: params.workflowPolicy,
+      })
+    : null;
   if (!queuedCandidate || !queuedCandidate.commandText) {
     return maybeTriggerQueuedLiteratureRequisitionRequest({
       workflowRuntime: params.workflowRuntime,
