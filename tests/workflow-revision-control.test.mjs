@@ -310,8 +310,26 @@ test("materializeRevisionControlState ignores external reviews that only require
   await writeJson(path.join(projectRoot, ".openclaw-research", "workflow-hooks-state.json"), {
     schemaVersion: 1,
     updated_at: new Date().toISOString(),
-    hook_points: {},
-    hooks: {},
+    hook_points: {
+      before_stage_handoff: {
+        submit: {
+          aggregate_status: "revise_requested",
+          aggregate_verdict: "revise",
+          updated_at: "2026-05-07T10:04:12.000Z",
+        },
+      },
+    },
+    hooks: {
+      "builtin.submit-readiness:submit": {
+        hook_id: "builtin.submit-readiness:submit",
+        stage: "submit",
+        hook_point: "before_stage_handoff",
+        status: "revise_requested",
+        last_verdict: "revise",
+        blocked_reason: "Submit transition still requires manual confirmation.",
+        updated_at: "2026-05-07T10:04:12.000Z",
+      },
+    },
   });
 
   const result = await materializeRevisionControlState({
@@ -321,4 +339,232 @@ test("materializeRevisionControlState ignores external reviews that only require
 
   assert.equal(result.state.status, "idle");
   assert.equal(result.state.openSources.length, 0);
+});
+
+test("materializeRevisionControlState keeps non-human submit readiness failures as revision sources", async (t) => {
+  const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-revision-control-submit-failure-"));
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "demo-project",
+    current_stage: "submit",
+    external_review_state: {
+      status: "missing",
+    },
+  });
+  await writeJson(path.join(projectRoot, ".openclaw-research", "workflow-hooks-state.json"), {
+    schemaVersion: 1,
+    updated_at: new Date().toISOString(),
+    hook_points: {
+      before_stage_handoff: {
+        submit: {
+          aggregate_status: "failed",
+          aggregate_verdict: "block",
+          updated_at: "2026-05-07T10:04:12.000Z",
+        },
+      },
+    },
+    hooks: {
+      "builtin.submit-readiness:submit": {
+        hook_id: "builtin.submit-readiness:submit",
+        stage: "submit",
+        hook_point: "before_stage_handoff",
+        status: "failed",
+        last_verdict: "block",
+        blocked_reason: "Submit readiness thresholds are not satisfied.",
+        updated_at: "2026-05-07T10:04:12.000Z",
+      },
+    },
+  });
+
+  const result = await materializeRevisionControlState({
+    projectRoot,
+    stage: "submit",
+  });
+
+  assert.equal(result.state.status, "active");
+  assert.equal(result.state.openSources.length, 1);
+  assert.equal(result.state.openSources[0].sourceId, "builtin.submit-readiness:submit");
+});
+
+test("materializeRevisionControlState drops stale builtin auto-mode risk hooks after risk stabilizes", async (t) => {
+  const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-revision-control-auto-risk-"));
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "demo-project",
+    current_stage: "write",
+    auto_dispatch_diagnostics: {
+      status: "waiting",
+      blocking_layer: "hook",
+      blocking_reason: "revision_control_active",
+      risk_fingerprint: null,
+    },
+    auto_mode_remediation: {
+      status: "resolved",
+    },
+    review_issue_tracker: {
+      status: "resolved",
+      open_counts: {
+        critical: 0,
+        high: 0,
+        medium: 0,
+        low: 0,
+      },
+      issues: [],
+    },
+    external_review_state: {
+      status: "received",
+      required_action: "human_decision",
+    },
+  });
+  await writeJson(path.join(projectRoot, ".openclaw-research", "workflow-hooks-state.json"), {
+    schemaVersion: 1,
+    updated_at: "2026-05-07T09:46:53.968Z",
+    hook_points: {
+      before_stage_handoff: {
+        idea: {
+          aggregate_status: "revise_requested",
+          aggregate_verdict: "revise",
+          updated_at: "2026-05-07T09:20:00.000Z",
+        },
+        setup: {
+          aggregate_status: "failed",
+          aggregate_verdict: "block",
+          updated_at: "2026-05-07T09:20:00.000Z",
+        },
+      },
+    },
+    hooks: {
+      "builtin.auto-mode-risk:idea": {
+        hook_id: "builtin.auto-mode-risk:idea",
+        stage: "idea",
+        hook_point: "before_stage_handoff",
+        status: "failed",
+        blocked_reason: "Auto-mode risk discussion still reports blocking issues.",
+        updated_at: "2026-05-07T09:20:00.000Z",
+      },
+      "builtin.auto-mode-risk:setup": {
+        hook_id: "builtin.auto-mode-risk:setup",
+        stage: "setup",
+        hook_point: "before_stage_handoff",
+        status: "failed",
+        blocked_reason: "PROJECT_MANIFEST.json.idle_research",
+        updated_at: "2026-05-07T09:20:00.000Z",
+      },
+    },
+  });
+
+  const result = await materializeRevisionControlState({
+    projectRoot,
+    stage: "write",
+  });
+
+  assert.equal(result.state.status, "idle");
+  assert.deepEqual(result.state.openSources, []);
+});
+
+test("materializeRevisionControlState keeps builtin auto-mode risk hooks while risk is current", async (t) => {
+  const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-revision-control-active-risk-"));
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "demo-project",
+    current_stage: "write",
+    auto_dispatch_diagnostics: {
+      status: "degraded",
+      blocking_layer: "risk",
+      risk_fingerprint: "risk-write-1",
+    },
+  });
+  await writeJson(path.join(projectRoot, ".openclaw-research", "workflow-hooks-state.json"), {
+    schemaVersion: 1,
+    updated_at: "2026-05-07T09:46:53.968Z",
+    hook_points: {
+      before_stage_handoff: {
+        write: {
+          aggregate_status: "revise_requested",
+          aggregate_verdict: "revise",
+          updated_at: "2026-05-07T09:46:53.968Z",
+        },
+      },
+    },
+    hooks: {
+      "builtin.auto-mode-risk:write": {
+        hook_id: "builtin.auto-mode-risk:write",
+        stage: "write",
+        hook_point: "before_stage_handoff",
+        status: "revise_requested",
+        blocked_reason: "Auto-mode risk discussion requested another mitigation pass.",
+        updated_at: "2026-05-07T09:46:53.968Z",
+      },
+    },
+  });
+
+  const result = await materializeRevisionControlState({
+    projectRoot,
+    stage: "write",
+  });
+
+  assert.equal(result.state.status, "active");
+  assert.equal(result.state.openSources.length, 1);
+  assert.equal(result.state.openSources[0].sourceId, "builtin.auto-mode-risk:write");
+});
+
+test("materializeRevisionControlState does not let stale remediation hide current auto-mode risk", async (t) => {
+  const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-revision-control-current-risk-"));
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "demo-project",
+    current_stage: "write",
+    auto_dispatch_diagnostics: {
+      status: "degraded",
+      blocking_layer: "risk",
+      risk_fingerprint: "risk-write-2",
+    },
+    auto_mode_remediation: {
+      status: "resolved",
+    },
+  });
+  await writeJson(path.join(projectRoot, ".openclaw-research", "workflow-hooks-state.json"), {
+    schemaVersion: 1,
+    updated_at: "2026-05-07T09:46:53.968Z",
+    hook_points: {
+      before_stage_handoff: {
+        write: {
+          aggregate_status: "revise_requested",
+          aggregate_verdict: "revise",
+          updated_at: "2026-05-07T09:46:53.968Z",
+        },
+      },
+    },
+    hooks: {
+      "builtin.auto-mode-risk:write": {
+        hook_id: "builtin.auto-mode-risk:write",
+        stage: "write",
+        hook_point: "before_stage_handoff",
+        status: "revise_requested",
+        blocked_reason: "Auto-mode risk discussion requested another mitigation pass.",
+        updated_at: "2026-05-07T09:46:53.968Z",
+      },
+    },
+  });
+
+  const result = await materializeRevisionControlState({
+    projectRoot,
+    stage: "write",
+  });
+
+  assert.equal(result.state.status, "active");
+  assert.equal(result.state.openSources.length, 1);
+  assert.equal(result.state.openSources[0].sourceId, "builtin.auto-mode-risk:write");
 });

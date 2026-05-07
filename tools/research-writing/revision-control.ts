@@ -61,6 +61,23 @@ function readNumberField(record: Record<string, unknown> | null, keys: string[])
   return 0;
 }
 
+function readStringField(record: Record<string, unknown> | null, keys: string[]): string | null {
+  if (!record) {
+    return null;
+  }
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+  }
+  return null;
+}
+
+function isResolvedStatus(value: unknown): boolean {
+  return typeof value === "string" && value.trim().toLowerCase() === "resolved";
+}
+
 function countRegistryEntries(record: Record<string, unknown> | null): number {
   const entries = record?.entries;
   return Array.isArray(entries) ? entries.length : 0;
@@ -91,6 +108,32 @@ async function projectArtifactExists(
     return false;
   }
   return (await readTextIfExists(resolved)) !== null;
+}
+
+function hasCurrentAutoModeRisk(manifest: Record<string, unknown>): boolean | null {
+  const diagnostics = readRecord(manifest.auto_dispatch_diagnostics);
+  if (!diagnostics) {
+    return null;
+  }
+  const riskFingerprint = readStringField(diagnostics, [
+    "risk_fingerprint",
+    "riskFingerprint",
+  ]);
+  const blockingLayer = readStringField(diagnostics, [
+    "blocking_layer",
+    "blockingLayer",
+  ]);
+  if (riskFingerprint) {
+    return true;
+  }
+  return blockingLayer === "risk" ? true : false;
+}
+
+function hasResolvedAutoModeRemediation(manifest: Record<string, unknown>): boolean {
+  return (
+    isResolvedStatus(readRecord(manifest.auto_mode_remediation)?.status) ||
+    isResolvedStatus(readRecord(manifest.auto_mode_risk_remediation)?.status)
+  );
 }
 
 async function readFigureTableBudget(projectRoot: string): Promise<{
@@ -124,6 +167,13 @@ async function isResolvedBuiltinAutoModeRiskSource(params: {
   ) {
     return false;
   }
+  const currentAutoModeRisk = hasCurrentAutoModeRisk(params.manifest);
+  if (currentAutoModeRisk === true) {
+    return false;
+  }
+  if (currentAutoModeRisk === false || hasResolvedAutoModeRemediation(params.manifest)) {
+    return true;
+  }
   const summary = params.source.summary ?? "";
   if (
     isWorkflowRuntimeTrackingMissError(summary) &&
@@ -153,6 +203,14 @@ async function isResolvedBuiltinAutoModeRiskSource(params: {
   return false;
 }
 
+function isHumanGateBuiltinSubmitReadinessSource(source: RevisionControlSource): boolean {
+  return (
+    source.sourceType === "file_audit" &&
+    source.sourceId.startsWith("builtin.submit-readiness:") &&
+    /manual confirmation/i.test(source.summary ?? "")
+  );
+}
+
 async function filterResolvedHookSources(params: {
   projectRoot: string;
   manifest: Record<string, unknown>;
@@ -160,6 +218,9 @@ async function filterResolvedHookSources(params: {
 }): Promise<RevisionControlSource[]> {
   const filtered: RevisionControlSource[] = [];
   for (const source of params.sources) {
+    if (isHumanGateBuiltinSubmitReadinessSource(source)) {
+      continue;
+    }
     if (
       await isResolvedBuiltinAutoModeRiskSource({
         projectRoot: params.projectRoot,
