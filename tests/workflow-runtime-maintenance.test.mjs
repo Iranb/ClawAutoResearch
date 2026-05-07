@@ -182,6 +182,118 @@ test("runWorkflowRuntimeMaintenancePass replays repairable background transition
   );
 });
 
+test("runWorkflowRuntimeMaintenancePass recreates a failed background transition after runtime tracking loss", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  const queueKey = "repair:bg:tracking-loss";
+  const originalSessionKey = "agent:researcher:discord:group:paper-lab:subagent:bg-lost";
+
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await makeProject(projectRoot, "tracking-loss-alpha");
+  await migrateWorkflowRuntimeState({
+    projectRoot,
+    projectId: "tracking-loss-alpha",
+    compatibilityMode: "sessions_spawn_runtime",
+    reason: "test_bootstrap",
+  });
+
+  await createWorkflowTransitionIntent({
+    projectRoot,
+    projectId: "tracking-loss-alpha",
+    queueKey,
+    source: "start_background_run",
+    entryType: "background_run",
+    ownerAgent: "researcher",
+    channelKey: "discord:group:paper-lab",
+    requesterSessionKey: "agent:researcher:discord:group:paper-lab",
+    preferredSessionKey: originalSessionKey,
+    family: "research",
+    kind: "research_pipeline",
+    summary: "Resume the research pipeline after session-store loss.",
+    runPayload: {
+      message: "Continue the research pipeline from durable state.",
+      lane: "nested",
+      deliver: false,
+      idempotencyKey: "tracking-loss-original",
+      extraSystemPrompt: "Stay bounded.",
+    },
+  });
+
+  const queueStore = await readWorkflowRuntimeQueueStore(projectRoot);
+  await writeWorkflowRuntimeQueueStore({
+    projectRoot,
+    projectId: "tracking-loss-alpha",
+    entries: queueStore.entries.map((entry) =>
+      entry.queueKey === queueKey
+        ? {
+            ...entry,
+            status: "failed",
+            attemptCount: 3,
+            lastAttemptedAt: "2026-04-10T09:00:00.000Z",
+            lastCheckedAt: "2026-04-10T09:00:00.000Z",
+            lastError:
+              "Workflow runtime session is missing from the underlying session store.",
+          }
+        : entry
+    ),
+  });
+
+  const started = [];
+  const result = await runWorkflowRuntimeMaintenancePass({
+    projectRoot,
+    projectId: "tracking-loss-alpha",
+    workflowRuntime: {
+      async run(params) {
+        started.push(params);
+        return { runId: "tracking-loss-replayed-run", sessionId: "tracking-loss-session" };
+      },
+    },
+    maxRepairAttempts: 3,
+    staleSessionAgeMs: 365 * 24 * 60 * 60 * 1000,
+  });
+
+  assert.deepEqual(result.replayedQueueKeys, [queueKey]);
+  assert.equal(started.length, 1);
+  assert.notEqual(started[0].sessionKey, originalSessionKey);
+  assert.match(started[0].sessionKey, /^agent:researcher:runtime-repair:/);
+  assert.match(
+    started[0].idempotencyKey,
+    /^workflow-runtime-tracking-loss-repair:/
+  );
+  assert.match(
+    started[0].extraSystemPrompt,
+    /previous workflow session disappeared from the underlying session store/
+  );
+
+  const refreshedQueue = await readWorkflowRuntimeQueueStore(projectRoot);
+  const entry = refreshedQueue.entries.find((candidate) => candidate.queueKey === queueKey);
+  assert.equal(entry?.status, "running");
+  assert.equal(entry?.attemptCount, 4);
+  assert.equal(entry?.preferredSessionKey, started[0].sessionKey);
+
+  const refreshedSessions = await readWorkflowRuntimeSessionsStore(projectRoot);
+  assert.equal(
+    refreshedSessions.entries.some(
+      (candidate) =>
+        candidate.queueKey === queueKey &&
+        candidate.sessionKey === started[0].sessionKey &&
+        candidate.status === "active"
+    ),
+    true
+  );
+
+  const diagnostics = await readWorkflowDiagnosticEvents(projectRoot);
+  assert.ok(
+    diagnostics.some(
+      (event) =>
+        event.component === "runtime_maintenance" &&
+        event.action === "tracking_loss_failed_queue_requeued"
+    )
+  );
+});
+
 test("runWorkflowRuntimeMaintenancePass retires research background queues after paper artifact readiness", async (t) => {
   const projectRoot = await makeProjectRoot();
   const queueKey = "research:bg:terminal-paper";
@@ -556,7 +668,8 @@ test("runWorkflowRuntimeMaintenancePass restores missing background queue entrie
   assert.deepEqual(result.replayedQueueKeys, [queueKey]);
   assert.deepEqual(result.exhaustedSessionKeys, []);
   assert.equal(started.length, 1);
-  assert.equal(started[0].sessionKey, requesterSessionKey);
+  assert.notEqual(started[0].sessionKey, requesterSessionKey);
+  assert.match(started[0].sessionKey, /^agent:researcher:runtime-repair:/);
   assert.match(started[0].message, /\/research-pipeline/);
   assert.match(started[0].message, /Use FixMatch insights to improve GCD/);
 
