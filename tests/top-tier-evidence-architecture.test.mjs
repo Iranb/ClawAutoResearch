@@ -378,3 +378,30 @@ test("citation audit enforces journal minimum count", async (t) => {
   assert.equal(citation.citationCountStatus, "needs_revision");
   assert.match(citation.issues.join(","), /minimum_count/i);
 });
+
+test("citation audit floors stale conference minimum count to thirty", async (t) => {
+  const projectRoot = await setupProject();
+  t.after(() => fs.rm(projectRoot, { recursive: true, force: true }));
+
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.writing_contract = {
+    ...(manifest.writing_contract ?? {}),
+    paper_mode: "conference",
+  };
+  manifest.citation_integrity = {
+    ...(manifest.citation_integrity ?? {}),
+    minimum_citation_count: 6,
+  };
+  await writeJson(manifestPath, manifest);
+
+  const citation = await materializeCitationAudit({ projectRoot });
+
+  assert.equal(citation.minimumCitationCount, 30);
+  assert.equal(citation.bibliographyEntryCount, 1);
+  assert.equal(citation.citationCountStatus, "needs_revision");
+  assert.match(citation.issues.join(","), /minimum_count/i);
+
+  const updatedManifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  assert.equal(updatedManifest.citation_integrity.minimum_citation_count, 30);
+});

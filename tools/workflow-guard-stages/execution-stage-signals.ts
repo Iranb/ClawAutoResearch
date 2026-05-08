@@ -8,6 +8,7 @@ import {
 } from "../workflow-intermediate-artifact-audit";
 import { readTextIfExists } from "../workflow-guard-core/fs";
 import { collectExecutionProofReceipts } from "../workflow-execution-proof";
+import { effectiveMinimumCitationCount } from "../research-writing/citation-count-policy";
 
 function normalizeReviewVerdict(value: unknown): "pass" | "revise" | "block" | null {
   const raw = typeof value === "string" ? value.trim().toLowerCase() : "";
@@ -26,6 +27,24 @@ function isReviewCompleted(status: unknown, verdict: unknown): boolean {
     return true;
   }
   return normalizeReviewVerdict(verdict) !== null;
+}
+
+function effectiveCitationMinimumForReview(params: {
+  citationIntegrity: { minimumCitationCount?: unknown };
+  writingContract: Record<string, unknown> | null | undefined;
+  manifest: Record<string, unknown> | null | undefined;
+}): number {
+  return effectiveMinimumCitationCount({
+    configuredMinimumCitationCount: params.citationIntegrity.minimumCitationCount,
+    paperModeHints: [
+      params.writingContract?.paperMode,
+      params.writingContract?.paper_mode,
+      params.manifest?.paper_mode,
+      params.manifest?.paperMode,
+      params.manifest?.paper_type,
+      params.manifest?.workflow_line,
+    ],
+  });
 }
 
 export interface ExecutionStageDeps {
@@ -521,6 +540,11 @@ export async function collectReviewStageMissingSignals(
         minimumCitationCount: 0,
         topicRelevanceStatus: "unknown",
       };
+  const minimumCitationCount = effectiveCitationMinimumForReview({
+    citationIntegrity,
+    writingContract,
+    manifest: ctx.manifest,
+  });
   if (citationIntegrity.enabled && citationIntegrity.verificationRequired) {
     if (citationIntegrity.verificationStatus !== "verified") {
       missing.push(
@@ -528,15 +552,15 @@ export async function collectReviewStageMissingSignals(
       );
     }
     if (
-      citationIntegrity.minimumCitationCount > 0 &&
-      citationIntegrity.bibliographyEntryCount < citationIntegrity.minimumCitationCount
+      minimumCitationCount > 0 &&
+      citationIntegrity.bibliographyEntryCount < minimumCitationCount
     ) {
       missing.push(
-        `citation count must reach ${citationIntegrity.minimumCitationCount} before REVIEW closeout (current: ${citationIntegrity.bibliographyEntryCount})`
+        `citation count must reach ${minimumCitationCount} before REVIEW closeout (current: ${citationIntegrity.bibliographyEntryCount})`
       );
     }
     if (
-      citationIntegrity.minimumCitationCount > 0 &&
+      minimumCitationCount > 0 &&
       citationIntegrity.topicRelevanceStatus !== "ready"
     ) {
       missing.push(
