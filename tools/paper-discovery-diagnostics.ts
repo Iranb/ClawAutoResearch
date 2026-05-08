@@ -163,6 +163,8 @@ function countBy<T extends string>(values: Array<T | null | undefined>): Record<
   return counts;
 }
 
+const MIN_CITATION_COUNT_FOR_SEED = 30;
+
 function selectCitationSeeds(entries: WorkflowPaperSourceEntry[], maxSeeds: number) {
   const sorted = [...entries].sort((left, right) => {
     const rightCitation = right.citationCount ?? -1;
@@ -175,7 +177,12 @@ function selectCitationSeeds(entries: WorkflowPaperSourceEntry[], maxSeeds: numb
     return rightYear - leftYear;
   });
   return sorted
-    .filter((entry) => entry.title || entry.canonicalId)
+    .filter(
+      (entry) =>
+        (entry.title || entry.canonicalId) &&
+        typeof entry.citationCount === "number" &&
+        entry.citationCount >= MIN_CITATION_COUNT_FOR_SEED
+    )
     .slice(0, Math.max(1, maxSeeds));
 }
 

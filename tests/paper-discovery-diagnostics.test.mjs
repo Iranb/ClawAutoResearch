@@ -135,6 +135,74 @@ test("literature coverage audit focuses on screened survey papers and keeps pend
   );
 });
 
+test("citation expansion only seeds papers with at least 30 citations", async (t) => {
+  const projectRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "openclaw-research-citation-threshold-")
+  );
+  t.after(() => fs.rm(projectRoot, { recursive: true, force: true }));
+
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "citation-threshold-demo",
+    survey_review: {
+      included_papers_path: "researcher/INCLUDED_PAPERS.json",
+    },
+  });
+  await writeJson(path.join(projectRoot, "researcher", "INCLUDED_PAPERS.json"), {
+    papers: [
+      { canonical_id: "doi:10.0000/high", title: "Highly Cited Paper" },
+      { canonical_id: "doi:10.0000/threshold", title: "Threshold Paper" },
+      { canonical_id: "doi:10.0000/low", title: "Low Citation Paper" },
+      { canonical_id: "doi:10.0000/missing", title: "Missing Citation Paper" },
+    ],
+  });
+  await writeJson(path.join(projectRoot, "researcher", "PAPER_SOURCE_INDEX.json"), {
+    papers: [
+      {
+        canonical_id: "doi:10.0000/high",
+        title: "Highly Cited Paper",
+        year: 2024,
+        citation_count: 150,
+        source_provider: "openalex",
+        resolution_status: "resolved_markdown",
+      },
+      {
+        canonical_id: "doi:10.0000/threshold",
+        title: "Threshold Paper",
+        year: 2023,
+        citation_count: 30,
+        source_provider: "semanticscholar",
+        resolution_status: "resolved_markdown",
+      },
+      {
+        canonical_id: "doi:10.0000/low",
+        title: "Low Citation Paper",
+        year: 2022,
+        citation_count: 29,
+        source_provider: "openalex",
+        resolution_status: "resolved_markdown",
+      },
+      {
+        canonical_id: "doi:10.0000/missing",
+        title: "Missing Citation Paper",
+        year: 2021,
+        source_provider: "crossref",
+        resolution_status: "resolved_markdown",
+      },
+    ],
+  });
+
+  const packet = await planCitationExpansion({ projectRoot, maxSeeds: 4 });
+
+  assert.deepEqual(packet.seeds.map((seed) => seed.title), [
+    "Highly Cited Paper",
+    "Threshold Paper",
+  ]);
+  assert.equal(
+    packet.seeds.some((seed) => /Low Citation Paper|Missing Citation Paper/.test(seed.title ?? "")),
+    false
+  );
+});
+
 test("topic relevance audit can rescue a paper with a generic title when markdown body is on-topic", async (t) => {
   const projectRoot = await fs.mkdtemp(
     path.join(os.tmpdir(), "openclaw-research-topic-relevance-")
