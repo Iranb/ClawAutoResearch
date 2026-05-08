@@ -27,6 +27,33 @@ const DEFAULT_THEORY_STATE_PATH = "analyzer/THEORY_STATE.json";
 const DEFAULT_THEORY_NOTE_PATH = "analyzer/THEORY_SUPPORT_NOTE.md";
 const DEFAULT_PROOF_PACKET_DIR = "analyzer/proof-packets";
 const DEFAULT_THEORY_APPENDIX_PLAN_PATH = "academic_writer/THEORY_APPENDIX_PLAN.md";
+const DEFAULT_PROOF_OBLIGATION_LEDGER_PATH =
+  "analyzer/PROOF_OBLIGATION_LEDGER.json";
+const DEFAULT_COUNTEREXAMPLE_RED_TEAM_REPORT_PATH =
+  "analyzer/COUNTEREXAMPLE_RED_TEAM.md";
+
+export const THEOREM_ISSUE_TAXONOMY = [
+  "missing_assumption",
+  "unstated_domain",
+  "undefined_symbol",
+  "quantifier_mismatch",
+  "circular_reasoning",
+  "invalid_implication",
+  "gap_in_derivation",
+  "lemma_dependency_missing",
+  "condition_too_weak",
+  "condition_too_strong",
+  "boundary_case_failure",
+  "counterexample_found",
+  "asymptotic_claim_unjustified",
+  "probability_statement_unsupported",
+  "optimization_objective_mismatch",
+  "notation_collision",
+  "toy_setting_overgeneralized",
+  "proof_scope_mismatch",
+  "empirical_evidence_substituted_for_proof",
+  "appendix_main_text_inconsistency",
+];
 
 type TheoryAppendixSectionLike = {
   section_id: string;
@@ -54,6 +81,40 @@ type TheoryObjectPacketLike = {
   updated_at: string | null;
 };
 
+type ProofObligationLike = {
+  obligation_id: string;
+  packet_id: string | null;
+  issue_type: string;
+  severity: string;
+  status: string;
+  finding: string | null;
+  repair_owner_role: string | null;
+  repair_hint: string | null;
+  source_claim_ids: string[];
+  updated_at: string | null;
+};
+
+type CounterexampleRedTeamAttemptLike = {
+  attempt_id: string;
+  packet_id: string | null;
+  issue_type: string;
+  status: string;
+  candidate: string | null;
+  expected_failure_mode: string | null;
+  result: string | null;
+  repaired_by: string | null;
+  updated_at: string | null;
+};
+
+type CounterexampleRedTeamStateLike = {
+  status: string;
+  attempts: CounterexampleRedTeamAttemptLike[];
+  blocking_findings: ProofObligationLike[];
+  report_path: string | null;
+  last_updated_at: string | null;
+  pending_reason: string | null;
+};
+
 type TheoryStateFileLike = {
   schema_version: number;
   status: string;
@@ -65,6 +126,10 @@ type TheoryStateFileLike = {
   theorem_candidates: TheoryObjectPacketLike[];
   lemma_packets: TheoryObjectPacketLike[];
   appendix_sections: TheoryAppendixSectionLike[];
+  theorem_issue_taxonomy: string[];
+  proof_obligations: ProofObligationLike[];
+  proof_obligation_ledger_path: string | null;
+  counterexample_red_team: CounterexampleRedTeamStateLike;
   pending_reason: string | null;
   updated_at: string | null;
 };
@@ -81,6 +146,11 @@ type TheorySupportStateLike = {
   theoremCount: number;
   lemmaCount: number;
   proofPacketCount: number;
+  proofObligationLedgerPath: string | null;
+  proofObligationStatus: string;
+  blockingProofIssueCount: number;
+  counterexampleRedTeamStatus: string;
+  counterexampleRedTeamReportPath: string | null;
   lastUpdatedAt: string | null;
   pendingReason: string | null;
 };
@@ -161,6 +231,160 @@ export function serializeTheoryObjectPacket(
   };
 }
 
+function normalizeTheoremIssueType(value: unknown): string {
+  const normalized = normalizeStage(value);
+  return normalized && THEOREM_ISSUE_TAXONOMY.includes(normalized)
+    ? normalized
+    : normalized ?? "missing_assumption";
+}
+
+export function normalizeProofObligation(
+  value: unknown
+): ProofObligationLike | null {
+  const record = asRecord(value);
+  if (!record) {
+    return null;
+  }
+  const obligationId = pickString(record, [
+    "obligationId",
+    "obligation_id",
+    "issueId",
+    "issue_id",
+  ]);
+  if (!obligationId) {
+    return null;
+  }
+  return {
+    obligation_id: obligationId,
+    packet_id: pickString(record, ["packetId", "packet_id"]),
+    issue_type: normalizeTheoremIssueType(
+      record.issueType ?? record.issue_type ?? record.taxonomy
+    ),
+    severity:
+      normalizeStage(record.severity) ??
+      (normalizeStage(record.status) === "blocking" ? "high" : "medium"),
+    status: normalizeStage(record.status) ?? "open",
+    finding: pickString(record, ["finding", "description", "summary"]),
+    repair_owner_role: pickString(record, [
+      "repairOwnerRole",
+      "repair_owner_role",
+      "owner",
+    ]),
+    repair_hint: pickString(record, ["repairHint", "repair_hint"]),
+    source_claim_ids: asStringArray(
+      record.sourceClaimIds ?? record.source_claim_ids
+    ),
+    updated_at: pickString(record, ["updatedAt", "updated_at"]),
+  };
+}
+
+export function serializeProofObligation(
+  obligation: ProofObligationLike
+): Record<string, unknown> {
+  return {
+    obligation_id: obligation.obligation_id,
+    packet_id: obligation.packet_id,
+    issue_type: obligation.issue_type,
+    severity: obligation.severity,
+    status: obligation.status,
+    finding: obligation.finding,
+    repair_owner_role: obligation.repair_owner_role,
+    repair_hint: obligation.repair_hint,
+    source_claim_ids: obligation.source_claim_ids,
+    updated_at: obligation.updated_at,
+  };
+}
+
+function normalizeCounterexampleAttempt(
+  value: unknown
+): CounterexampleRedTeamAttemptLike | null {
+  const record = asRecord(value);
+  if (!record) {
+    return null;
+  }
+  const attemptId = pickString(record, ["attemptId", "attempt_id"]);
+  if (!attemptId) {
+    return null;
+  }
+  return {
+    attempt_id: attemptId,
+    packet_id: pickString(record, ["packetId", "packet_id"]),
+    issue_type: normalizeTheoremIssueType(
+      record.issueType ?? record.issue_type ?? record.taxonomy
+    ),
+    status: normalizeStage(record.status) ?? "pending",
+    candidate: pickString(record, ["candidate", "counterexampleCandidate"]),
+    expected_failure_mode: pickString(record, [
+      "expectedFailureMode",
+      "expected_failure_mode",
+    ]),
+    result: pickString(record, ["result"]),
+    repaired_by: pickString(record, ["repairedBy", "repaired_by"]),
+    updated_at: pickString(record, ["updatedAt", "updated_at"]),
+  };
+}
+
+function serializeCounterexampleAttempt(
+  attempt: CounterexampleRedTeamAttemptLike
+): Record<string, unknown> {
+  return {
+    attempt_id: attempt.attempt_id,
+    packet_id: attempt.packet_id,
+    issue_type: attempt.issue_type,
+    status: attempt.status,
+    candidate: attempt.candidate,
+    expected_failure_mode: attempt.expected_failure_mode,
+    result: attempt.result,
+    repaired_by: attempt.repaired_by,
+    updated_at: attempt.updated_at,
+  };
+}
+
+function normalizeCounterexampleRedTeamState(
+  value: unknown
+): CounterexampleRedTeamStateLike {
+  const record = asRecord(value) ?? {};
+  const blockingFindings = record.blockingFindings ?? record.blocking_findings;
+  return {
+    status: normalizeStage(record.status) ?? "pending",
+    attempts: Array.isArray(record.attempts)
+      ? record.attempts
+          .map(normalizeCounterexampleAttempt)
+          .filter(
+            (
+              entry: CounterexampleRedTeamAttemptLike | null
+            ): entry is CounterexampleRedTeamAttemptLike => Boolean(entry)
+          )
+      : [],
+    blocking_findings: Array.isArray(blockingFindings)
+      ? blockingFindings
+          .map(normalizeProofObligation)
+          .filter(
+            (entry: ProofObligationLike | null): entry is ProofObligationLike =>
+              Boolean(entry)
+          )
+      : [],
+    report_path:
+      pickString(record, ["reportPath", "report_path"]) ??
+      DEFAULT_COUNTEREXAMPLE_RED_TEAM_REPORT_PATH,
+    last_updated_at: pickString(record, ["lastUpdatedAt", "last_updated_at"]),
+    pending_reason: pickString(record, ["pendingReason", "pending_reason"]),
+  };
+}
+
+function serializeCounterexampleRedTeamState(
+  state: CounterexampleRedTeamStateLike
+): Record<string, unknown> {
+  return {
+    status: state.status,
+    attempts: state.attempts.map(serializeCounterexampleAttempt),
+    blocking_findings: state.blocking_findings.map(serializeProofObligation),
+    report_path: state.report_path,
+    last_updated_at: state.last_updated_at,
+    pending_reason: state.pending_reason,
+  };
+}
+
 /**
  * 解析理论状态文件。
  *
@@ -196,6 +420,16 @@ export function normalizeTheoryStateFile(value: unknown): TheoryStateFileLike {
         })
         .filter(Boolean)
     : [];
+  const proofObligationsRaw = record.proofObligations ?? record.proof_obligations;
+  const proofObligations = Array.isArray(proofObligationsRaw)
+    ? proofObligationsRaw.map(normalizeProofObligation).filter(Boolean)
+    : [];
+  const taxonomy = asStringArray(
+    record.theoremIssueTaxonomy ??
+      record.theorem_issue_taxonomy ??
+      record.proofIssueTaxonomy ??
+      record.proof_issue_taxonomy
+  );
   return {
     schema_version: Math.max(
       1,
@@ -216,6 +450,17 @@ export function normalizeTheoryStateFile(value: unknown): TheoryStateFileLike {
     theorem_candidates: theoremCandidates as TheoryObjectPacketLike[],
     lemma_packets: lemmaPackets as TheoryObjectPacketLike[],
     appendix_sections: appendixSections as TheoryAppendixSectionLike[],
+    theorem_issue_taxonomy:
+      taxonomy.length > 0 ? taxonomy : [...THEOREM_ISSUE_TAXONOMY],
+    proof_obligations: proofObligations as ProofObligationLike[],
+    proof_obligation_ledger_path:
+      pickString(record, [
+        "proofObligationLedgerPath",
+        "proof_obligation_ledger_path",
+      ]) ?? DEFAULT_PROOF_OBLIGATION_LEDGER_PATH,
+    counterexample_red_team: normalizeCounterexampleRedTeamState(
+      record.counterexampleRedTeam ?? record.counterexample_red_team
+    ),
     pending_reason: pickString(record, ["pendingReason", "pending_reason"]),
     updated_at: pickString(record, ["updatedAt", "updated_at"]),
   };
@@ -243,6 +488,12 @@ export function serializeTheoryStateFile(
       purpose: section.purpose,
       packet_ids: section.packet_ids,
     })),
+    theorem_issue_taxonomy: state.theorem_issue_taxonomy,
+    proof_obligations: state.proof_obligations.map(serializeProofObligation),
+    proof_obligation_ledger_path: state.proof_obligation_ledger_path,
+    counterexample_red_team: serializeCounterexampleRedTeamState(
+      state.counterexample_red_team
+    ),
     pending_reason: state.pending_reason,
     updated_at: state.updated_at,
   };
@@ -290,6 +541,34 @@ export function normalizeTheorySupportState(
         pickNumber(record, ["proofPacketCount", "proof_packet_count"]) ?? 0
       )
     ),
+    proofObligationLedgerPath:
+      pickString(record, [
+        "proofObligationLedgerPath",
+        "proof_obligation_ledger_path",
+      ]) ?? DEFAULT_PROOF_OBLIGATION_LEDGER_PATH,
+    proofObligationStatus:
+      normalizeStage(
+        record.proofObligationStatus ?? record.proof_obligation_status
+      ) ?? "pending",
+    blockingProofIssueCount: Math.max(
+      0,
+      Math.floor(
+        pickNumber(record, [
+          "blockingProofIssueCount",
+          "blocking_proof_issue_count",
+        ]) ?? 0
+      )
+    ),
+    counterexampleRedTeamStatus:
+      normalizeStage(
+        record.counterexampleRedTeamStatus ??
+          record.counterexample_red_team_status
+      ) ?? "pending",
+    counterexampleRedTeamReportPath:
+      pickString(record, [
+        "counterexampleRedTeamReportPath",
+        "counterexample_red_team_report_path",
+      ]) ?? DEFAULT_COUNTEREXAMPLE_RED_TEAM_REPORT_PATH,
     lastUpdatedAt: pickString(record, ["lastUpdatedAt", "last_updated_at"]),
     pendingReason: pickString(record, ["pendingReason", "pending_reason"]),
   };
@@ -313,6 +592,11 @@ export function serializeTheorySupportState(
     theorem_count: state.theoremCount,
     lemma_count: state.lemmaCount,
     proof_packet_count: state.proofPacketCount,
+    proof_obligation_ledger_path: state.proofObligationLedgerPath,
+    proof_obligation_status: state.proofObligationStatus,
+    blocking_proof_issue_count: state.blockingProofIssueCount,
+    counterexample_red_team_status: state.counterexampleRedTeamStatus,
+    counterexample_red_team_report_path: state.counterexampleRedTeamReportPath,
     last_updated_at: state.lastUpdatedAt,
     pending_reason: state.pendingReason,
   };

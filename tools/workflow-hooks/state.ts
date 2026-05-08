@@ -13,6 +13,10 @@ import type {
   WorkflowFileAuditHookState,
   WorkflowFileAuditResult,
   WorkflowFileAuditRoundState,
+  WorkflowGateControlPackage,
+  WorkflowGateDisposition,
+  WorkflowGateRepairRoute,
+  WorkflowGateScope,
   WorkflowHookAppliesWhen,
   WorkflowHookEvent,
   WorkflowHookFilters,
@@ -29,6 +33,7 @@ import type {
   WorkflowPaperMode,
 } from "./contracts.js";
 import {
+  WORKFLOW_GATE_DISPOSITIONS,
   WORKFLOW_HOOK_BLOCKING_MODES,
   WORKFLOW_HOOK_POINTS,
   WORKFLOW_LINES,
@@ -73,6 +78,187 @@ function normalizeBlockingMode(value: unknown): WorkflowFileAuditHookPolicy["blo
   return (WORKFLOW_HOOK_BLOCKING_MODES as readonly string[]).includes(normalized ?? "")
     ? (normalized as WorkflowFileAuditHookPolicy["blockingMode"])
     : "block_stage";
+}
+
+function normalizeGateDisposition(value: unknown): WorkflowGateDisposition | null {
+  const normalized = normalizeStage(value);
+  return (WORKFLOW_GATE_DISPOSITIONS as readonly string[]).includes(normalized ?? "")
+    ? (normalized as WorkflowGateDisposition)
+    : null;
+}
+
+function normalizeGateScope(value: unknown, fallbackTarget: string | null): WorkflowGateScope | null {
+  const record = asRecord(value);
+  if (!record) {
+    return fallbackTarget
+      ? {
+          level: "artifact",
+          targets: [fallbackTarget],
+        }
+      : null;
+  }
+  const levelRaw = normalizeStage(record.level);
+  const level =
+    levelRaw === "claim" ||
+    levelRaw === "section" ||
+    levelRaw === "artifact" ||
+    levelRaw === "stage"
+      ? levelRaw
+      : "artifact";
+  const targets = normalizeNonEmptyStrings(record.targets ?? record.target ?? []);
+  return {
+    level,
+    targets: targets.length > 0 ? targets : fallbackTarget ? [fallbackTarget] : [],
+  };
+}
+
+function serializeGateScope(scope: WorkflowGateScope | null): Record<string, unknown> | null {
+  return scope
+    ? {
+        level: scope.level,
+        targets: scope.targets,
+      }
+    : null;
+}
+
+function normalizeRepairRoute(value: unknown): WorkflowGateRepairRoute | null {
+  const record = asRecord(value);
+  if (!record) {
+    return null;
+  }
+  return {
+    owner: pickString(record, ["owner"]),
+    command: pickString(record, ["command"]),
+    repairPacketPath: pickString(record, ["repairPacketPath", "repair_packet_path"]),
+    recheckHookId: pickString(record, ["recheckHookId", "recheck_hook_id"]),
+    rollbackStage: normalizeStage(record.rollbackStage ?? record.rollback_stage),
+    retryBudget:
+      pickNumber(record, ["retryBudget", "retry_budget"]) == null
+        ? null
+        : Math.max(0, Math.floor(pickNumber(record, ["retryBudget", "retry_budget"]) ?? 0)),
+  };
+}
+
+function serializeRepairRoute(route: WorkflowGateRepairRoute | null): Record<string, unknown> | null {
+  return route
+    ? {
+        owner: route.owner,
+        command: route.command,
+        repair_packet_path: route.repairPacketPath,
+        recheck_hook_id: route.recheckHookId,
+        rollback_stage: route.rollbackStage,
+        retry_budget: route.retryBudget,
+      }
+    : null;
+}
+
+function normalizeGateControlPackage(value: unknown): WorkflowGateControlPackage | null {
+  const record = asRecord(value);
+  if (!record) {
+    return null;
+  }
+  const issues = Array.isArray(record.issues)
+    ? record.issues
+        .map((entry) => asRecord(entry))
+        .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry))
+        .map((entry) => ({
+          hookId: pickString(entry, ["hookId", "hook_id"]) ?? "unknown",
+          disposition:
+            normalizeGateDisposition(entry.disposition) ?? "hard_block",
+          scope: normalizeGateScope(entry.scope, null) ?? {
+            level: "stage" as const,
+            targets: [],
+          },
+          reason: pickString(entry, ["reason"]),
+          severity:
+            (pickString(entry, ["severity"]) as
+              | "low"
+              | "medium"
+              | "high"
+              | "critical"
+              | null) ?? null,
+          confidence:
+            typeof entry.confidence === "number" && Number.isFinite(entry.confidence)
+              ? Math.max(0, Math.min(1, entry.confidence))
+              : null,
+          recoverable: pickBoolean(entry, ["recoverable"]) ?? false,
+          repairRoute: normalizeRepairRoute(entry.repairRoute ?? entry.repair_route),
+        }))
+    : [];
+  const repairRoutesRaw = record.repairRoutes ?? record.repair_routes;
+  const repairRoutes = Array.isArray(repairRoutesRaw)
+    ? repairRoutesRaw
+        .map((entry: unknown) => normalizeRepairRoute(entry))
+        .filter((entry: WorkflowGateRepairRoute | null): entry is WorkflowGateRepairRoute =>
+          Boolean(entry)
+        )
+    : [];
+  return {
+    blocking: pickBoolean(record, ["blocking"]) ?? false,
+    primaryDisposition: normalizeGateDisposition(
+      record.primaryDisposition ?? record.primary_disposition
+    ),
+    hardBlockCount: Math.max(
+      0,
+      Math.floor(pickNumber(record, ["hardBlockCount", "hard_block_count"]) ?? 0)
+    ),
+    repairRequiredCount: Math.max(
+      0,
+      Math.floor(
+        pickNumber(record, ["repairRequiredCount", "repair_required_count"]) ?? 0
+      )
+    ),
+    deferredDebtCount: Math.max(
+      0,
+      Math.floor(
+        pickNumber(record, ["deferredDebtCount", "deferred_debt_count"]) ?? 0
+      )
+    ),
+    warnOnlyCount: Math.max(
+      0,
+      Math.floor(pickNumber(record, ["warnOnlyCount", "warn_only_count"]) ?? 0)
+    ),
+    humanGateCount: Math.max(
+      0,
+      Math.floor(pickNumber(record, ["humanGateCount", "human_gate_count"]) ?? 0)
+    ),
+    rollbackRequiredCount: Math.max(
+      0,
+      Math.floor(
+        pickNumber(record, ["rollbackRequiredCount", "rollback_required_count"]) ?? 0
+      )
+    ),
+    issues,
+    repairRoutes,
+  };
+}
+
+function serializeGateControlPackage(
+  gateControl: WorkflowGateControlPackage | null
+): Record<string, unknown> | null {
+  return gateControl
+    ? {
+        blocking: gateControl.blocking,
+        primary_disposition: gateControl.primaryDisposition,
+        hard_block_count: gateControl.hardBlockCount,
+        repair_required_count: gateControl.repairRequiredCount,
+        deferred_debt_count: gateControl.deferredDebtCount,
+        warn_only_count: gateControl.warnOnlyCount,
+        human_gate_count: gateControl.humanGateCount,
+        rollback_required_count: gateControl.rollbackRequiredCount,
+        issues: gateControl.issues.map((issue) => ({
+          hook_id: issue.hookId,
+          disposition: issue.disposition,
+          scope: serializeGateScope(issue.scope),
+          reason: issue.reason,
+          severity: issue.severity,
+          confidence: issue.confidence,
+          recoverable: issue.recoverable,
+          repair_route: serializeRepairRoute(issue.repairRoute),
+        })),
+        repair_routes: gateControl.repairRoutes.map((route) => serializeRepairRoute(route)),
+      }
+    : null;
 }
 
 function normalizeNonEmptyStrings(values: unknown): string[] {
@@ -358,6 +544,27 @@ export function normalizeFileAuditHookPolicy(value: unknown): WorkflowFileAuditH
       pickString(record, ["reviseOwnerRole", "revise_owner_role"]) ??
       pickString(record, ["targetRole", "target_role"]),
     reviseCommand: pickString(record, ["reviseCommand", "revise_command"]),
+    gateDisposition: normalizeGateDisposition(
+      record.gateDisposition ?? record.gate_disposition
+    ),
+    gateScope: normalizeGateScope(
+      record.gateScope ?? record.gate_scope,
+      filePath
+    ),
+    repairOwnerRole:
+      pickString(record, ["repairOwnerRole", "repair_owner_role"]) ??
+      pickString(record, ["reviseOwnerRole", "revise_owner_role"]) ??
+      pickString(record, ["targetRole", "target_role"]),
+    repairCommand:
+      pickString(record, ["repairCommand", "repair_command"]) ??
+      pickString(record, ["reviseCommand", "revise_command"]),
+    rollbackStage: normalizeStage(record.rollbackStage ?? record.rollback_stage),
+    recheckHookId:
+      pickString(record, ["recheckHookId", "recheck_hook_id"]) ?? hookId,
+    retryBudget:
+      pickNumber(record, ["retryBudget", "retry_budget"]) == null
+        ? null
+        : Math.max(0, Math.floor(pickNumber(record, ["retryBudget", "retry_budget"]) ?? 0)),
     reportDir: pickString(record, ["reportDir", "report_dir"]),
     filters: normalizeHookFilters(record.filters),
     appliesWhen: normalizeHookAppliesWhen(
@@ -430,6 +637,13 @@ export function serializeFileAuditHookPolicy(
     max_unchanged_rounds: policy.maxUnchangedRounds,
     revise_owner_role: policy.reviseOwnerRole,
     revise_command: policy.reviseCommand,
+    gate_disposition: policy.gateDisposition,
+    gate_scope: serializeGateScope(policy.gateScope ?? null),
+    repair_owner_role: policy.repairOwnerRole,
+    repair_command: policy.repairCommand,
+    rollback_stage: policy.rollbackStage,
+    recheck_hook_id: policy.recheckHookId,
+    retry_budget: policy.retryBudget,
     report_dir: policy.reportDir,
     filters: serializeHookFilters(policy.filters),
     applies_when: serializeHookAppliesWhen(policy.appliesWhen),
@@ -560,7 +774,20 @@ function normalizeAggregateState(value: unknown): WorkflowHookPointAggregateStat
       "aggregateRevisionPacketPath",
       "aggregate_revision_packet_path",
     ]),
+    gateControl: normalizeGateControlPackage(record.gateControl ?? record.gate_control),
     updatedAt: pickString(record, ["updatedAt", "updated_at"]) ?? nowIso(),
+  };
+}
+
+function serializeAggregateState(
+  state: WorkflowHookPointAggregateState
+): Record<string, unknown> {
+  return {
+    aggregate_status: state.aggregateStatus,
+    aggregate_verdict: state.aggregateVerdict,
+    aggregate_revision_packet_path: state.aggregateRevisionPacketPath,
+    gate_control: serializeGateControlPackage(state.gateControl),
+    updated_at: state.updatedAt,
   };
 }
 
@@ -605,7 +832,17 @@ export async function writeWorkflowHooksStateStore(
   await writeJsonEnsured(getWorkflowHooksStatePath(projectRoot), {
     schemaVersion: 1,
     updated_at: store.updatedAt,
-    hook_points: store.hookPoints,
+    hook_points: Object.fromEntries(
+      Object.entries(store.hookPoints).map(([hookPoint, stageMap]) => [
+        hookPoint,
+        Object.fromEntries(
+          Object.entries(stageMap).map(([stage, state]) => [
+            stage,
+            serializeAggregateState(state),
+          ])
+        ),
+      ])
+    ),
     hooks: Object.fromEntries(
       Object.entries(store.hooks).map(([hookId, state]) => [hookId, serializeHookState(state)])
     ),
@@ -871,6 +1108,166 @@ export function sortHookPolicies(
   });
 }
 
+function severityRank(severity: string | null): number {
+  switch (severity) {
+    case "critical":
+      return 4;
+    case "high":
+      return 3;
+    case "medium":
+      return 2;
+    case "low":
+      return 1;
+    default:
+      return 0;
+  }
+}
+
+function highestViolationSeverity(
+  result: WorkflowFileAuditResult | null
+): "low" | "medium" | "high" | "critical" | null {
+  let selected: "low" | "medium" | "high" | "critical" | null = null;
+  for (const violation of result?.violations ?? []) {
+    if (severityRank(violation.severity) > severityRank(selected)) {
+      selected = violation.severity;
+    }
+  }
+  return selected;
+}
+
+function defaultGateDispositionForExecution(
+  execution: WorkflowHookExecutionResult
+): WorkflowGateDisposition | null {
+  if (execution.pending || execution.status === "auditing") {
+    return null;
+  }
+  if (
+    execution.verdict === "pass" &&
+    !execution.revisedRequested &&
+    !execution.escalated
+  ) {
+    return null;
+  }
+  if (execution.gateDisposition) {
+    return execution.gateDisposition;
+  }
+  if (execution.escalated) {
+    return "human_gate";
+  }
+  if (execution.verdict === "block") {
+    return "hard_block";
+  }
+  if (execution.revisedRequested || execution.verdict === "revise") {
+    return "repair_required";
+  }
+  return null;
+}
+
+function buildDefaultRepairRoute(
+  execution: WorkflowHookExecutionResult
+): WorkflowGateRepairRoute | null {
+  if (execution.repairRoute) {
+    return execution.repairRoute;
+  }
+  if (!execution.revisionDispatch && defaultGateDispositionForExecution(execution) !== "repair_required") {
+    return null;
+  }
+  return {
+    owner: execution.revisionDispatch?.targetRole ?? null,
+    command: execution.result?.requiredFixes?.join(" ") || execution.blockingReason,
+    repairPacketPath: execution.revisionDispatch?.aggregateRevisionPacketPath ?? null,
+    recheckHookId: execution.hookId,
+    rollbackStage: null,
+    retryBudget: null,
+  };
+}
+
+function emptyGateControlPackage(): WorkflowGateControlPackage {
+  return {
+    blocking: false,
+    primaryDisposition: null,
+    hardBlockCount: 0,
+    repairRequiredCount: 0,
+    deferredDebtCount: 0,
+    warnOnlyCount: 0,
+    humanGateCount: 0,
+    rollbackRequiredCount: 0,
+    issues: [],
+    repairRoutes: [],
+  };
+}
+
+export function buildWorkflowGateControlPackage(
+  executions: WorkflowHookExecutionResult[]
+): WorkflowGateControlPackage {
+  const gateControl = emptyGateControlPackage();
+  for (const execution of executions) {
+    const disposition = defaultGateDispositionForExecution(execution);
+    if (!disposition) {
+      continue;
+    }
+    switch (disposition) {
+      case "hard_block":
+        gateControl.hardBlockCount += 1;
+        break;
+      case "repair_required":
+        gateControl.repairRequiredCount += 1;
+        break;
+      case "defer_with_debt":
+        gateControl.deferredDebtCount += 1;
+        break;
+      case "warn_only":
+        gateControl.warnOnlyCount += 1;
+        break;
+      case "human_gate":
+        gateControl.humanGateCount += 1;
+        break;
+      case "rollback_stage":
+        gateControl.rollbackRequiredCount += 1;
+        break;
+    }
+    const repairRoute = buildDefaultRepairRoute(execution);
+    const scope =
+      execution.gateScope ??
+      ({
+        level: "artifact",
+        targets: [execution.result?.filePath ?? execution.hookId].filter(Boolean),
+      } as WorkflowGateScope);
+    gateControl.issues.push({
+      hookId: execution.hookId,
+      disposition,
+      scope,
+      reason: execution.blockingReason ?? execution.result?.summary ?? null,
+      severity: highestViolationSeverity(execution.result),
+      confidence: execution.result?.confidence ?? null,
+      recoverable: disposition === "repair_required" || disposition === "defer_with_debt",
+      repairRoute,
+    });
+    if (repairRoute) {
+      gateControl.repairRoutes.push(repairRoute);
+    }
+  }
+  gateControl.blocking =
+    gateControl.hardBlockCount > 0 ||
+    gateControl.humanGateCount > 0 ||
+    gateControl.rollbackRequiredCount > 0;
+  gateControl.primaryDisposition =
+    gateControl.rollbackRequiredCount > 0
+      ? "rollback_stage"
+      : gateControl.hardBlockCount > 0
+        ? "hard_block"
+        : gateControl.humanGateCount > 0
+          ? "human_gate"
+          : gateControl.repairRequiredCount > 0
+            ? "repair_required"
+            : gateControl.deferredDebtCount > 0
+              ? "defer_with_debt"
+              : gateControl.warnOnlyCount > 0
+                ? "warn_only"
+                : null;
+  return gateControl;
+}
+
 export function summarizeHookExecutionResults(
   executions: WorkflowHookExecutionResult[]
 ): {
@@ -878,7 +1275,9 @@ export function summarizeHookExecutionResults(
   aggregateStatus: WorkflowHookPointAggregateState["aggregateStatus"];
   blockingReason: string | null;
   aggregateRevisionPacketPath: string | null;
+  gateControl: WorkflowGateControlPackage;
 } {
+  const gateControl = buildWorkflowGateControlPackage(executions);
   if (executions.some((entry) => entry.escalated || entry.verdict === "block")) {
     return {
       aggregateVerdict: "block",
@@ -891,6 +1290,7 @@ export function summarizeHookExecutionResults(
       aggregateRevisionPacketPath:
         executions.find((entry) => entry.revisionDispatch?.aggregateRevisionPacketPath)
           ?.revisionDispatch?.aggregateRevisionPacketPath ?? null,
+      gateControl,
     };
   }
   if (executions.some((entry) => entry.revisedRequested || entry.verdict === "revise")) {
@@ -903,6 +1303,7 @@ export function summarizeHookExecutionResults(
       aggregateRevisionPacketPath:
         executions.find((entry) => entry.revisionDispatch?.aggregateRevisionPacketPath)
           ?.revisionDispatch?.aggregateRevisionPacketPath ?? null,
+      gateControl,
     };
   }
   if (executions.some((entry) => entry.pending || entry.status === "auditing")) {
@@ -911,6 +1312,7 @@ export function summarizeHookExecutionResults(
       aggregateStatus: "auditing",
       blockingReason: "Workflow hooks are still running for the current transition.",
       aggregateRevisionPacketPath: null,
+      gateControl,
     };
   }
   return {
@@ -918,5 +1320,6 @@ export function summarizeHookExecutionResults(
     aggregateStatus: executions.length > 0 ? "passed" : "idle",
     blockingReason: null,
     aggregateRevisionPacketPath: null,
+    gateControl,
   };
 }

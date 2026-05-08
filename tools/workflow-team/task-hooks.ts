@@ -254,7 +254,12 @@ export async function completeWorkflowTaskAndContinue(params: {
     transition: "complete_task",
     changedPaths: params.hookGateContext?.changedPaths ?? [],
   });
-  if (defaultHookGate.aggregateVerdict !== "pass") {
+  const nonBlockingDebtOrWarning =
+    !defaultHookGate.gateControl.blocking &&
+    defaultHookGate.gateControl.repairRequiredCount === 0 &&
+    (defaultHookGate.gateControl.deferredDebtCount > 0 ||
+      defaultHookGate.gateControl.warnOnlyCount > 0);
+  if (defaultHookGate.aggregateVerdict !== "pass" && !nonBlockingDebtOrWarning) {
     const failed = await markWorkflowTaskNeedsRepair({
       projectRoot: params.projectRoot,
       taskId: params.taskId,

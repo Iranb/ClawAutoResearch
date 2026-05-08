@@ -57,6 +57,14 @@ export const WORKFLOW_HOOK_BLOCKING_MODES = [
     "warn_only",
     "rollback_stage",
 ];
+export const WORKFLOW_GATE_DISPOSITIONS = [
+    "hard_block",
+    "repair_required",
+    "defer_with_debt",
+    "warn_only",
+    "human_gate",
+    "rollback_stage",
+];
 /**
  * 文件审计裁决。
  *

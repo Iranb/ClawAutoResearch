@@ -9,6 +9,7 @@ import {
 import { readTextIfExists } from "../workflow-guard-core/fs";
 import { collectExecutionProofReceipts } from "../workflow-execution-proof";
 import { effectiveMinimumCitationCount } from "../research-writing/citation-count-policy";
+import { evaluateReferenceCoveragePolicy } from "../research-writing/reference-coverage-policy";
 
 function normalizeReviewVerdict(value: unknown): "pass" | "revise" | "block" | null {
   const raw = typeof value === "string" ? value.trim().toLowerCase() : "";
@@ -559,13 +560,12 @@ export async function collectReviewStageMissingSignals(
         `citation count must reach ${minimumCitationCount} before REVIEW closeout (current: ${citationIntegrity.bibliographyEntryCount})`
       );
     }
-    if (
-      minimumCitationCount > 0 &&
-      citationIntegrity.topicRelevanceStatus !== "ready"
-    ) {
-      missing.push(
-        `PROJECT_MANIFEST.json.citation_integrity.topic_relevance_status must be ready before REVIEW closeout (current: ${citationIntegrity.topicRelevanceStatus})`
-      );
+    const referenceCoverage = evaluateReferenceCoveragePolicy({
+      citationIntegrity,
+      minimumCitationCount,
+    });
+    if (!referenceCoverage.ready && referenceCoverage.reason) {
+      missing.push(`${referenceCoverage.reason} before REVIEW closeout`);
     }
   }
   if (surveyReviewMode) {

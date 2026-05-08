@@ -890,6 +890,11 @@ type TheorySupportState = {
   theoremCount: number;
   lemmaCount: number;
   proofPacketCount: number;
+  proofObligationLedgerPath: string | null;
+  proofObligationStatus: string;
+  blockingProofIssueCount: number;
+  counterexampleRedTeamStatus: string;
+  counterexampleRedTeamReportPath: string | null;
   lastUpdatedAt: string | null;
   pendingReason: string | null;
 };
@@ -905,8 +910,46 @@ type TheoryStateFile = {
   theorem_candidates: TheoryObjectPacket[];
   lemma_packets: TheoryObjectPacket[];
   appendix_sections: TheoryAppendixSection[];
+  theorem_issue_taxonomy: string[];
+  proof_obligations: TheoryProofObligation[];
+  proof_obligation_ledger_path: string | null;
+  counterexample_red_team: TheoryCounterexampleRedTeamState;
   pending_reason: string | null;
   updated_at: string | null;
+};
+
+type TheoryProofObligation = {
+  obligation_id: string;
+  packet_id: string | null;
+  issue_type: string;
+  severity: string;
+  status: string;
+  finding: string | null;
+  repair_owner_role: string | null;
+  repair_hint: string | null;
+  source_claim_ids: string[];
+  updated_at: string | null;
+};
+
+type TheoryCounterexampleRedTeamAttempt = {
+  attempt_id: string;
+  packet_id: string | null;
+  issue_type: string;
+  status: string;
+  candidate: string | null;
+  expected_failure_mode: string | null;
+  result: string | null;
+  repaired_by: string | null;
+  updated_at: string | null;
+};
+
+type TheoryCounterexampleRedTeamState = {
+  status: string;
+  attempts: TheoryCounterexampleRedTeamAttempt[];
+  blocking_findings: TheoryProofObligation[];
+  report_path: string | null;
+  last_updated_at: string | null;
+  pending_reason: string | null;
 };
 
 type TheoryAppendixSection = {
@@ -955,6 +998,12 @@ export type WritingContractState = {
   proofAppendixStatus: string;
   theoryNotePath: string | null;
   proofChecklist: string[];
+  scientificEditingRequired: boolean;
+  scientificEditingStatus: string;
+  scientificEditingPasses: string[];
+  scientificEditingLedgerPath: string | null;
+  scientificEditingReportPath: string | null;
+  lastScientificEditingAt: string | null;
   storylineSource: string | null;
   kgStorylineRequired: boolean;
   kgStorylineStatus: string;
@@ -988,7 +1037,13 @@ type CitationIntegrityState = {
   hallucinatedCitationCount: number;
   topicRelevanceTopic: string | null;
   topicRelevanceStatus: string;
+  referenceCoveragePolicy: string;
+  minimumRelevantCitationCount: number;
+  minimumCitationRelevanceScore: number | null;
+  maxCitationCount: number | null;
   relevantCitationCount: number;
+  peripheralCitationCount: number;
+  unrelatedCitationCount: number;
   offTopicCitationCount: number;
   topicRelevanceSummary: string | null;
   lastVerifiedAt: string | null;
@@ -7487,6 +7542,34 @@ export async function recordTheoryState(params: {
         pickNumber(patch, ["proofPacketCount", "proof_packet_count"]) ?? current.proofPacketCount
       )
     ),
+    proofObligationLedgerPath:
+      pickString(patch, [
+        "proofObligationLedgerPath",
+        "proof_obligation_ledger_path",
+      ]) ?? current.proofObligationLedgerPath,
+    proofObligationStatus:
+      normalizeStage(
+        patch.proofObligationStatus ?? patch.proof_obligation_status
+      ) ?? current.proofObligationStatus,
+    blockingProofIssueCount: Math.max(
+      0,
+      Math.floor(
+        pickNumber(patch, [
+          "blockingProofIssueCount",
+          "blocking_proof_issue_count",
+        ]) ?? current.blockingProofIssueCount
+      )
+    ),
+    counterexampleRedTeamStatus:
+      normalizeStage(
+        patch.counterexampleRedTeamStatus ??
+          patch.counterexample_red_team_status
+      ) ?? current.counterexampleRedTeamStatus,
+    counterexampleRedTeamReportPath:
+      pickString(patch, [
+        "counterexampleRedTeamReportPath",
+        "counterexample_red_team_report_path",
+      ]) ?? current.counterexampleRedTeamReportPath,
     lastUpdatedAt:
       pickString(patch, ["lastUpdatedAt", "last_updated_at"]) ?? new Date().toISOString(),
     pendingReason:
@@ -7514,6 +7597,21 @@ export async function recordTheoryState(params: {
     next.theoremCount = normalized.theorem_candidates.length;
     next.lemmaCount = normalized.lemma_packets.length;
     next.proofPacketCount = next.theoremCount + next.lemmaCount;
+    next.proofObligationLedgerPath =
+      normalized.proof_obligation_ledger_path ?? next.proofObligationLedgerPath;
+    next.blockingProofIssueCount =
+      normalized.proof_obligations.filter(
+        (obligation) =>
+          ["critical", "high"].includes(obligation.severity) &&
+          !["resolved", "waived", "closed"].includes(obligation.status)
+      ).length + normalized.counterexample_red_team.blocking_findings.length;
+    next.proofObligationStatus =
+      next.blockingProofIssueCount > 0 ? "needs_revision" : "ready";
+    next.counterexampleRedTeamStatus =
+      normalized.counterexample_red_team.status ?? next.counterexampleRedTeamStatus;
+    next.counterexampleRedTeamReportPath =
+      normalized.counterexample_red_team.report_path ??
+      next.counterexampleRedTeamReportPath;
     await writeJsonEnsured(theoryStateResolvedPath, serializeTheoryStateFile(normalized));
   }
 
@@ -7711,6 +7809,12 @@ export async function materializeTheoryAppendix(params: {
     existingSections: theoryFile.appendix_sections,
   });
   const bodySafeCount = packets.filter((packet) => packet.body_safe).length;
+  const blockingProofIssueCount =
+    theoryFile.proof_obligations.filter(
+      (obligation) =>
+        ["critical", "high"].includes(obligation.severity) &&
+        !["resolved", "waived", "closed"].includes(obligation.status)
+    ).length + theoryFile.counterexample_red_team.blocking_findings.length;
 
   theoryFile = normalizeTheoryStateFile({
     ...serializeTheoryStateFile(theoryFile),
@@ -7762,6 +7866,18 @@ export async function materializeTheoryAppendix(params: {
     theoremCount: theoremCandidates.length,
     lemmaCount: lemmaPackets.length,
     proofPacketCount: packets.length,
+    proofObligationLedgerPath:
+      theoryFile.proof_obligation_ledger_path ??
+      current.proofObligationLedgerPath,
+    proofObligationStatus:
+      blockingProofIssueCount > 0 ? "needs_revision" : "ready",
+    blockingProofIssueCount,
+    counterexampleRedTeamStatus:
+      theoryFile.counterexample_red_team.status ??
+      current.counterexampleRedTeamStatus,
+    counterexampleRedTeamReportPath:
+      theoryFile.counterexample_red_team.report_path ??
+      current.counterexampleRedTeamReportPath,
     lastUpdatedAt: now,
     pendingReason: null,
   };

@@ -10,6 +10,11 @@ import {
   recordTheoryState,
   upsertTheoryProofPacket,
 } from "../tools/workflow-guard.ts";
+import {
+  THEOREM_ISSUE_TAXONOMY,
+  normalizeTheoryStateFile,
+  serializeTheoryStateFile,
+} from "../tools/workflow-guard-state/theory-state.ts";
 
 async function makeTempProject() {
   const projectRoot = await fs.mkdtemp(
@@ -113,4 +118,60 @@ test("recordTheoryState writes THEORY_STATE.json and upsertTheoryProofPacket mai
   );
   assert.match(appendixDraft, /Additional Theory and Derivation Details/);
   assert.match(appendixDraft, /Margin monotonicity/);
+});
+
+test("theory state carries theorem issue taxonomy and counterexample red-team findings", () => {
+  const state = normalizeTheoryStateFile({
+    status: "draft",
+    overall_signal: "yellow",
+    proof_obligations: [
+      {
+        obligation_id: "obl-boundary-case",
+        packet_id: "theorem_margin_reduction",
+        issue_type: "boundary_case_failure",
+        severity: "high",
+        status: "open",
+        finding: "The zero-margin boundary case is not covered.",
+        repair_owner_role: "analyzer",
+        repair_hint: "Add an explicit epsilon margin assumption.",
+      },
+    ],
+    counterexample_red_team: {
+      status: "needs_revision",
+      attempts: [
+        {
+          attempt_id: "cx-zero-margin",
+          packet_id: "theorem_margin_reduction",
+          issue_type: "counterexample_found",
+          status: "failed",
+          candidate: "All classes share the same confidence margin.",
+          expected_failure_mode: "Monotonic bound becomes vacuous.",
+        },
+      ],
+      blocking_findings: [
+        {
+          obligation_id: "cx-blocker",
+          packet_id: "theorem_margin_reduction",
+          issue_type: "counterexample_found",
+          severity: "critical",
+          status: "open",
+        },
+      ],
+    },
+  });
+
+  assert.equal(THEOREM_ISSUE_TAXONOMY.length, 20);
+  assert.equal(state.theorem_issue_taxonomy.length, 20);
+  assert.equal(state.proof_obligations[0]?.issue_type, "boundary_case_failure");
+  assert.equal(state.counterexample_red_team.status, "needs_revision");
+  assert.equal(state.counterexample_red_team.attempts[0]?.issue_type, "counterexample_found");
+  assert.equal(state.counterexample_red_team.blocking_findings.length, 1);
+
+  const serialized = serializeTheoryStateFile(state);
+  assert.equal(serialized.theorem_issue_taxonomy.length, 20);
+  assert.equal(serialized.proof_obligations[0].severity, "high");
+  assert.equal(
+    serialized.counterexample_red_team.blocking_findings[0].issue_type,
+    "counterexample_found"
+  );
 });

@@ -29,6 +29,8 @@ const DEFAULT_CITATION_SOURCE_OF_TRUTH = [
   "zotero_packet",
   "citation_candidates",
 ];
+const DEFAULT_REFERENCE_COVERAGE_POLICY =
+  "minimum_relevance_no_upper_limit";
 const DEFAULT_CITATION_BIB_PATH = "academic_writer/paper/refs.bib";
 const DEFAULT_CITATION_REPORT_PATH = "reviewer/CITATION_VERIFICATION.md";
 const DEFAULT_REVIEW_PACKET_PATH = "reviewer/REVIEW_PACKET.json";
@@ -54,7 +56,13 @@ type CitationIntegrityStateLike = {
   hallucinatedCitationCount: number;
   topicRelevanceTopic: string | null;
   topicRelevanceStatus: string;
+  referenceCoveragePolicy: string;
+  minimumRelevantCitationCount: number;
+  minimumCitationRelevanceScore: number | null;
+  maxCitationCount: number | null;
   relevantCitationCount: number;
+  peripheralCitationCount: number;
+  unrelatedCitationCount: number;
   offTopicCitationCount: number;
   topicRelevanceSummary: string | null;
   lastVerifiedAt: string | null;
@@ -358,16 +366,62 @@ export function normalizeCitationIntegrityState(
       normalizeStage(
         record.topicRelevanceStatus ?? record.topic_relevance_status
       ) ?? "unknown",
+    referenceCoveragePolicy:
+      normalizeStage(
+        record.referenceCoveragePolicy ?? record.reference_coverage_policy
+      ) ?? DEFAULT_REFERENCE_COVERAGE_POLICY,
+    minimumRelevantCitationCount: Math.max(
+      0,
+      Math.floor(
+        pickNumber(record, [
+          "minimumRelevantCitationCount",
+          "minimum_relevant_citation_count",
+        ]) ?? 0
+      )
+    ),
+    minimumCitationRelevanceScore: pickNumber(record, [
+      "minimumCitationRelevanceScore",
+      "minimum_citation_relevance_score",
+    ]),
+    maxCitationCount: pickNumber(record, [
+      "maxCitationCount",
+      "max_citation_count",
+    ]),
     relevantCitationCount: Math.max(
       0,
       Math.floor(
         pickNumber(record, ["relevantCitationCount", "relevant_citation_count"]) ?? 0
       )
     ),
+    peripheralCitationCount: Math.max(
+      0,
+      Math.floor(
+        pickNumber(record, [
+          "peripheralCitationCount",
+          "peripheral_citation_count",
+        ]) ?? 0
+      )
+    ),
+    unrelatedCitationCount: Math.max(
+      0,
+      Math.floor(
+        pickNumber(record, [
+          "unrelatedCitationCount",
+          "unrelated_citation_count",
+          "offTopicCitationCount",
+          "off_topic_citation_count",
+        ]) ?? 0
+      )
+    ),
     offTopicCitationCount: Math.max(
       0,
       Math.floor(
-        pickNumber(record, ["offTopicCitationCount", "off_topic_citation_count"]) ?? 0
+        pickNumber(record, [
+          "offTopicCitationCount",
+          "off_topic_citation_count",
+          "unrelatedCitationCount",
+          "unrelated_citation_count",
+        ]) ?? 0
       )
     ),
     topicRelevanceSummary: pickString(record, [
@@ -403,7 +457,13 @@ export function serializeCitationIntegrityState(
     hallucinated_citation_count: state.hallucinatedCitationCount,
     topic_relevance_topic: state.topicRelevanceTopic,
     topic_relevance_status: state.topicRelevanceStatus,
+    reference_coverage_policy: state.referenceCoveragePolicy,
+    minimum_relevant_citation_count: state.minimumRelevantCitationCount,
+    minimum_citation_relevance_score: state.minimumCitationRelevanceScore,
+    max_citation_count: state.maxCitationCount,
     relevant_citation_count: state.relevantCitationCount,
+    peripheral_citation_count: state.peripheralCitationCount,
+    unrelated_citation_count: state.unrelatedCitationCount,
     off_topic_citation_count: state.offTopicCitationCount,
     topic_relevance_summary: state.topicRelevanceSummary,
     last_verified_at: state.lastVerifiedAt,

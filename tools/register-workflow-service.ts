@@ -156,7 +156,10 @@ import {
 } from "./workflow-hooks/builtin-bridge.js";
 import { evaluateWorkflowHooksForPoint } from "./workflow-hooks/executor.js";
 import { buildWorkflowHookPointContext } from "./workflow-hooks/point-context.js";
-import type { WorkflowHookPoint } from "./workflow-hooks/contracts.js";
+import type {
+  WorkflowGateControlPackage,
+  WorkflowHookPoint,
+} from "./workflow-hooks/contracts.js";
 
 type WorkflowCoordinatorLogger = {
   debug?: (message: string, meta?: Record<string, unknown>) => void;
@@ -572,6 +575,7 @@ type WorkflowHookPointAttempt = {
   aggregateVerdict: string | null;
   blockingReason: string | null;
   aggregateRevisionPacketPath: string | null;
+  gateControl?: WorkflowGateControlPackage | null;
 };
 
 type AutoModeMitigationDispatchAttempt = {
@@ -4494,7 +4498,17 @@ export async function maybeAdvanceWorkflowHookPointForProject(params: {
       }
       const launched = mergedSummary.hooksRun.some((entry) => entry.launched);
       const pending = mergedSummary.aggregateStatus === "auditing";
-      const approved = mergedSummary.aggregateVerdict === "pass";
+      const gateControl = mergedSummary.gateControl;
+      const nonBlockingDebtOrWarning =
+        !gateControl.blocking &&
+        gateControl.repairRequiredCount === 0 &&
+        (gateControl.deferredDebtCount > 0 || gateControl.warnOnlyCount > 0);
+      const repairRouted =
+        !gateControl.blocking &&
+        gateControl.repairRequiredCount > 0 &&
+        gateControl.repairRoutes.length > 0;
+      const approved =
+        mergedSummary.aggregateVerdict === "pass" || nonBlockingDebtOrWarning;
       return {
         launched,
         reason:
@@ -4504,6 +4518,12 @@ export async function maybeAdvanceWorkflowHookPointForProject(params: {
               ? launched
                 ? "started"
                 : "reviewing"
+              : repairRouted
+                ? mergedSummary.aggregateRevisionPacketPath
+                  ? "started"
+                  : params.workflowRuntime
+                    ? "reviewing"
+                    : "no_runtime_subagent"
               : params.workflowRuntime
                 ? "blocked"
                 : "no_runtime_subagent",
@@ -4517,6 +4537,7 @@ export async function maybeAdvanceWorkflowHookPointForProject(params: {
         aggregateVerdict: mergedSummary.aggregateVerdict,
         blockingReason: mergedSummary.blockingReason,
         aggregateRevisionPacketPath: mergedSummary.aggregateRevisionPacketPath,
+        gateControl,
       };
     },
   });

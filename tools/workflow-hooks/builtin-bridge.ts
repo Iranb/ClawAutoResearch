@@ -129,6 +129,7 @@ export async function writeBuiltinWorkflowHookState(params: {
       aggregateStatus: aggregate.aggregateStatus,
       aggregateVerdict: aggregate.aggregateVerdict,
       aggregateRevisionPacketPath: aggregate.aggregateRevisionPacketPath,
+      gateControl: aggregate.gateControl,
       updatedAt: nowIso(),
     },
   });
@@ -204,6 +205,7 @@ export async function mergeBuiltinWorkflowHooksIntoSummary(params: {
       aggregateStatus: aggregate.aggregateStatus,
       aggregateVerdict: aggregate.aggregateVerdict,
       aggregateRevisionPacketPath: aggregate.aggregateRevisionPacketPath,
+      gateControl: aggregate.gateControl,
       updatedAt: nowIso(),
     },
   });
@@ -215,6 +217,7 @@ export async function mergeBuiltinWorkflowHooksIntoSummary(params: {
     aggregateStatus: aggregate.aggregateStatus,
     blockingReason: aggregate.blockingReason,
     aggregateRevisionPacketPath: aggregate.aggregateRevisionPacketPath,
+    gateControl: aggregate.gateControl,
   };
 }
 

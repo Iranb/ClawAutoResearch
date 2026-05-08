@@ -67,6 +67,60 @@ export const WORKFLOW_HOOK_BLOCKING_MODES = [
 export type WorkflowHookBlockingMode = (typeof WORKFLOW_HOOK_BLOCKING_MODES)[number];
 
 /**
+ * Gate disposition 把“是否阻塞”和“阻塞后怎么推进”分开。
+ *
+ * 旧的 blockingMode 仍然保留，用于向后兼容；新的 disposition 用于
+ * auto-iterator / handoff 生成可执行 repair、debt 或 rollback 路由。
+ */
+export const WORKFLOW_GATE_DISPOSITIONS = [
+  "hard_block",
+  "repair_required",
+  "defer_with_debt",
+  "warn_only",
+  "human_gate",
+  "rollback_stage",
+] as const;
+export type WorkflowGateDisposition = (typeof WORKFLOW_GATE_DISPOSITIONS)[number];
+
+export type WorkflowGateScope = {
+  level: "claim" | "section" | "artifact" | "stage";
+  targets: string[];
+};
+
+export type WorkflowGateRepairRoute = {
+  owner: string | null;
+  command: string | null;
+  repairPacketPath: string | null;
+  recheckHookId: string | null;
+  rollbackStage: string | null;
+  retryBudget: number | null;
+};
+
+export type WorkflowGateControlIssue = {
+  hookId: string;
+  disposition: WorkflowGateDisposition;
+  scope: WorkflowGateScope;
+  reason: string | null;
+  severity: "low" | "medium" | "high" | "critical" | null;
+  confidence: number | null;
+  recoverable: boolean;
+  repairRoute: WorkflowGateRepairRoute | null;
+};
+
+export type WorkflowGateControlPackage = {
+  blocking: boolean;
+  primaryDisposition: WorkflowGateDisposition | null;
+  hardBlockCount: number;
+  repairRequiredCount: number;
+  deferredDebtCount: number;
+  warnOnlyCount: number;
+  humanGateCount: number;
+  rollbackRequiredCount: number;
+  issues: WorkflowGateControlIssue[];
+  repairRoutes: WorkflowGateRepairRoute[];
+};
+
+/**
  * 文件审计裁决。
  *
  * - pass: 通过
@@ -248,6 +302,13 @@ export type WorkflowFileAuditHookPolicy = {
   maxUnchangedRounds: number;
   reviseOwnerRole: string | null;
   reviseCommand: string | null;
+  gateDisposition?: WorkflowGateDisposition | null;
+  gateScope?: WorkflowGateScope | null;
+  repairOwnerRole?: string | null;
+  repairCommand?: string | null;
+  rollbackStage?: string | null;
+  recheckHookId?: string | null;
+  retryBudget?: number | null;
   reportDir: string | null;
   filters: WorkflowHookFilters | null;
   appliesWhen: WorkflowHookAppliesWhen | null;
@@ -397,6 +458,7 @@ export type WorkflowHookPointAggregateState = {
   aggregateStatus: WorkflowHookRunStatus;
   aggregateVerdict: WorkflowHookPointAggregateVerdict;
   aggregateRevisionPacketPath: string | null;
+  gateControl: WorkflowGateControlPackage | null;
   updatedAt: string;
 };
 
@@ -437,6 +499,9 @@ export type WorkflowHookExecutionResult = {
   result: WorkflowFileAuditResult | null;
   revisionDispatch: WorkflowHookRevisionDispatchState | null;
   blockingReason: string | null;
+  gateDisposition?: WorkflowGateDisposition | null;
+  gateScope?: WorkflowGateScope | null;
+  repairRoute?: WorkflowGateRepairRoute | null;
 };
 
 /**
@@ -454,4 +519,5 @@ export type WorkflowHookPointExecutionSummary = {
   hooksRun: WorkflowHookExecutionResult[];
   blockingReason: string | null;
   aggregateRevisionPacketPath: string | null;
+  gateControl: WorkflowGateControlPackage;
 };

@@ -13,6 +13,7 @@ import {
   auditTheoryStateObject,
 } from "../workflow-intermediate-artifact-audit";
 import { effectiveMinimumCitationCount } from "../research-writing/citation-count-policy";
+import { evaluateReferenceCoveragePolicy } from "../research-writing/reference-coverage-policy";
 
 export interface WritingStageDeps {
   resolveProjectArtifactPath: (
@@ -808,6 +809,31 @@ export async function collectSubmitStageMissingSignals(
       `PROJECT_MANIFEST.json.paragraph_logic_audit.status must be ready before SUBMIT (current: ${paragraphLogicAudit.status})`
     );
   }
+  if (writingContract.scientificEditingRequired) {
+    if (deps.normalizeStage(writingContract.scientificEditingStatus) !== "ready") {
+      missing.push(
+        `PROJECT_MANIFEST.json.writing_contract.scientific_editing_status = ready before SUBMIT (current: ${writingContract.scientificEditingStatus})`
+      );
+    }
+    const scientificEditingLedgerPath = deps.resolveProjectArtifactPath(
+      ctx.projectRoot,
+      writingContract.scientificEditingLedgerPath
+    );
+    if (!scientificEditingLedgerPath || !(await deps.pathExists(scientificEditingLedgerPath))) {
+      missing.push(
+        `{PROJ}/${writingContract.scientificEditingLedgerPath ?? "academic_writer/SCIENTIFIC_EDIT_LEDGER.json"}`
+      );
+    }
+    const scientificEditingReportPath = deps.resolveProjectArtifactPath(
+      ctx.projectRoot,
+      writingContract.scientificEditingReportPath
+    );
+    if (!scientificEditingReportPath || !(await deps.pathExists(scientificEditingReportPath))) {
+      missing.push(
+        `{PROJ}/${writingContract.scientificEditingReportPath ?? "academic_writer/SCIENTIFIC_EDIT_REPORT.md"}`
+      );
+    }
+  }
   missing.push(
     ...deps.getWritingSectionContractViolations({
       writingSession,
@@ -1013,27 +1039,26 @@ export async function collectSubmitStageMissingSignals(
         `citation placeholders <= ${citationIntegrity.allowedPlaceholderCount} (current: ${citationIntegrity.unresolvedPlaceholderCount})`
       );
     }
-  if (citationIntegrity.hallucinatedCitationCount > 0) {
-    missing.push(
-      `citation hallucinations = 0 (current: ${citationIntegrity.hallucinatedCitationCount})`
-    );
-  }
-  if (
-    minimumCitationCount > 0 &&
-    citationIntegrity.bibliographyEntryCount < minimumCitationCount
-  ) {
-    missing.push(
-      `citation count >= ${minimumCitationCount} (current: ${citationIntegrity.bibliographyEntryCount})`
-    );
-  }
-  if (
-    minimumCitationCount > 0 &&
-    citationIntegrity.topicRelevanceStatus !== "ready"
-  ) {
-    missing.push(
-      `PROJECT_MANIFEST.json.citation_integrity.topic_relevance_status = ready (current: ${citationIntegrity.topicRelevanceStatus})`
-    );
-  }
+    if (citationIntegrity.hallucinatedCitationCount > 0) {
+      missing.push(
+        `citation hallucinations = 0 (current: ${citationIntegrity.hallucinatedCitationCount})`
+      );
+    }
+    if (
+      minimumCitationCount > 0 &&
+      citationIntegrity.bibliographyEntryCount < minimumCitationCount
+    ) {
+      missing.push(
+        `citation count >= ${minimumCitationCount} (current: ${citationIntegrity.bibliographyEntryCount})`
+      );
+    }
+    const referenceCoverage = evaluateReferenceCoveragePolicy({
+      citationIntegrity,
+      minimumCitationCount,
+    });
+    if (!referenceCoverage.ready && referenceCoverage.reason) {
+      missing.push(referenceCoverage.reason);
+    }
     if (!verificationReportPath || !(await deps.pathExists(verificationReportPath))) {
       missing.push(
         `{PROJ}/${citationIntegrity.verificationReportPath ?? deps.DEFAULT_CITATION_REPORT_PATH}`
