@@ -134,6 +134,13 @@ async function seedWriteReadyProject() {
       delta_h_score: 0.3404,
     },
   });
+  const auxiliaryGcdSources = Array.from({ length: 24 }, (_unused, index) => ({
+    canonical_id: `doi:10.5555/openclaw.gcd.${index + 1}`,
+    title: `GCD Reference ${index + 1} for Generalized Category Discovery`,
+    year: 2020 + (index % 6),
+    doi: `10.5555/openclaw.gcd.${index + 1}`,
+    venue: index % 2 === 0 ? "CVPR" : "ICLR",
+  }));
   await writeJson(path.join(projectRoot, "researcher", "PAPER_SOURCE_INDEX.json"), {
     papers: [
       { canonical_id: "arxiv:2410.11206", title: "Towards Understanding Why FixMatch Generalizes Better Than Supervised Learning", year: 2024, best_oa_url: "https://arxiv.org/abs/2410.11206" },
@@ -148,6 +155,7 @@ async function seedWriteReadyProject() {
       { canonical_id: "doi:10.1007/978-981-99-8073-4_41", title: "Generalized Category Discovery with Clustering Assignment Consistency", year: 2024, doi: "10.1007/978-981-99-8073-4_41", venue: "PRCV" },
       { canonical_id: "doi:10.1007/s11263-026-02745-y", title: "Memory Consistency Guided Divide-and-Conquer Learning for Generalized Category Discovery", year: 2026, doi: "10.1007/s11263-026-02745-y", venue: "IJCV" },
       { canonical_id: "arxiv:2510.18740", title: "SEAL: Semantic-Aware Hierarchical Learning for Generalized Category Discovery", year: 2025, best_oa_url: "https://arxiv.org/abs/2510.18740" },
+      ...auxiliaryGcdSources,
     ],
   });
   await writeJson(path.join(projectRoot, "researcher", "ablation_summary.json"), {
@@ -181,6 +189,9 @@ test("authoring closeout synthesizes a substantive no-Discord conference draft",
 
   assert.equal(closeout.nextStage, "submit");
   assert.equal(closeout.citationIntegrity.verificationStatus, "verified");
+  assert.equal(closeout.citationIntegrity.minimumCitationCount, 30);
+  assert.ok(closeout.citationIntegrity.bibliographyEntryCount >= 30);
+  assert.ok(closeout.bibliographyCount >= 30);
   assert.ok(closeout.generatedFiles.includes("academic_writer/paper/main.tex"));
   assert.ok(closeout.generatedFiles.includes("academic_writer/KG_STORYLINE_PACKET.md"));
 
@@ -209,7 +220,7 @@ test("authoring closeout synthesizes a substantive no-Discord conference draft",
     path.join(projectRoot, "academic_writer", "paper", "refs.bib"),
     "utf8"
   );
-  assert.ok((refsBib.match(/@\w+\s*\{/g) ?? []).length >= 10);
+  assert.ok((refsBib.match(/@\w+\s*\{/g) ?? []).length >= 30);
   const figurePack = JSON.parse(
     await fs.readFile(path.join(projectRoot, "academic_writer", "FIGURE_PACK.json"), "utf8")
   );

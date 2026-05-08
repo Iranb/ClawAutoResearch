@@ -30,6 +30,10 @@ import {
 import { recordCitationVerificationImpl } from "./workflow-guard-recorders/state-recorders";
 import { syncAuthoringArtifactRecovery } from "./research-writing/authoring-artifact-recovery";
 import { materializeParagraphLogicAudit } from "./research-writing/paragraph-logic-audit";
+import {
+  MIN_CONFERENCE_PAPER_CITATION_COUNT,
+  minimumCitationCountForPaperMode,
+} from "./research-writing/citation-count-policy";
 
 const execFileAsync = promisify(execFile);
 
@@ -2842,10 +2846,25 @@ export async function reconcileAuthoringCloseout(params: {
     issue_ids: issues.map((issue) => issue.issue_id),
   });
 
+  const minimumCitationCount =
+    minimumCitationCountForPaperMode(inferredPaperMode) ||
+    MIN_CONFERENCE_PAPER_CITATION_COUNT;
+  const allCitationsReal =
+    citationSummary.suspicious === 0 && citationSummary.hallucinated === 0;
+  const citationCountReady = bibKeys.length >= minimumCitationCount;
+  const citationPendingReasons: string[] = [];
+  if (!citationCountReady) {
+    citationPendingReasons.push(
+      `Bibliography has ${bibKeys.length} entries; at least ${minimumCitationCount} are required for ${inferredPaperMode} manuscripts.`
+    );
+  }
+  if (!allCitationsReal) {
+    citationPendingReasons.push(
+      "Citation verification still has suspicious or hallucinated entries."
+    );
+  }
   const citationVerificationStatus =
-    citationSummary.suspicious === 0 && citationSummary.hallucinated === 0
-      ? "verified"
-      : "needs_revision";
+    citationPendingReasons.length === 0 ? "verified" : "needs_revision";
   const citationIntegrity = await recordCitationVerificationImpl(
     {
       projectRoot,
@@ -2855,8 +2874,8 @@ export async function reconcileAuthoringCloseout(params: {
         verification_report_path: "reviewer/CITATION_VERIFICATION.md",
         bibliography_entry_count: bibKeys.length,
         bibliography_page_count: bibKeys.length >= 6 ? 1 : 0,
-        minimum_citation_count: inferredPaperMode === "survey" ? 12 : 6,
-        all_citations_real: citationVerificationStatus === "verified",
+        minimum_citation_count: minimumCitationCount,
+        all_citations_real: allCitationsReal,
         verified_citation_count:
           citationSummary.verified > 0 ? citationSummary.verified : Math.max(0, citeKeys.length),
         suspicious_citation_count: citationSummary.suspicious,
@@ -2869,9 +2888,7 @@ export async function reconcileAuthoringCloseout(params: {
           "Closeout bibliography covers FixMatch consistency learning and GCD source anchors.",
         last_verified_at: new Date().toISOString(),
         pending_reason:
-          citationVerificationStatus === "verified"
-            ? null
-            : "Citation verification still has suspicious or hallucinated entries.",
+          citationPendingReasons.length > 0 ? citationPendingReasons.join(" ") : null,
       },
     },
     {
@@ -2889,14 +2906,21 @@ export async function reconcileAuthoringCloseout(params: {
   const writingReadyForSubmit =
     writingSession.readyForSubmit ||
     readString(writingSession.state?.status)?.toLowerCase() === "ready_for_submit";
+  const citationReadyForSubmit =
+    citationIntegrity.state.verificationStatus === "verified" &&
+    citationIntegrity.state.bibliographyEntryCount >=
+      citationIntegrity.state.minimumCitationCount &&
+    citationIntegrity.state.allCitationsReal &&
+    !citationIntegrity.state.pendingReason;
   const nextStage =
     reviewNeedsRefresh
       ? "review"
       : reviewIssueTracker.hardBlockersOpen ||
-    reviewIssueTracker.mediumOrHigherIssuesNeedDisposition ||
-    !writingReadyForSubmit
-      ? "write"
-      : "submit";
+          reviewIssueTracker.mediumOrHigherIssuesNeedDisposition ||
+          !writingReadyForSubmit ||
+          !citationReadyForSubmit
+        ? "write"
+        : "submit";
   const latestManifest =
     (await readJsonIfExists<Record<string, unknown>>(path.join(projectRoot, "PROJECT_MANIFEST.json"))) ??
     {};

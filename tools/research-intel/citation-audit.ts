@@ -11,6 +11,7 @@ import {
   normalizeWritingContractState,
   normalizeWritingMode,
 } from "../workflow-guard-state/writing-contract";
+import { effectiveMinimumCitationCount } from "../research-writing/citation-count-policy";
 import { materializePaperIdentityRegistry } from "./paper-identity-registry";
 
 export type CitationAuditReport = {
@@ -97,18 +98,6 @@ function inferPaperMode(manifest: Record<string, unknown>): "conference" | "jour
     normalizeWritingMode(manifest.paper_mode ?? manifest.paperMode) ??
     (manifest.workflow_line === "survey" || manifest.paper_type === "survey" ? "survey" : null)
   );
-}
-
-function minimumCitationCountForPaperMode(
-  paperMode: "conference" | "journal" | "survey" | null
-): number {
-  if (paperMode === "survey") {
-    return 50;
-  }
-  if (paperMode === "journal") {
-    return 40;
-  }
-  return 0;
 }
 
 function inferTopicRelevanceTopic(manifest: Record<string, unknown>): string | null {
@@ -324,10 +313,10 @@ export async function materializeCitationAudit(params: {
   const bibliographyEntries = parseBibEntries(bibliographyText);
   const identityRegistry = await materializePaperIdentityRegistry({ projectRoot: params.projectRoot });
   const paperMode = inferPaperMode(manifest);
-  const minimumCitationCount =
-    current.minimumCitationCount > 0
-      ? current.minimumCitationCount
-      : minimumCitationCountForPaperMode(paperMode);
+  const minimumCitationCount = effectiveMinimumCitationCount({
+    configuredMinimumCitationCount: current.minimumCitationCount,
+    paperMode,
+  });
   const citationCountStatus =
     bibliographyEntries.length >= minimumCitationCount ? "ready" : "needs_revision";
   const topicRelevanceTopic = inferTopicRelevanceTopic(manifest);

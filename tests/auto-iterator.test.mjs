@@ -186,6 +186,20 @@ function buildCompliantFigureTableLatex({
   ].join("\n\n");
 }
 
+function buildReadyReferencesBib(count = 30) {
+  return Array.from({ length: count }, (_unused, index) => {
+    const number = index + 1;
+    return [
+      `@article{demo_ref_${number},`,
+      `  title={Demo Reference ${number}},`,
+      "  author={Author, Test},",
+      "  journal={Journal of Demo Research},",
+      `  year={${2020 + (index % 6)}}`,
+      "}",
+    ].join("\n");
+  }).join("\n\n") + "\n";
+}
+
 async function activatePreparedHandoff(projectRoot, role) {
   return claimAndActivateWorkflowHandoffForAgent({
     projectRoot,
@@ -1308,7 +1322,7 @@ async function seedProjectReadyForSubmit(projectRoot) {
   await writeText(path.join(projectRoot, "academic_writer", "paper", "main.pdf"), "%PDF-1.4\n");
   await writeText(
     path.join(projectRoot, "academic_writer", "paper", "refs.bib"),
-    "@article{demo,title={Demo}}\n"
+    buildReadyReferencesBib()
   );
   await writeText(path.join(projectRoot, "academic_writer", "WRITING_SIGNALS.md"));
   await writeText(path.join(projectRoot, "cross-reviewer", "notes.md"));
@@ -1422,13 +1436,18 @@ async function seedProjectReadyForSubmit(projectRoot) {
       bibliography_path: "academic_writer/paper/refs.bib",
       verification_report_path: "reviewer/CITATION_VERIFICATION.md",
       verification_status: "verified",
+      bibliography_entry_count: 30,
       bibliography_page_count: 1,
+      minimum_citation_count: 30,
       all_citations_real: true,
       allowed_placeholder_count: 0,
       unresolved_placeholder_count: 0,
-      verified_citation_count: 12,
+      verified_citation_count: 30,
       suspicious_citation_count: 0,
       hallucinated_citation_count: 0,
+      topic_relevance_status: "ready",
+      relevant_citation_count: 30,
+      off_topic_citation_count: 0,
       last_verified_at: now,
     },
     writing_session: {
@@ -7070,6 +7089,46 @@ test("auto iterator keeps submit blocked when survey citation count or topicalit
   );
   assert.ok(
     result.missingStageSignals.some((signal) => /topic_relevance_status/i.test(signal))
+  );
+});
+
+test("auto iterator floors stale conference citation minimum to thirty before submit", async (t) => {
+  const projectRoot = await makeTempProject();
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await seedProjectReadyForSubmit(projectRoot);
+
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.writing_contract = {
+    ...(manifest.writing_contract ?? {}),
+    paper_mode: "conference",
+  };
+  manifest.citation_integrity.verification_status = "verified";
+  manifest.citation_integrity.all_citations_real = true;
+  manifest.citation_integrity.minimum_citation_count = 6;
+  manifest.citation_integrity.bibliography_entry_count = 20;
+  manifest.citation_integrity.verified_citation_count = 20;
+  manifest.citation_integrity.relevant_citation_count = 20;
+  manifest.citation_integrity.topic_relevance_status = "ready";
+  await writeJson(manifestPath, manifest);
+  await writeText(
+    path.join(projectRoot, "academic_writer", "paper", "refs.bib"),
+    buildReadyReferencesBib(20)
+  );
+
+  const result = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+  });
+
+  assert.equal(result.stageBefore, "submit");
+  assert.ok(
+    result.missingStageSignals.some((signal) => /citation count .*30/i.test(signal)),
+    result.missingStageSignals.join("\n")
   );
 });
 

@@ -12,6 +12,7 @@ import {
   auditRevisionCycleObject,
   auditTheoryStateObject,
 } from "../workflow-intermediate-artifact-audit";
+import { effectiveMinimumCitationCount } from "../research-writing/citation-count-policy";
 
 export interface WritingStageDeps {
   resolveProjectArtifactPath: (
@@ -120,6 +121,24 @@ function readNumberField(record: Record<string, unknown> | null, keys: string[])
     }
   }
   return 0;
+}
+
+function effectiveCitationMinimumForWritingContract(params: {
+  citationIntegrity: { minimumCitationCount?: unknown };
+  writingContract: Record<string, unknown> | null | undefined;
+  manifest: Record<string, unknown> | null | undefined;
+}): number {
+  return effectiveMinimumCitationCount({
+    configuredMinimumCitationCount: params.citationIntegrity.minimumCitationCount,
+    paperModeHints: [
+      params.writingContract?.paperMode,
+      params.writingContract?.paper_mode,
+      params.manifest?.paper_mode,
+      params.manifest?.paperMode,
+      params.manifest?.paper_type,
+      params.manifest?.workflow_line,
+    ],
+  });
 }
 
 function hasActiveWriterRevisionCycle(manifest: Record<string, unknown> | null | undefined): boolean {
@@ -671,6 +690,11 @@ export async function collectWriteStageMissingSignals(
   const citationIntegrity = deps.normalizeCitationIntegrityState(
     ctx.manifest?.citation_integrity
   );
+  const minimumCitationCount = effectiveCitationMinimumForWritingContract({
+    citationIntegrity,
+    writingContract,
+    manifest: ctx.manifest,
+  });
   if (citationIntegrity.enabled && citationIntegrity.verificationRequired) {
     if (citationIntegrity.verificationStatus !== "verified") {
       missing.push(
@@ -680,6 +704,14 @@ export async function collectWriteStageMissingSignals(
     if (!citationIntegrity.allCitationsReal) {
       missing.push(
         "PROJECT_MANIFEST.json.citation_integrity.all_citations_real = true before WRITE handoff"
+      );
+    }
+    if (
+      minimumCitationCount > 0 &&
+      citationIntegrity.bibliographyEntryCount < minimumCitationCount
+    ) {
+      missing.push(
+        `citation count >= ${minimumCitationCount} before WRITE handoff (current: ${citationIntegrity.bibliographyEntryCount})`
       );
     }
   }
@@ -932,6 +964,11 @@ export async function collectSubmitStageMissingSignals(
   const citationIntegrity = deps.normalizeCitationIntegrityState(
     ctx.manifest?.citation_integrity
   );
+  const minimumCitationCount = effectiveCitationMinimumForWritingContract({
+    citationIntegrity,
+    writingContract,
+    manifest: ctx.manifest,
+  });
   const externalReview = deps.normalizeExternalReviewState(
     ctx.manifest?.external_review_state
   );
@@ -982,15 +1019,15 @@ export async function collectSubmitStageMissingSignals(
     );
   }
   if (
-    citationIntegrity.minimumCitationCount > 0 &&
-    citationIntegrity.bibliographyEntryCount < citationIntegrity.minimumCitationCount
+    minimumCitationCount > 0 &&
+    citationIntegrity.bibliographyEntryCount < minimumCitationCount
   ) {
     missing.push(
-      `citation count >= ${citationIntegrity.minimumCitationCount} (current: ${citationIntegrity.bibliographyEntryCount})`
+      `citation count >= ${minimumCitationCount} (current: ${citationIntegrity.bibliographyEntryCount})`
     );
   }
   if (
-    citationIntegrity.minimumCitationCount > 0 &&
+    minimumCitationCount > 0 &&
     citationIntegrity.topicRelevanceStatus !== "ready"
   ) {
     missing.push(

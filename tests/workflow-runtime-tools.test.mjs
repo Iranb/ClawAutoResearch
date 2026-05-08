@@ -94,6 +94,20 @@ async function writeJson(targetPath, value) {
   await fs.writeFile(targetPath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
 }
 
+function buildReadyReferencesBib(count = 30) {
+  return Array.from({ length: count }, (_unused, index) => {
+    const number = index + 1;
+    return [
+      `@article{ready_ref_${number},`,
+      `  title={Ready Reference ${number}},`,
+      "  author={Author, Test},",
+      "  journal={Journal of Demo Research},",
+      `  year={${2020 + (index % 6)}}`,
+      "}",
+    ].join("\n");
+  }).join("\n\n") + "\n";
+}
+
 async function seedMinimalProject(projectRoot, manifest) {
   await fs.mkdir(path.join(projectRoot, "researcher"), { recursive: true });
   await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
@@ -6229,19 +6243,7 @@ The pipeline can close the loop.
   );
   await writeText(
     path.join(projectRoot, "academic_writer", "paper", "refs.bib"),
-    `@inproceedings{vaze2022gcd,
-  title={Generalized Category Discovery},
-  author={Vaze, Sagar and Han, Kai and Vedaldi, Andrea and Zisserman, Andrew},
-  booktitle={CVPR},
-  year={2022}
-}
-@book{kahneman2011thinking,
-  title={Thinking, Fast and Slow},
-  author={Kahneman, Daniel},
-  year={2011},
-  publisher={Farrar, Straus and Giroux}
-}
-`
+    buildReadyReferencesBib()
   );
   await writeText(path.join(projectRoot, "academic_writer", "story", "STORY_SPINE.md"), "# story\n");
   await writeText(

@@ -37,6 +37,7 @@ import {
   materializePapernexusPacketContracts,
 } from "../papernexus-packets/materializer";
 import { materializeResultsStoryline } from "../research-writing/results-storyline";
+import { effectiveMinimumCitationCount } from "../research-writing/citation-count-policy";
 import { materializeSurveyStorylinePlanner } from "../research-writing/survey-storyline-planner";
 import { materializeTitleAbstractIntroWorkbench } from "../research-writing/title-abstract-intro-workbench";
 import { materializeWritingSupportArtifacts } from "../research-writing/materializers";
@@ -2280,7 +2281,21 @@ async function shouldReconcileAuthoringCloseout(params: {
     return true;
   }
   const refsBib = await readTextIfExists(refsBibPath);
-  if (countBibEntries(refsBib) < 6) {
+  const minimumCitationCount = effectiveMinimumCitationCount({
+    configuredMinimumCitationCount: readManifestNumber(params.manifest.citation_integrity, [
+      "minimum_citation_count",
+      "minimumCitationCount",
+    ]),
+    paperModeHints: [
+      writingContract.paperMode,
+      params.manifest.paper_mode,
+      params.manifest.paperMode,
+      params.manifest.paper_type,
+      params.manifest.workflow_line,
+    ],
+    fallbackMinimumCitationCount: 6,
+  });
+  if (countBibEntries(refsBib) < minimumCitationCount) {
     return true;
   }
   const kgPacketPath = resolveProjectArtifactPath(
@@ -2310,6 +2325,17 @@ async function shouldReconcileAuthoringCloseout(params: {
       ? (params.manifest.citation_integrity as Record<string, unknown>)
       : {};
   if (citationStatus !== "verified" || citationRecord.all_citations_real !== true) {
+    return true;
+  }
+  const bibliographyEntryCount =
+    readManifestNumber(params.manifest.citation_integrity, [
+      "bibliography_entry_count",
+      "bibliographyEntryCount",
+    ]) ?? countBibEntries(refsBib);
+  if (
+    minimumCitationCount > 0 &&
+    bibliographyEntryCount < minimumCitationCount
+  ) {
     return true;
   }
   if (params.stage === "submit") {
