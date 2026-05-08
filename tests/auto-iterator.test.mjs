@@ -4779,15 +4779,22 @@ test("auto iterator does not reopen a degradably satisfied IDEA-CATALYST requisi
   const reportPath = `${path.dirname(request.manifest_path)}/REQUISITION_SATISFACTION_REPORT.json`;
   await writeJson(path.join(projectRoot, reportPath), {
     schema_version: 1,
-    status: "warning",
-    decision: "degraded_satisfied_current_graph",
+    status: "satisfied_bounded_with_import_blocker",
     request_id: request.request_id,
+    requisition_id: "req-catalyst-degraded",
     trigger_kind: "idea_catalyst_requisition",
     graph_presence_status: "ready",
+    import_status: "failed_with_fix_applied",
     selected_paper_count: 0,
     candidate_paper_count: 0,
     reason:
       "Graph presence is ready and the bounded no-Discord requisition did not produce additional durable import evidence.",
+    remediation_pass: {
+      graph_ready: true,
+      can_proceed_with_existing_graph: true,
+      blocker_detail:
+        "PaperNexus import could not add durable sources, but the current graph is ready for bounded continuation.",
+    },
   });
   queuedManifest.current_stage = "graph_build";
   queuedManifest.current_micro_stage = "uploading";

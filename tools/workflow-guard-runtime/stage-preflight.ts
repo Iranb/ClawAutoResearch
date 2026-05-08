@@ -4,6 +4,10 @@ import {
 } from "../workflow-guard-state/ideation-contract";
 import { normalizeResearchProgramState } from "../workflow-guard-state/research-program";
 import {
+  normalizeBrainstormCycleState,
+  serializeBrainstormCycleState,
+} from "../workflow-guard-state/research-loop-state";
+import {
   isPaperIngestionExecutableUploadRequest,
   normalizePaperIngestionState,
   serializePaperIngestionState,
@@ -396,6 +400,147 @@ function extractGeneratedFiles(result: unknown): string[] {
   return generatedFiles.filter(
     (entry): entry is string => typeof entry === "string" && entry.trim().length > 0
   );
+}
+
+function isMeaningfulJsonArtifact(value: unknown): boolean {
+  if (value === null || value === undefined) {
+    return false;
+  }
+  if (Array.isArray(value)) {
+    return value.length > 0;
+  }
+  if (typeof value === "object") {
+    return Object.keys(value as Record<string, unknown>).length > 0;
+  }
+  return String(value).trim().length > 0;
+}
+
+async function hasMeaningfulJsonArtifact(params: {
+  projectRoot: string;
+  artifactPath: string | null;
+}): Promise<boolean> {
+  const resolved = resolveProjectArtifactPath(
+    params.projectRoot,
+    params.artifactPath
+  );
+  if (!resolved) {
+    return false;
+  }
+  return isMeaningfulJsonArtifact(await readJsonIfExists<unknown>(resolved));
+}
+
+function toJsonSiblingArtifactPath(artifactPath: string | null): string | null {
+  const trimmed = artifactPath?.trim();
+  if (!trimmed) {
+    return null;
+  }
+  if (/\.json$/i.test(trimmed)) {
+    return trimmed;
+  }
+  const slashIndex = trimmed.lastIndexOf("/");
+  const directory = slashIndex >= 0 ? `${trimmed.slice(0, slashIndex + 1)}` : "";
+  const basename = slashIndex >= 0 ? trimmed.slice(slashIndex + 1) : trimmed;
+  const dotIndex = basename.lastIndexOf(".");
+  const stem = dotIndex > 0 ? basename.slice(0, dotIndex) : basename;
+  return `${directory}${stem}.json`;
+}
+
+async function resolveBrainstormJsonPathRepair(params: {
+  projectRoot: string;
+  artifactPath: string | null;
+}): Promise<string | null> {
+  const currentPath = params.artifactPath?.trim() || null;
+  const currentIsJson = Boolean(currentPath && /\.json$/i.test(currentPath));
+  if (
+    currentIsJson &&
+    (await hasMeaningfulJsonArtifact({
+      projectRoot: params.projectRoot,
+      artifactPath: currentPath,
+    }))
+  ) {
+    return null;
+  }
+  const jsonSiblingPath = toJsonSiblingArtifactPath(currentPath);
+  if (!jsonSiblingPath || jsonSiblingPath === currentPath) {
+    return null;
+  }
+  if (
+    await hasMeaningfulJsonArtifact({
+      projectRoot: params.projectRoot,
+      artifactPath: jsonSiblingPath,
+    })
+  ) {
+    return jsonSiblingPath;
+  }
+  return null;
+}
+
+async function reconcileBrainstormCycleJsonManifestPaths(params: {
+  projectRoot: string;
+  manifest: ManifestLike;
+}): Promise<{ manifest: ManifestLike; updated: boolean; repairedFields: string[] }> {
+  const currentRecord =
+    params.manifest.brainstorm_cycle &&
+    typeof params.manifest.brainstorm_cycle === "object" &&
+    !Array.isArray(params.manifest.brainstorm_cycle)
+      ? (params.manifest.brainstorm_cycle as Record<string, unknown>)
+      : null;
+  if (!currentRecord) {
+    return { manifest: params.manifest, updated: false, repairedFields: [] };
+  }
+  const state = normalizeBrainstormCycleState(currentRecord);
+  const repairs = {
+    topicSummaryPath:
+      await resolveBrainstormJsonPathRepair({
+        projectRoot: params.projectRoot,
+        artifactPath: state.topicSummaryPath,
+      }),
+    researchBriefPath:
+      await resolveBrainstormJsonPathRepair({
+        projectRoot: params.projectRoot,
+        artifactPath: state.researchBriefPath,
+      }),
+    brainstormBriefPath:
+      await resolveBrainstormJsonPathRepair({
+        projectRoot: params.projectRoot,
+        artifactPath: state.brainstormBriefPath,
+      }),
+    workingMemoryPath:
+      await resolveBrainstormJsonPathRepair({
+        projectRoot: params.projectRoot,
+        artifactPath: state.workingMemoryPath,
+      }),
+  };
+  const repairedFields = Object.entries(repairs)
+    .filter(([, value]) => Boolean(value))
+    .map(([field]) => field);
+  if (repairedFields.length === 0) {
+    return { manifest: params.manifest, updated: false, repairedFields };
+  }
+
+  const next = serializeBrainstormCycleState({
+    ...state,
+    topicSummaryPath: repairs.topicSummaryPath ?? state.topicSummaryPath,
+    researchBriefPath: repairs.researchBriefPath ?? state.researchBriefPath,
+    brainstormBriefPath: repairs.brainstormBriefPath ?? state.brainstormBriefPath,
+    workingMemoryPath: repairs.workingMemoryPath ?? state.workingMemoryPath,
+  });
+  const manifest = {
+    ...params.manifest,
+    brainstorm_cycle: {
+      ...currentRecord,
+      topic_summary_path: next.topic_summary_path,
+      research_brief_path: next.research_brief_path,
+      brainstorm_brief_path: next.brainstorm_brief_path,
+      working_memory_path: next.working_memory_path,
+    },
+  };
+  await writeJsonEnsured(
+    resolveProjectArtifactPath(params.projectRoot, "PROJECT_MANIFEST.json") ??
+      `${params.projectRoot}/PROJECT_MANIFEST.json`,
+    manifest
+  );
+  return { manifest, updated: true, repairedFields };
 }
 
 function collectActiveTrackIds(trackRegistry: Record<string, unknown> | null): string[] {
@@ -2387,6 +2532,26 @@ export async function maybePrepareWorkflowStageContracts(params: {
       hookPoint: "artifact_materialized",
       contract: "paper_ingestion_terminal_upload_degraded",
       artifactPath: null,
+    });
+  }
+  const brainstormPathReconciliation =
+    await reconcileBrainstormCycleJsonManifestPaths({
+      projectRoot,
+      manifest,
+    });
+  if (brainstormPathReconciliation.updated) {
+    manifest = brainstormPathReconciliation.manifest;
+    materializedContracts.push("brainstorm_cycle_manifest_paths_reconciled");
+    materializedArtifacts.push({
+      contract: "brainstorm_cycle_manifest_paths_reconciled",
+      artifactPath: "PROJECT_MANIFEST.json",
+      fingerprint: null,
+      action: "reconciled",
+    });
+    emittedHookEvents.push({
+      hookPoint: "artifact_materialized",
+      contract: "brainstorm_cycle_manifest_paths_reconciled",
+      artifactPath: "PROJECT_MANIFEST.json",
     });
   }
 

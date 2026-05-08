@@ -543,6 +543,106 @@ function isTerminalIdeaCatalystRequisitionSatisfactionStatus(value: unknown): bo
   return status === "valid" || status === "warning";
 }
 
+function isSatisfiedIdeaCatalystRequisitionStatus(value: unknown): boolean {
+  const status = String(value ?? "").trim().toLowerCase();
+  return (
+    status === "satisfied" ||
+    status === "completed" ||
+    status === "not_required" ||
+    status === "not-required" ||
+    status === "degraded_satisfied_current_graph" ||
+    status === "degraded-satisfied-current-graph" ||
+    status.startsWith("satisfied_") ||
+    status.startsWith("satisfied-")
+  );
+}
+
+function isAcceptedIdeaCatalystSatisfactionReport(value: unknown): boolean {
+  const report = asRecord(value);
+  if (!report) {
+    return false;
+  }
+  const status = pickString(report, ["status"])?.trim().toLowerCase();
+  const decision = pickString(report, ["decision", "satisfaction_decision", "satisfactionDecision"])
+    ?.trim()
+    .toLowerCase();
+  if (
+    status === "valid" ||
+    status === "warning" ||
+    isSatisfiedIdeaCatalystRequisitionStatus(status)
+  ) {
+    return true;
+  }
+  return (
+    decision === "degraded_satisfied_current_graph" ||
+    decision === "degraded-satisfied-current-graph" ||
+    isSatisfiedIdeaCatalystRequisitionStatus(decision)
+  );
+}
+
+function buildIdeaCatalystSatisfactionReportPath(
+  requisitionId: string | null | undefined
+): string | null {
+  if (!requisitionId) {
+    return null;
+  }
+  return path.join(
+    "researcher",
+    "idea-catalyst",
+    "requisition",
+    sanitizeRequisitionIdFragment(requisitionId),
+    "REQUISITION_SATISFACTION_REPORT.json"
+  );
+}
+
+function collectIdeaCatalystSatisfactionReportCandidates(params: {
+  manifest: Record<string, unknown>;
+  requisitionId: string | null;
+  existingInvestigationRequisition: Record<string, unknown> | null;
+  existingReportPath: string | null;
+}): string[] {
+  const ideaCatalyst = asRecord(params.manifest.idea_catalyst);
+  const manifestReportPath = pickString(ideaCatalyst ?? {}, [
+    "validation_report_path",
+    "validationReportPath",
+    "satisfaction_report_path",
+    "satisfactionReportPath",
+  ]);
+  const manifestRequisitionCycle = pickString(ideaCatalyst ?? {}, [
+    "last_requisition_cycle",
+    "lastRequisitionCycle",
+  ]);
+  const currentRequisitionId = pickString(
+    params.existingInvestigationRequisition ?? {},
+    ["requisition_id", "requisitionId", "id"]
+  );
+  const requisitionIds = uniqueStrings(
+    [
+      params.requisitionId,
+      currentRequisitionId,
+      manifestRequisitionCycle,
+    ].filter((entry): entry is string => Boolean(entry))
+  );
+  return uniqueStrings(
+    [
+      params.existingReportPath,
+      manifestReportPath,
+      ...requisitionIds.map((entry) =>
+        buildIdeaCatalystSatisfactionReportPath(entry)
+      ),
+    ].filter((entry): entry is string => Boolean(entry))
+  );
+}
+
+async function readAcceptedIdeaCatalystSatisfactionReport(params: {
+  projectRoot: string;
+  reportPath: string;
+}): Promise<Record<string, unknown> | null> {
+  const resolved = resolveProjectArtifactPath(params.projectRoot, params.reportPath);
+  const report = await readJsonIfExists<Record<string, unknown>>(resolved ?? "");
+  return isAcceptedIdeaCatalystSatisfactionReport(report) ? report : null;
+}
+
 async function readIdeaCatalystRequisitionSatisfaction(params: {
   projectRoot: string;
   manifest: Record<string, unknown>;
@@ -550,6 +650,7 @@ async function readIdeaCatalystRequisitionSatisfaction(params: {
   existingInvestigationRequisition: Record<string, unknown> | null;
 }): Promise<{
   satisfied: boolean;
+  reportBacked: boolean;
   requestId: string | null;
   validationReportPath: string | null;
   validationStatus: string | null;
@@ -566,13 +667,10 @@ async function readIdeaCatalystRequisitionSatisfaction(params: {
     "satisfaction_report_path",
     "satisfactionReportPath",
   ]);
-  if (
-    ["satisfied", "completed", "not_required", "not-required"].includes(
-      existingStatus ?? ""
-    )
-  ) {
+  if (isSatisfiedIdeaCatalystRequisitionStatus(existingStatus)) {
     return {
       satisfied: true,
+      reportBacked: false,
       requestId: buildIdeaCatalystRequisitionRequestId(params.requisitionId),
       validationReportPath: existingReportPath ?? null,
       validationStatus: existingStatus ?? null,
@@ -582,7 +680,39 @@ async function readIdeaCatalystRequisitionSatisfaction(params: {
           "validationSummary",
           "satisfaction_summary",
           "satisfactionSummary",
-        ]) ?? null,
+      ]) ?? null,
+    };
+  }
+
+  const reportCandidates = collectIdeaCatalystSatisfactionReportCandidates({
+    manifest: params.manifest,
+    requisitionId: params.requisitionId,
+    existingInvestigationRequisition: params.existingInvestigationRequisition,
+    existingReportPath: existingReportPath ?? null,
+  });
+  for (const reportCandidate of reportCandidates) {
+    const report = await readAcceptedIdeaCatalystSatisfactionReport({
+      projectRoot: params.projectRoot,
+      reportPath: reportCandidate,
+    });
+    if (!report) {
+      continue;
+    }
+    return {
+      satisfied: true,
+      reportBacked: true,
+      requestId:
+        pickString(report, ["request_id", "requestId"]) ??
+        buildIdeaCatalystRequisitionRequestId(params.requisitionId),
+      validationReportPath: reportCandidate,
+      validationStatus:
+        pickString(report, ["status"]) ??
+        pickString(report, ["decision", "satisfaction_decision", "satisfactionDecision"]) ??
+        null,
+      validationSummary:
+        pickString(report, ["reason", "summary"]) ??
+        pickString(report, ["validation_summary", "validationSummary"]) ??
+        null,
     };
   }
 
@@ -616,17 +746,12 @@ async function readIdeaCatalystRequisitionSatisfaction(params: {
       request.validationReportPath
     );
     const report = await readJsonIfExists<Record<string, unknown>>(reportPath ?? "");
-    const reportStatus = pickString(report ?? {}, ["status"])?.trim().toLowerCase();
-    const reportDecision = pickString(report ?? {}, ["decision"])?.trim().toLowerCase();
-    const reportAccepted =
-      reportStatus === "valid" ||
-      reportStatus === "warning" ||
-      reportDecision === "degraded_satisfied_current_graph";
-    if (!reportAccepted) {
+    if (!isAcceptedIdeaCatalystSatisfactionReport(report)) {
       continue;
     }
     return {
       satisfied: true,
+      reportBacked: true,
       requestId: request.requestId,
       validationReportPath: request.validationReportPath,
       validationStatus: request.validationStatus ?? null,
@@ -636,6 +761,7 @@ async function readIdeaCatalystRequisitionSatisfaction(params: {
 
   return {
     satisfied: false,
+    reportBacked: false,
     requestId: expectedRequestId,
     validationReportPath: null,
     validationStatus: null,
@@ -1417,10 +1543,12 @@ export async function materializeIdeaCatalystState(params: {
     requisitionId: requisitionId ?? current.lastRequisitionCycle,
     existingInvestigationRequisition,
   });
+  const requisitionSatisfiedByAcceptedReport =
+    requisitionSatisfaction.satisfied && requisitionSatisfaction.reportBacked;
   const requisitionSatisfiedByCurrentGraph =
     gateDecision.decision !== "brainstorm" &&
-    requisitionActionable &&
-    requisitionSatisfaction.satisfied;
+    requisitionSatisfaction.satisfied &&
+    (requisitionActionable || requisitionSatisfaction.reportBacked);
   const effectiveGateDecision = requisitionSatisfiedByCurrentGraph
     ? "brainstorm"
     : gateDecision.decision;
@@ -1476,7 +1604,7 @@ export async function materializeIdeaCatalystState(params: {
           ]),
     requisition_saturated: false,
     pending_reason:
-      requisitionSatisfiedByCurrentGraph
+      requisitionSatisfiedByAcceptedReport
         ? "IDEA-CATALYST requisition was satisfied with a durable warning against the current ready graph; downstream claims remain capped by the recorded evidence tier."
         : effectiveGateDecision === "brainstorm"
         ? null
@@ -1535,7 +1663,7 @@ export async function materializeIdeaCatalystState(params: {
     [
       next.investigationRequisitionPath,
       effectiveGateDecision === "brainstorm"
-        ? requisitionSatisfiedByCurrentGraph
+        ? requisitionSatisfiedByAcceptedReport
           ? buildDegradedSatisfiedRequisition({
               requisition: requisitionRecord,
               trigger: params.trigger,

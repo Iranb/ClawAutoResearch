@@ -267,8 +267,15 @@ function normalizeIdeaCatalystRequisitionStatus(value: unknown): string | null {
 
 export function isTerminalIdeaCatalystRequisitionStatus(value: unknown): boolean {
   const status = normalizeIdeaCatalystRequisitionStatus(value);
-  return ["satisfied", "completed", "not_required", "not-required"].includes(
-    status ?? ""
+  const normalized = status ?? "";
+  return (
+    ["satisfied", "completed", "not_required", "not-required"].includes(
+      normalized
+    ) ||
+    normalized === "degraded_satisfied_current_graph" ||
+    normalized === "degraded-satisfied-current-graph" ||
+    normalized.startsWith("satisfied_") ||
+    normalized.startsWith("satisfied-")
   );
 }
 

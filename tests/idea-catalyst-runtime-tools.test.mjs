@@ -1256,6 +1256,209 @@ test("stage preflight reconciles a satisfied IDEA-CATALYST requisition before de
   assert.equal(updatedManifest.idea_catalyst.requisition_required, false);
 });
 
+test("stage preflight accepts canonical degraded IDEA-CATALYST satisfaction reports when queue links drift", async (t) => {
+  const projectRoot = await makeCatalystProjectRoot();
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.idea_catalyst = {
+    ...(manifest.idea_catalyst ?? {}),
+    status: "requisition",
+    micro_stage: "gatekeeping",
+    requisition_required: true,
+    last_requisition_cycle: "req-computer-science-8-5",
+    pending_reason:
+      "Live project drift left the queued request detached from its satisfaction report.",
+  };
+  manifest.paper_ingestion = {
+    ...(manifest.paper_ingestion ?? {}),
+    queued_requests: [],
+  };
+  await writeJson(manifestPath, manifest);
+  await writeJson(
+    path.join(projectRoot, "researcher", "idea-catalyst", "INVESTIGATION_REQUISITION.json"),
+    {
+      schema_version: 1,
+      requisition_id: "req-computer-science-8-5",
+      status: "requisition",
+      actionable: false,
+      retry_budget: 0,
+      non_actionable_reason:
+        "Remote import stalled, but the current graph and local staged papers are sufficient for degraded continuation.",
+    }
+  );
+  await writeJson(
+    path.join(
+      projectRoot,
+      "researcher",
+      "idea-catalyst",
+      "requisition",
+      "req-computer-science-8-5",
+      "REQUISITION_SATISFACTION_REPORT.json"
+    ),
+    {
+      schema_version: 1,
+      status: "satisfied_degraded_pass_19_final",
+      decision: "proceed_to_idea_synthesis",
+      request_id: "idea-catalyst-req-computer-science-8-5",
+      graph_presence_status: "ready",
+      import_status:
+        "Batch import confirmed failed after timeout; proceeding with locally staged papers.",
+      reason:
+        "All panel blockers resolved via degraded mode against the current ready graph.",
+    }
+  );
+
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  let materialized = 0;
+  let queued = 0;
+  const result = await maybePrepareWorkflowStageContracts({
+    projectRoot,
+    manifest,
+    stage: "idea",
+    agentId: "researcher",
+    trigger: "test",
+    deps: {
+      materializeIdeationContract: async () => ({ ok: true }),
+      materializePaperStoryState: async () => ({ ok: true }),
+      materializeReviewPressurePacket: async () => ({ ok: true }),
+      materializeLiteratureDiscoveryPacket: async () => ({ ok: true }),
+      queueLiteratureDiscoveryRequisition: async () => ({ ok: true }),
+      materializeIdeaCatalystState: async () => {
+        materialized += 1;
+        const tool = createResearchWorkflowTool({ workspaceDir: projectRoot });
+        await executeWorkflowTool(tool, {
+          action: "materialize_idea_catalyst_state",
+          ideaCatalystMaterialization: { basis_stage: "idea" },
+        });
+        return { ok: true };
+      },
+      queueIdeaCatalystRequisition: async () => {
+        queued += 1;
+        return { ok: true };
+      },
+    },
+  });
+
+  const updatedManifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  const updatedRequisition = JSON.parse(
+    await fs.readFile(
+      path.join(projectRoot, "researcher", "idea-catalyst", "INVESTIGATION_REQUISITION.json"),
+      "utf8"
+    )
+  );
+  assert.equal(queued, 0);
+  assert.equal(materialized, 1);
+  assert.ok(result.materializedContracts.includes("idea_catalyst"));
+  assert.notEqual(updatedManifest.idea_catalyst.status, "requisition");
+  assert.equal(updatedManifest.idea_catalyst.requisition_required, false);
+  assert.equal(updatedRequisition.status, "completed");
+  assert.equal(
+    updatedRequisition.validation_report_path,
+    "researcher/idea-catalyst/requisition/req-computer-science-8-5/REQUISITION_SATISFACTION_REPORT.json"
+  );
+});
+
+test("stage preflight repairs brainstorm JSON path drift before readiness checks", async (t) => {
+  const projectRoot = await makeCatalystProjectRoot();
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.brainstorm_cycle = {
+    status: "reconciled",
+    mode: "frontier",
+    topic: "EML operator small basemodels",
+    basis_stage: "frontier_mapping",
+    provider: "workflow_core_brainstorm",
+    provider_mode: "core",
+    provider_status: "ready",
+    contract_version: 2,
+    rounds: [
+      {
+        round_id: "round-1",
+        status: "completed",
+        options: [
+          {
+            option_id: "opt-1",
+            title: "Safe EML residual block",
+          },
+        ],
+      },
+    ],
+    selected_round_id: "round-1",
+    selected_option_id: "opt-1",
+    selected_option_title: "Safe EML residual block",
+    topic_summary_path: "researcher/brainstorm-cycle/TOPIC_SUMMARY.md",
+    research_brief_path: "researcher/brainstorm-cycle/RESEARCH_BRIEF.md",
+    brainstorm_brief_path: "researcher/brainstorm-cycle/BRAINSTORM_BRIEF.md",
+    logic_chain_path: "researcher/brainstorm-cycle/LOGIC_CHAIN.md",
+    evidence_chain_path: "researcher/brainstorm-cycle/EVIDENCE_CHAIN.md",
+    reasoning_trace_path: "researcher/brainstorm-cycle/REASONING_TRACE.jsonl",
+    question_packet_path: "researcher/brainstorm-cycle/QUESTION_PACKET.md",
+    working_memory_path: "researcher/brainstorm-cycle/WORKING_MEMORY.json",
+    synthesis_packet_path: "researcher/brainstorm-cycle/SYNTHESIS_PACKET.md",
+  };
+  await writeJson(manifestPath, manifest);
+  await writeJson(path.join(projectRoot, "researcher", "brainstorm-cycle", "RESEARCH_BRIEF.json"), {
+    anchors: ["paper:eml"],
+  });
+  await writeJson(path.join(projectRoot, "researcher", "brainstorm-cycle", "BRAINSTORM_BRIEF.json"), {
+    mode: "reconciled",
+  });
+  await writeJson(path.join(projectRoot, "researcher", "brainstorm-cycle", "WORKING_MEMORY.json"), {
+    hypothesis: "bounded EML",
+  });
+  await writeText(
+    path.join(projectRoot, "researcher", "brainstorm-cycle", "RESEARCH_BRIEF.md"),
+    "# stale markdown mirror\n"
+  );
+  await writeText(
+    path.join(projectRoot, "researcher", "brainstorm-cycle", "BRAINSTORM_BRIEF.md"),
+    "# stale markdown mirror\n"
+  );
+
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  const result = await maybePrepareWorkflowStageContracts({
+    projectRoot,
+    manifest,
+    stage: "idea",
+    agentId: "researcher",
+    trigger: "test",
+    deps: {
+      materializeIdeationContract: async () => ({ ok: true }),
+      materializePaperStoryState: async () => ({ ok: true }),
+      materializeReviewPressurePacket: async () => ({ ok: true }),
+      materializeLiteratureDiscoveryPacket: async () => ({ ok: true }),
+      queueLiteratureDiscoveryRequisition: async () => ({ ok: true }),
+      materializeIdeaCatalystState: async () => ({ ok: true }),
+      queueIdeaCatalystRequisition: async () => ({ ok: true }),
+    },
+  });
+
+  const updatedManifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  assert.ok(
+    result.materializedContracts.includes(
+      "brainstorm_cycle_manifest_paths_reconciled"
+    )
+  );
+  assert.equal(
+    updatedManifest.brainstorm_cycle.topic_summary_path,
+    "researcher/brainstorm-cycle/TOPIC_SUMMARY.json"
+  );
+  assert.equal(
+    updatedManifest.brainstorm_cycle.research_brief_path,
+    "researcher/brainstorm-cycle/RESEARCH_BRIEF.json"
+  );
+  assert.equal(
+    updatedManifest.brainstorm_cycle.brainstorm_brief_path,
+    "researcher/brainstorm-cycle/BRAINSTORM_BRIEF.json"
+  );
+});
+
 test("research_workflow materialize_idea_catalyst_state emits a structured requisition when graph bridge evidence is insufficient", async (t) => {
   const projectRoot = await makeCatalystProjectRoot();
   const previousProjectRoot = process.env.OPENCLAW_PROJECT;
