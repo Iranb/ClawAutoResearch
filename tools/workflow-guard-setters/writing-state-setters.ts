@@ -20,6 +20,7 @@ import {
   DEFAULT_KG_STORYLINE_PACKET_PATH,
   DEFAULT_PARAGRAPH_LOGIC_CHECKLIST,
   DEFAULT_PROOF_CHECKLIST,
+  DEFAULT_SCIENTIFIC_EDITING_PASSES,
   DEFAULT_STORYLINE_CHECKLIST,
   DEFAULT_WRITING_SECTION_ORDER,
   evaluateWritingContractState,
@@ -487,6 +488,12 @@ export async function setWritingContractState(params: {
     patch.proofChecklist || patch.proof_checklist
       ? asStringArray(patch.proofChecklist ?? patch.proof_checklist)
       : current.proofChecklist;
+  const scientificEditingPasses =
+    patch.scientificEditingPasses || patch.scientific_editing_passes
+      ? asStringArray(
+          patch.scientificEditingPasses ?? patch.scientific_editing_passes
+        )
+      : current.scientificEditingPasses;
   let kgStorylineRequired =
     pickBoolean(patch, ["kgStorylineRequired", "kg_storyline_required"]) ??
     current.kgStorylineRequired;
@@ -606,6 +613,31 @@ export async function setWritingContractState(params: {
     proofAppendixStatus,
     theoryNotePath,
     proofChecklist,
+    scientificEditingRequired:
+      pickBoolean(patch, [
+        "scientificEditingRequired",
+        "scientific_editing_required",
+      ]) ?? current.scientificEditingRequired,
+    scientificEditingStatus:
+      normalizeStage(
+        patch.scientificEditingStatus ?? patch.scientific_editing_status
+      ) ?? current.scientificEditingStatus,
+    scientificEditingPasses,
+    scientificEditingLedgerPath:
+      pickString(patch, [
+        "scientificEditingLedgerPath",
+        "scientific_editing_ledger_path",
+      ]) ?? current.scientificEditingLedgerPath,
+    scientificEditingReportPath:
+      pickString(patch, [
+        "scientificEditingReportPath",
+        "scientific_editing_report_path",
+      ]) ?? current.scientificEditingReportPath,
+    lastScientificEditingAt:
+      pickString(patch, [
+        "lastScientificEditingAt",
+        "last_scientific_editing_at",
+      ]) ?? current.lastScientificEditingAt,
     storylineSource,
     kgStorylineRequired,
     kgStorylineStatus:
@@ -651,6 +683,12 @@ export async function setWritingContractState(params: {
   }
   if (next.proofChecklist.length === 0) {
     next.proofChecklist = [...DEFAULT_PROOF_CHECKLIST];
+  }
+  if (next.scientificEditingPasses.length === 0) {
+    next.scientificEditingPasses = [...DEFAULT_SCIENTIFIC_EDITING_PASSES];
+  }
+  if (next.scientificEditingRequired && next.scientificEditingStatus === "optional") {
+    next.scientificEditingStatus = "pending";
   }
   if (next.paragraphLogicChecklist.length === 0) {
     next.paragraphLogicChecklist = [...DEFAULT_PARAGRAPH_LOGIC_CHECKLIST];

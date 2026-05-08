@@ -832,7 +832,12 @@ export function registerWorkflowHooks(plugin: PluginRegistrationContext) {
                   transition: "prompt_handoff_activation",
                 });
                 return {
-                  allow: hookSummary.aggregateVerdict === "pass",
+                  allow:
+                    hookSummary.aggregateVerdict === "pass" ||
+                    (!hookSummary.gateControl.blocking &&
+                      hookSummary.gateControl.repairRequiredCount === 0 &&
+                      (hookSummary.gateControl.deferredDebtCount > 0 ||
+                        hookSummary.gateControl.warnOnlyCount > 0)),
                   blockingReason: hookSummary.blockingReason,
                 };
               },

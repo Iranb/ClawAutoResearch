@@ -10,6 +10,7 @@ import {
   getTheoryStateSummary,
   isCitationCollectionHardFailure,
 } from "../tools/workflow-guard-writing/citation-theory-eval.ts";
+import { evaluateReferenceCoveragePolicy } from "../tools/research-writing/reference-coverage-policy.ts";
 
 async function makeProjectRoot() {
   const projectRoot = await fs.mkdtemp(
@@ -128,4 +129,46 @@ test("citation collection hard-failure only triggers on blocked or hallucinated 
     }),
     true
   );
+});
+
+test("reference coverage policy allows peripheral mixed citations but blocks unrelated citations", () => {
+  const mixed = evaluateReferenceCoveragePolicy({
+    minimumCitationCount: 50,
+    citationIntegrity: {
+      reference_coverage_policy: "minimum_relevance_no_upper_limit",
+      topic_relevance_status: "mixed",
+      relevant_citation_count: 67,
+      peripheral_citation_count: 17,
+      unrelated_citation_count: 0,
+      bibliography_entry_count: 67,
+    },
+  });
+  assert.equal(mixed.ready, true);
+  assert.equal(mixed.policy, "minimum_relevance_no_upper_limit");
+  assert.deepEqual(mixed.acceptedTopicRelevanceStatuses, ["ready", "mixed"]);
+
+  const unrelated = evaluateReferenceCoveragePolicy({
+    minimumCitationCount: 50,
+    citationIntegrity: {
+      topic_relevance_status: "mixed",
+      relevant_citation_count: 67,
+      peripheral_citation_count: 16,
+      unrelated_citation_count: 1,
+      bibliography_entry_count: 68,
+    },
+  });
+  assert.equal(unrelated.ready, false);
+  assert.match(unrelated.reason ?? "", /unrelated count must be 0/);
+
+  const belowRelevantFloor = evaluateReferenceCoveragePolicy({
+    minimumCitationCount: 30,
+    citationIntegrity: {
+      topic_relevance_status: "mixed",
+      relevant_citation_count: 12,
+      minimum_relevant_citation_count: 20,
+      unrelated_citation_count: 0,
+    },
+  });
+  assert.equal(belowRelevantFloor.ready, false);
+  assert.match(belowRelevantFloor.reason ?? "", /relevant citation count >= 20/);
 });

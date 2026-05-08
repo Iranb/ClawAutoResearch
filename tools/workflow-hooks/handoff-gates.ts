@@ -16,6 +16,7 @@ import { evaluateWorkflowHooksForPoint } from "./executor.js";
 import { buildWorkflowHookPointContext } from "./point-context.js";
 import type { WorkflowExecutionRuntimeLike } from "../workflow-execution-runtime.js";
 import type {
+  WorkflowGateControlPackage,
   WorkflowHookPoint,
   WorkflowHookPointExecutionSummary,
   WorkflowLine,
@@ -91,6 +92,7 @@ export type WorkflowHandoffHookGateResult = {
   aggregateStatus: string;
   blockingReason: string | null;
   aggregateRevisionPacketPath: string | null;
+  gateControl?: WorkflowGateControlPackage | null;
   hookGate: WorkflowHandoffHookGateRecord | null;
 };
 
@@ -252,8 +254,15 @@ export async function evaluateWorkflowHandoffHooks(params: {
     ownerAfter: params.ownerAfter,
     summary: mergedSummary,
   });
+  const nonBlockingDebtOrWarning =
+    !mergedSummary.gateControl.blocking &&
+    mergedSummary.gateControl.repairRequiredCount === 0 &&
+    (mergedSummary.gateControl.deferredDebtCount > 0 ||
+      mergedSummary.gateControl.warnOnlyCount > 0);
   const allowed =
-    mergedSummary.hooksRun.length === 0 || mergedSummary.aggregateVerdict === "pass";
+    mergedSummary.hooksRun.length === 0 ||
+    mergedSummary.aggregateVerdict === "pass" ||
+    nonBlockingDebtOrWarning;
   return {
     allowed,
     hookPoint: params.hookPoint,
@@ -261,6 +270,7 @@ export async function evaluateWorkflowHandoffHooks(params: {
     aggregateStatus: mergedSummary.aggregateStatus,
     blockingReason: mergedSummary.blockingReason,
     aggregateRevisionPacketPath: mergedSummary.aggregateRevisionPacketPath,
+    gateControl: mergedSummary.gateControl,
     hookGate,
   };
 }
@@ -344,9 +354,17 @@ export async function checkHandoffHookFreshness(params: {
           ? payload.hookGatePolicyIds.filter((entry): entry is string => typeof entry === "string")
           : [],
   });
+  const nonBlockingDebtOrWarning =
+    aggregate?.gateControl &&
+    !aggregate.gateControl.blocking &&
+    aggregate.gateControl.repairRequiredCount === 0 &&
+    (aggregate.gateControl.deferredDebtCount > 0 ||
+      aggregate.gateControl.warnOnlyCount > 0);
   const allowed =
     storedFingerprint === currentFingerprint &&
-    (aggregate?.aggregateVerdict == null || aggregate.aggregateVerdict === "pass");
+    (aggregate?.aggregateVerdict == null ||
+      aggregate.aggregateVerdict === "pass" ||
+      Boolean(nonBlockingDebtOrWarning));
   return {
     allowed,
     hookPoint: hookGatePoint,
@@ -356,6 +374,7 @@ export async function checkHandoffHookFreshness(params: {
       ? null
       : "Handoff hook gate is stale or no longer passing.",
     aggregateRevisionPacketPath: aggregate?.aggregateRevisionPacketPath ?? null,
+    gateControl: aggregate?.gateControl ?? null,
     hookGate: {
       hookGatePoint,
       hookGateFingerprint: currentFingerprint,

@@ -7092,6 +7092,100 @@ test("auto iterator keeps submit blocked when survey citation count or topicalit
   );
 });
 
+test("auto iterator accepts mixed peripheral citation coverage when unrelated citations are absent", async (t) => {
+  const projectRoot = await makeTempProject();
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await seedProjectReadyForSubmit(projectRoot);
+
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.workflow_line = "survey";
+  manifest.paper_type = "survey";
+  manifest.writing_contract = {
+    ...(manifest.writing_contract ?? {}),
+    paper_mode: "survey",
+  };
+  manifest.citation_integrity = {
+    ...(manifest.citation_integrity ?? {}),
+    reference_coverage_policy: "minimum_relevance_no_upper_limit",
+    verification_status: "verified",
+    all_citations_real: true,
+    minimum_citation_count: 50,
+    bibliography_entry_count: 72,
+    verified_citation_count: 72,
+    topic_relevance_status: "mixed",
+    relevant_citation_count: 72,
+    peripheral_citation_count: 22,
+    unrelated_citation_count: 0,
+    off_topic_citation_count: 0,
+    max_citation_count: null,
+  };
+  await writeJson(manifestPath, manifest);
+  await writeText(
+    path.join(projectRoot, "academic_writer", "paper", "refs.bib"),
+    buildReadyReferencesBib(72)
+  );
+
+  const result = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+  });
+
+  assert.equal(result.stageBefore, "submit");
+  assert.equal(
+    result.missingStageSignals.some((signal) =>
+      /topic_relevance_status|unrelated count|relevant citation count/i.test(signal)
+    ),
+    false,
+    result.missingStageSignals.join("\n")
+  );
+});
+
+test("auto iterator keeps submit blocked until required five-pass scientific editing is ready", async (t) => {
+  const projectRoot = await makeTempProject();
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await seedProjectReadyForSubmit(projectRoot);
+
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.writing_contract = {
+    ...(manifest.writing_contract ?? {}),
+    scientific_editing_required: true,
+    scientific_editing_status: "pending",
+    scientific_editing_passes: [
+      "clutter_reduction",
+      "agency_active_voice",
+      "logical_flow",
+      "terminology_consistency",
+      "numerical_consistency",
+    ],
+    scientific_editing_ledger_path: "academic_writer/SCIENTIFIC_EDIT_LEDGER.json",
+    scientific_editing_report_path: "academic_writer/SCIENTIFIC_EDIT_REPORT.md",
+  };
+  await writeJson(manifestPath, manifest);
+
+  const result = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+  });
+
+  assert.equal(result.stageBefore, "submit");
+  assert.ok(
+    result.missingStageSignals.some((signal) =>
+      /scientific_editing_status/i.test(signal)
+    ),
+    result.missingStageSignals.join("\n")
+  );
+});
+
 test("auto iterator floors stale conference citation minimum to thirty before submit", async (t) => {
   const projectRoot = await makeTempProject();
   t.after(async () => {

@@ -1323,7 +1323,12 @@ async function maybeAutoActivatePendingHandoffForToolAction(params: {
         transition: "tool_handoff_activation",
       });
       return {
-        allow: hookSummary.aggregateVerdict === "pass",
+        allow:
+          hookSummary.aggregateVerdict === "pass" ||
+          (!hookSummary.gateControl.blocking &&
+            hookSummary.gateControl.repairRequiredCount === 0 &&
+            (hookSummary.gateControl.deferredDebtCount > 0 ||
+              hookSummary.gateControl.warnOnlyCount > 0)),
         blockingReason: hookSummary.blockingReason,
       };
     },
@@ -6949,7 +6954,12 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                     transition: "handoff_activation",
                   });
                   return {
-                    allow: hookSummary.aggregateVerdict === "pass",
+                    allow:
+                      hookSummary.aggregateVerdict === "pass" ||
+                      (!hookSummary.gateControl.blocking &&
+                        hookSummary.gateControl.repairRequiredCount === 0 &&
+                        (hookSummary.gateControl.deferredDebtCount > 0 ||
+                          hookSummary.gateControl.warnOnlyCount > 0)),
                     blockingReason: hookSummary.blockingReason,
                   };
                 },

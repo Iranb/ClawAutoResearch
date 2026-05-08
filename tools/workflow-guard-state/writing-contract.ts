@@ -73,8 +73,20 @@ export const DEFAULT_PROOF_CHECKLIST = [
   "mark_speculative_theory_as_conservative_mechanistic_interpretation",
 ];
 
+export const DEFAULT_SCIENTIFIC_EDITING_PASSES = [
+  "clutter_reduction",
+  "agency_active_voice",
+  "logical_flow",
+  "terminology_consistency",
+  "numerical_consistency",
+];
+
 export const DEFAULT_KG_STORYLINE_PACKET_PATH =
   "academic_writer/KG_STORYLINE_PACKET.md";
+export const DEFAULT_SCIENTIFIC_EDITING_LEDGER_PATH =
+  "academic_writer/SCIENTIFIC_EDIT_LEDGER.json";
+export const DEFAULT_SCIENTIFIC_EDITING_REPORT_PATH =
+  "academic_writer/SCIENTIFIC_EDIT_REPORT.md";
 
 /**
  * 解析写作模式。
@@ -196,6 +208,43 @@ export function normalizeWritingContractState(value: unknown): WritingContractSt
       asStringArray(record.proofChecklist ?? record.proof_checklist).length > 0
         ? asStringArray(record.proofChecklist ?? record.proof_checklist)
         : [...DEFAULT_PROOF_CHECKLIST],
+    scientificEditingRequired:
+      pickBoolean(record, [
+        "scientificEditingRequired",
+        "scientific_editing_required",
+      ]) ?? false,
+    scientificEditingStatus:
+      normalizeStage(
+        record.scientificEditingStatus ?? record.scientific_editing_status
+      ) ??
+      (pickBoolean(record, [
+        "scientificEditingRequired",
+        "scientific_editing_required",
+      ])
+        ? "pending"
+        : "optional"),
+    scientificEditingPasses:
+      asStringArray(
+        record.scientificEditingPasses ?? record.scientific_editing_passes
+      ).length > 0
+        ? asStringArray(
+            record.scientificEditingPasses ?? record.scientific_editing_passes
+          )
+        : [...DEFAULT_SCIENTIFIC_EDITING_PASSES],
+    scientificEditingLedgerPath:
+      pickString(record, [
+        "scientificEditingLedgerPath",
+        "scientific_editing_ledger_path",
+      ]) ?? DEFAULT_SCIENTIFIC_EDITING_LEDGER_PATH,
+    scientificEditingReportPath:
+      pickString(record, [
+        "scientificEditingReportPath",
+        "scientific_editing_report_path",
+      ]) ?? DEFAULT_SCIENTIFIC_EDITING_REPORT_PATH,
+    lastScientificEditingAt: pickString(record, [
+      "lastScientificEditingAt",
+      "last_scientific_editing_at",
+    ]),
     storylineSource: pickString(record, ["storylineSource", "storyline_source"]),
     kgStorylineRequired:
       pickBoolean(record, ["kgStorylineRequired", "kg_storyline_required"]) ?? false,
@@ -271,6 +320,12 @@ export function serializeWritingContractState(
     proof_appendix_status: state.proofAppendixStatus,
     theory_note_path: state.theoryNotePath,
     proof_checklist: state.proofChecklist,
+    scientific_editing_required: state.scientificEditingRequired,
+    scientific_editing_status: state.scientificEditingStatus,
+    scientific_editing_passes: state.scientificEditingPasses,
+    scientific_editing_ledger_path: state.scientificEditingLedgerPath,
+    scientific_editing_report_path: state.scientificEditingReportPath,
+    last_scientific_editing_at: state.lastScientificEditingAt,
     storyline_source: state.storylineSource,
     kg_storyline_required: state.kgStorylineRequired,
     kg_storyline_status: state.kgStorylineStatus,

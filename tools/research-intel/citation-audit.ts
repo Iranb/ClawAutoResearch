@@ -23,8 +23,10 @@ export type CitationAuditReport = {
   citationCountStatus: "ready" | "needs_revision";
   paperMode: string | null;
   topicRelevanceTopic: string | null;
-  topicRelevanceStatus: "ready" | "needs_revision" | "unknown";
+  topicRelevanceStatus: "ready" | "mixed" | "needs_revision" | "unknown";
   relevantCitationCount: number;
+  peripheralCitationCount: number;
+  unrelatedCitationCount: number;
   offTopicCitationCount: number;
   offTopicTitles: string[];
   topicRelevanceSummary: string | null;
@@ -254,13 +256,13 @@ function parseBibEntries(source: string | null): ParsedBibEntry[] {
   return entries;
 }
 
-function isCitationTopicallyRelevant(params: {
+function classifyCitationTopicRelevance(params: {
   entry: ParsedBibEntry;
   topicTokens: string[];
   topicNormalized: string;
-}): boolean {
+}): "core" | "peripheral" | "unrelated" {
   if (params.topicTokens.length === 0) {
-    return true;
+    return "core";
   }
   const text = normalizeText(
     [
@@ -275,22 +277,22 @@ function isCitationTopicallyRelevant(params: {
       .join(" ")
   );
   if (!text) {
-    return false;
+    return "unrelated";
   }
   if (params.topicNormalized && text.includes(params.topicNormalized)) {
-    return true;
+    return "core";
   }
   const matched = params.topicTokens.filter((token) => text.includes(token));
   if (matched.length >= Math.min(2, params.topicTokens.length)) {
-    return true;
+    return "core";
   }
   if (
     matched.length >= 1 &&
     (params.topicTokens.length <= 2 || matched.some((token) => token.length >= 8))
   ) {
-    return true;
+    return "peripheral";
   }
-  return false;
+  return "unrelated";
 }
 
 function inferBibliographyPath(manifest: Record<string, unknown>): string | null {
@@ -322,33 +324,45 @@ export async function materializeCitationAudit(params: {
   const topicRelevanceTopic = inferTopicRelevanceTopic(manifest);
   const topicTokens = buildTopicTokens(topicRelevanceTopic);
   const topicNormalized = normalizeText(topicRelevanceTopic);
-  const offTopicEntries =
+  const topicClassifications =
     topicTokens.length === 0
       ? []
-      : bibliographyEntries.filter(
-          (entry) =>
-            !isCitationTopicallyRelevant({
-              entry,
-              topicTokens,
-              topicNormalized,
-            })
-        );
+      : bibliographyEntries.map((entry) => ({
+          entry,
+          relevance: classifyCitationTopicRelevance({
+            entry,
+            topicTokens,
+            topicNormalized,
+          }),
+        }));
+  const peripheralEntries = topicClassifications
+    .filter((item) => item.relevance === "peripheral")
+    .map((item) => item.entry);
+  const unrelatedEntries = topicClassifications
+    .filter((item) => item.relevance === "unrelated")
+    .map((item) => item.entry);
   const relevantCitationCount = Math.max(
     0,
-    bibliographyEntries.length - offTopicEntries.length
+    topicTokens.length === 0
+      ? bibliographyEntries.length
+      : bibliographyEntries.length - unrelatedEntries.length
   );
   const topicRelevanceStatus =
     topicTokens.length === 0
       ? "unknown"
-      : offTopicEntries.length === 0
-        ? "ready"
-        : "needs_revision";
+      : unrelatedEntries.length > 0
+        ? "needs_revision"
+        : peripheralEntries.length > 0
+          ? "mixed"
+          : "ready";
   const topicRelevanceSummary =
     topicTokens.length === 0
       ? "Topic relevance could not be evaluated because the project topic or goal is missing."
-      : offTopicEntries.length === 0
-        ? `All ${bibliographyEntries.length} bibliography entries overlap with the project topic at a broad lexical level.`
-        : `${offTopicEntries.length} bibliography entr${offTopicEntries.length === 1 ? "y appears" : "ies appear"} weakly related to the current topic and should be revised or justified.`;
+      : unrelatedEntries.length > 0
+        ? `${unrelatedEntries.length} bibliography entr${unrelatedEntries.length === 1 ? "y appears" : "ies appear"} unrelated to the current topic and must be removed or justified before submit.`
+        : peripheralEntries.length > 0
+          ? `${peripheralEntries.length} bibliography entr${peripheralEntries.length === 1 ? "y is" : "ies are"} peripheral but still lexically connected to the topic; retain only when it supports background, contrast, or boundary claims.`
+          : `All ${bibliographyEntries.length} bibliography entries overlap with the project topic at a broad lexical level.`;
   const unresolvedPlaceholderCount = PLACEHOLDER_PATTERNS.reduce(
     (sum, pattern) => sum + countMatches(bibliographyText ?? "", pattern),
     0
@@ -377,6 +391,7 @@ export async function materializeCitationAudit(params: {
     issues.push("bibliography_minimum_count_not_met");
   }
   if (topicRelevanceStatus === "needs_revision") {
+    issues.push("unrelated_citations_present");
     issues.push("off_topic_citations_present");
   }
   const report: CitationAuditReport = {
@@ -390,8 +405,10 @@ export async function materializeCitationAudit(params: {
     topicRelevanceTopic,
     topicRelevanceStatus,
     relevantCitationCount,
-    offTopicCitationCount: offTopicEntries.length,
-    offTopicTitles: offTopicEntries
+    peripheralCitationCount: peripheralEntries.length,
+    unrelatedCitationCount: unrelatedEntries.length,
+    offTopicCitationCount: unrelatedEntries.length,
+    offTopicTitles: unrelatedEntries
       .map((entry) => entry.title ?? entry.key)
       .filter((value): value is string => Boolean(value))
       .slice(0, 12),
@@ -433,7 +450,9 @@ export async function materializeCitationAudit(params: {
     topicRelevanceTopic,
     topicRelevanceStatus,
     relevantCitationCount,
-    offTopicCitationCount: offTopicEntries.length,
+    peripheralCitationCount: peripheralEntries.length,
+    unrelatedCitationCount: unrelatedEntries.length,
+    offTopicCitationCount: unrelatedEntries.length,
     topicRelevanceSummary,
     bibliographyPageCount:
       bibliographyText == null ? 0 : Math.max(1, Math.ceil(bibliographyText.split(/\r?\n/).length / 45)),

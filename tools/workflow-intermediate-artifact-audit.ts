@@ -117,6 +117,47 @@ export function auditTheoryStateObject(value: unknown): IntermediateArtifactAudi
       "analyzer/THEORY_STATE.json is structurally present but hollow; add thesis/body guidance or theorem / lemma / appendix content."
     );
   }
+  const taxonomy = asStringArray(
+    record.theorem_issue_taxonomy ?? record.theoremIssueTaxonomy
+  );
+  if (taxonomy.length > 0 && taxonomy.length < 20) {
+    issues.push(
+      `analyzer/THEORY_STATE.json theorem_issue_taxonomy must cover 20 proof issue classes; found ${taxonomy.length}.`
+    );
+  }
+  const proofObligations = Array.isArray(record.proof_obligations)
+    ? record.proof_obligations
+    : [];
+  const openBlockingProofObligations = proofObligations.filter((entry) => {
+    const obligation = asRecord(entry);
+    if (!obligation) {
+      return false;
+    }
+    const severity = pickString(obligation, ["severity"])?.toLowerCase();
+    const status = pickString(obligation, ["status"])?.toLowerCase();
+    return (
+      (severity === "critical" || severity === "high") &&
+      status !== "resolved" &&
+      status !== "waived" &&
+      status !== "closed"
+    );
+  });
+  if (openBlockingProofObligations.length > 0) {
+    issues.push(
+      `analyzer/THEORY_STATE.json has ${openBlockingProofObligations.length} open high/critical proof obligation(s).`
+    );
+  }
+  const counterexampleRedTeam = asRecord(
+    record.counterexample_red_team ?? record.counterexampleRedTeam
+  );
+  const blockingFindings = Array.isArray(counterexampleRedTeam?.blocking_findings)
+    ? counterexampleRedTeam.blocking_findings
+    : [];
+  if (blockingFindings.length > 0) {
+    issues.push(
+      `analyzer/THEORY_STATE.json counterexample_red_team has ${blockingFindings.length} blocking finding(s).`
+    );
+  }
   return {
     ok: issues.length === 0,
     issues,

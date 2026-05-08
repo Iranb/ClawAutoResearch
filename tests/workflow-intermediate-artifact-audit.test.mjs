@@ -58,6 +58,39 @@ test("theory state audit rejects hollow structures and accepts structured proof 
   assert.equal(structured.ok, true);
 });
 
+test("theory state audit blocks unresolved theorem obligations and counterexamples", () => {
+  const audited = auditTheoryStateObject({
+    status: "draft",
+    overall_signal: "yellow",
+    thesis: "Margin-aware pseudo-labeling reduces assignment error.",
+    theorem_issue_taxonomy: ["missing_assumption"],
+    proof_obligations: [
+      {
+        obligation_id: "obl-1",
+        issue_type: "missing_assumption",
+        severity: "high",
+        status: "open",
+      },
+    ],
+    counterexample_red_team: {
+      status: "needs_revision",
+      blocking_findings: [
+        {
+          obligation_id: "cx-1",
+          issue_type: "counterexample_found",
+          severity: "critical",
+          status: "open",
+        },
+      ],
+    },
+  });
+
+  assert.equal(audited.ok, false);
+  assert.match(audited.issues.join("\n"), /20 proof issue classes/);
+  assert.match(audited.issues.join("\n"), /open high\/critical proof obligation/);
+  assert.match(audited.issues.join("\n"), /counterexample_red_team/);
+});
+
 test("experiment launch decision audit rejects hollow decisions and accepts structured ones", () => {
   const hollow = auditExperimentLaunchDecisionObject({
     status: "pending_review",

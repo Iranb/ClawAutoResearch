@@ -8,6 +8,11 @@ import {
   getWritingContractStateSummary,
   setWritingContractState,
 } from "../tools/workflow-guard.ts";
+import {
+  DEFAULT_SCIENTIFIC_EDITING_PASSES,
+  normalizeWritingContractState,
+  serializeWritingContractState,
+} from "../tools/workflow-guard-state/writing-contract.ts";
 
 async function makeTempProject() {
   const projectRoot = await fs.mkdtemp(
@@ -134,4 +139,45 @@ test("configured default conference template is copied into the project before w
   const copiedStyle = path.join(path.dirname(result.projectTemplateResolvedPath), "custom.cls");
   await fs.access(result.projectTemplateResolvedPath);
   await fs.access(copiedStyle);
+});
+
+test("writing contract preserves five-pass scientific editing controls", () => {
+  const state = normalizeWritingContractState({
+    scientific_editing_required: true,
+    scientific_editing_status: "ready",
+    scientific_editing_passes: ["logical_flow", "numerical_consistency"],
+    scientific_editing_ledger_path: "academic_writer/custom-ledger.json",
+    scientific_editing_report_path: "academic_writer/custom-report.md",
+    last_scientific_editing_at: "2026-05-08T00:00:00.000Z",
+  });
+
+  assert.equal(state.scientificEditingRequired, true);
+  assert.equal(state.scientificEditingStatus, "ready");
+  assert.deepEqual(state.scientificEditingPasses, [
+    "logical_flow",
+    "numerical_consistency",
+  ]);
+  assert.equal(
+    state.scientificEditingLedgerPath,
+    "academic_writer/custom-ledger.json"
+  );
+
+  const defaults = normalizeWritingContractState({});
+  assert.deepEqual(
+    defaults.scientificEditingPasses,
+    DEFAULT_SCIENTIFIC_EDITING_PASSES
+  );
+  assert.equal(defaults.scientificEditingRequired, false);
+  assert.equal(defaults.scientificEditingStatus, "optional");
+
+  const serialized = serializeWritingContractState(state);
+  assert.equal(serialized.scientific_editing_required, true);
+  assert.deepEqual(serialized.scientific_editing_passes, [
+    "logical_flow",
+    "numerical_consistency",
+  ]);
+  assert.equal(
+    serialized.scientific_editing_report_path,
+    "academic_writer/custom-report.md"
+  );
 });

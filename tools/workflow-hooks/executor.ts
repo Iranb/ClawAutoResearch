@@ -24,6 +24,8 @@ import { appendWorkflowDiagnosticEvent } from "../workflow-diagnostics.js";
 import type {
   WorkflowFileAuditHookPolicy,
   WorkflowFileAuditRoundState,
+  WorkflowGateDisposition,
+  WorkflowGateRepairRoute,
   WorkflowHookEvent,
   WorkflowHookExecutionResult,
   WorkflowHookPoint,
@@ -265,6 +267,79 @@ function toAttempt(
   };
 }
 
+function defaultGateDispositionForPolicy(
+  policy: WorkflowFileAuditHookPolicy
+): WorkflowGateDisposition | null {
+  if (policy.gateDisposition) {
+    return policy.gateDisposition;
+  }
+  if (policy.blockingMode === "warn_only") {
+    return "warn_only";
+  }
+  if (policy.blockingMode === "rollback_stage") {
+    return "rollback_stage";
+  }
+  return null;
+}
+
+function buildRepairRouteForExecution(params: {
+  policy: WorkflowFileAuditHookPolicy;
+  execution: WorkflowHookExecutionResult;
+}): WorkflowGateRepairRoute | null {
+  const { policy, execution } = params;
+  const disposition = defaultGateDispositionForPolicy(policy);
+  if (
+    execution.verdict === "pass" &&
+    !execution.revisedRequested &&
+    !execution.escalated
+  ) {
+    return null;
+  }
+  const routeOwner =
+    policy.repairOwnerRole ??
+    policy.reviseOwnerRole ??
+    policy.targetRole ??
+    execution.revisionDispatch?.targetRole ??
+    null;
+  const command =
+    policy.repairCommand ??
+    policy.reviseCommand ??
+    execution.result?.requiredFixes?.join(" ") ??
+    execution.blockingReason ??
+    null;
+  if (!routeOwner && !command && !execution.revisionDispatch && !policy.rollbackStage) {
+    return null;
+  }
+  return {
+    owner: routeOwner,
+    command,
+    repairPacketPath: execution.revisionDispatch?.aggregateRevisionPacketPath ?? null,
+    recheckHookId: policy.recheckHookId ?? policy.hookId,
+    rollbackStage:
+      disposition === "rollback_stage" ? policy.rollbackStage ?? policy.stage : policy.rollbackStage ?? null,
+    retryBudget: policy.retryBudget ?? null,
+  };
+}
+
+function applyGateMetadataToExecutions(params: {
+  executions: WorkflowHookExecutionResult[];
+  policies: WorkflowFileAuditHookPolicy[];
+}): void {
+  const policiesByHookId = new Map(params.policies.map((policy) => [policy.hookId, policy]));
+  for (const execution of params.executions) {
+    const policy = policiesByHookId.get(execution.hookId);
+    if (!policy) {
+      continue;
+    }
+    execution.gateDisposition = defaultGateDispositionForPolicy(policy);
+    execution.gateScope = policy.gateScope ?? {
+      level: "artifact",
+      targets: [policy.filePath],
+    };
+    execution.repairRoute = buildRepairRouteForExecution({ policy, execution });
+  }
+}
+
 function fromAttempt(
   round: WorkflowFileAuditRoundState,
   attempt: WorkflowHookReviewerAttempt<ReturnType<typeof parseFileAuditResult>>
@@ -368,6 +443,7 @@ export async function evaluateWorkflowHooksForPoint(params: {
     )
   );
   if (!policy.enabled || hooks.length === 0) {
+    const aggregate = summarizeHookExecutionResults([]);
     await emitDiagnostic({
       status: "completed",
       summary: "No workflow hooks were eligible for this hook point.",
@@ -384,6 +460,7 @@ export async function evaluateWorkflowHooksForPoint(params: {
       hooksRun: [],
       blockingReason: null,
       aggregateRevisionPacketPath: null,
+      gateControl: aggregate.gateControl,
     };
   }
 
@@ -819,6 +896,7 @@ export async function evaluateWorkflowHooksForPoint(params: {
     }
   }
 
+  applyGateMetadataToExecutions({ executions, policies: hooks });
   const aggregate = summarizeHookExecutionResults(executions);
   const nextStore = upsertWorkflowHookAggregateState({
     store,
@@ -828,6 +906,7 @@ export async function evaluateWorkflowHooksForPoint(params: {
       aggregateStatus: aggregate.aggregateStatus,
       aggregateVerdict: aggregate.aggregateVerdict,
       aggregateRevisionPacketPath: aggregate.aggregateRevisionPacketPath,
+      gateControl: aggregate.gateControl,
       updatedAt: nowIso(),
     },
   });
@@ -858,6 +937,7 @@ export async function evaluateWorkflowHooksForPoint(params: {
       aggregateStatus: aggregate.aggregateStatus,
       aggregateRevisionPacketPath: aggregate.aggregateRevisionPacketPath,
       blockingReason: aggregate.blockingReason,
+      gateControl: aggregate.gateControl,
     },
   });
 
@@ -869,6 +949,7 @@ export async function evaluateWorkflowHooksForPoint(params: {
     hooksRun: executions,
     blockingReason: aggregate.blockingReason,
     aggregateRevisionPacketPath: aggregate.aggregateRevisionPacketPath,
+    gateControl: aggregate.gateControl,
   };
 }
 
