@@ -1006,6 +1006,7 @@ export async function materializeWritingSupportArtifacts(params: {
     figureTableRegistry.figureRegistryPath,
     figureTableRegistry.tableRegistryPath,
     figureTableRegistry.alignmentPath,
+    figureTableRegistry.provenancePath,
     paragraphLogicAudit.auditJsonPath,
     paragraphLogicAudit.auditReportPath,
     paragraphLogicAudit.reverseOutlinePath,

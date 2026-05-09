@@ -51,10 +51,24 @@ test("local experiment execution materializer runs and reconciles a code bundle 
           novelty_basis:
             "Adapt FixMatch pseudo-label consistency to known/novel GCD calibration.",
           main_metric: "H-score",
+          required_baselines: ["SimGCD"],
+          required_ablations: ["minus consistency filtering"],
+          write_scope: {
+            allowed_claim_ids: ["claim-fixmatch-consistency"],
+          },
+        },
+      ],
+      plan_alternatives: [
+        {
+          option_id: "plan-fixmatch",
+          linked_track_id: "track-main",
+          graph_evidence_paths: ["researcher/SOTA_MATRIX.md#simgcd"],
         },
       ],
       plan_selection: {
+        selected_option_id: "plan-fixmatch",
         selected_track_id: "track-main",
+        decisive_graph_evidence_paths: ["researcher/LITERATURE_REVIEW.md#fixmatch"],
       },
     },
   });
@@ -73,6 +87,93 @@ test("local experiment execution materializer runs and reconciles a code bundle 
   assert.match(trainPy, /def compute_known_novel_h_score/);
   const readme = await fs.readFile(path.join(projectRoot, bundle.bundleDir, "README.md"), "utf8");
   assert.doesNotMatch(readme, /synthetic proxy|local proxy/i);
+  assert.match(readme, /IMPLEMENTATION_EVIDENCE_PACKET\.json/);
+
+  const evidencePacketPaths = [
+    "coder/IMPLEMENTATION_EVIDENCE_PACKET.json",
+    "coder/BASELINE_ALIGNMENT_PACKET.json",
+    "coder/HYPERPARAMETER_SOURCE_MAP.json",
+    "coder/DATASET_PROTOCOL_LOCK.json",
+    "coder/REPRODUCTION_RISK_LEDGER.json",
+  ];
+  for (const packetPath of evidencePacketPaths) {
+    assert.ok(bundle.generatedFiles.includes(packetPath), `${packetPath} was generated`);
+    await fs.access(path.join(projectRoot, packetPath));
+  }
+
+  const bundleManifest = JSON.parse(
+    await fs.readFile(path.join(projectRoot, bundle.bundleDir, "EXPERIMENT_MANIFEST.json"), "utf8")
+  );
+  assert.equal(
+    bundleManifest.implementation_evidence_packet_path,
+    "coder/IMPLEMENTATION_EVIDENCE_PACKET.json"
+  );
+  assert.equal(
+    bundleManifest.hyperparameter_source_map_path,
+    "coder/HYPERPARAMETER_SOURCE_MAP.json"
+  );
+
+  const implementationEvidence = JSON.parse(
+    await fs.readFile(
+      path.join(projectRoot, "coder", "IMPLEMENTATION_EVIDENCE_PACKET.json"),
+      "utf8"
+    )
+  );
+  assert.equal(implementationEvidence.track_id, "track-main");
+  assert.equal(implementationEvidence.status, "citation_grounded");
+  assert.ok(
+    implementationEvidence.citation_grounding.selected_plan_evidence_paths.includes(
+      "researcher/SOTA_MATRIX.md#simgcd"
+    )
+  );
+  assert.ok(
+    implementationEvidence.citation_grounding.allowed_claim_ids.includes(
+      "claim-fixmatch-consistency"
+    )
+  );
+  assert.match(
+    implementationEvidence.implementation_contract.changed_files.join("\n"),
+    /train\.py/
+  );
+  assert.match(
+    JSON.stringify(implementationEvidence.implementation_contract.integration_points),
+    /run_fixmatch_consistency|FixMatch/i
+  );
+
+  const baselineAlignment = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "coder", "BASELINE_ALIGNMENT_PACKET.json"), "utf8")
+  );
+  assert.ok(baselineAlignment.required_baselines.includes("SimGCD"));
+  assert.equal(baselineAlignment.primary_metric, "H-score");
+  assert.equal(baselineAlignment.dataset_path, `${bundle.bundleDir}/data/gcd_reference_split.jsonl`);
+
+  const hyperparameterMap = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "coder", "HYPERPARAMETER_SOURCE_MAP.json"), "utf8")
+  );
+  assert.equal(
+    hyperparameterMap.parameters.find((entry) => entry.name === "weak_confidence_threshold").value,
+    0.18
+  );
+  assert.equal(
+    hyperparameterMap.parameters.find((entry) => entry.name === "per_class_cap").source_symbol,
+    "apply_class_balance_debiasing"
+  );
+
+  const datasetLock = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "coder", "DATASET_PROTOCOL_LOCK.json"), "utf8")
+  );
+  assert.equal(datasetLock.status, "locked");
+  assert.equal(datasetLock.split_contract.validation.total_rows, 180);
+
+  const riskLedger = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "coder", "REPRODUCTION_RISK_LEDGER.json"), "utf8")
+  );
+  assert.equal(riskLedger.status, "bounded_reference");
+  assert.equal(
+    riskLedger.risks.find((entry) => entry.risk_id === "citation_grounding_gap").status,
+    "mitigated"
+  );
+
   await writeJson(path.join(projectRoot, "researcher", "EXPERIMENT_LEDGER.json"), {
     schema_version: 1,
     project_id: "local-exp",

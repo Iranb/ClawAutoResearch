@@ -25,6 +25,11 @@ type ManifestLike = Record<string, unknown>;
 
 const CODE_EXPERIMENT_ARTIFACTS = {
   index: "coder/EXPERIMENT_INDEX.md",
+  implementationEvidence: "coder/IMPLEMENTATION_EVIDENCE_PACKET.json",
+  baselineAlignment: "coder/BASELINE_ALIGNMENT_PACKET.json",
+  hyperparameterSourceMap: "coder/HYPERPARAMETER_SOURCE_MAP.json",
+  datasetProtocolLock: "coder/DATASET_PROTOCOL_LOCK.json",
+  reproductionRiskLedger: "coder/REPRODUCTION_RISK_LEDGER.json",
   train: "train.py",
   readme: "README.md",
   manifest: "EXPERIMENT_MANIFEST.json",
@@ -151,6 +156,68 @@ function listImplementationProofStrings(value: unknown): string[] {
   });
 }
 
+function listStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return uniqueStrings(
+    value.flatMap((entry) =>
+      typeof entry === "string" && entry.trim() ? [entry.trim()] : []
+    )
+  );
+}
+
+function listObjectEntries(value: unknown): Array<Record<string, unknown>> {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.flatMap((entry) => {
+    if (typeof entry === "string" && entry.trim()) {
+      return [{ summary: entry.trim() }];
+    }
+    const record = asRecord(entry);
+    return record ? [record] : [];
+  });
+}
+
+function implementationProofRecord(manifest: Record<string, unknown>): Record<string, unknown> {
+  return asRecord(manifest.implementation_proof ?? manifest.implementationProof) ?? {};
+}
+
+function selectedPlanEvidencePaths(params: {
+  researchProgram: ResearchProgramState;
+  track: ResearchProgramTrack;
+}): string[] {
+  const selection = params.researchProgram.planSelection;
+  const optionIds = new Set(
+    [
+      selection.selectedOptionId,
+      ...selection.comparedOptionIds,
+      ...selection.fallbackOptionIds,
+    ].filter((item): item is string => Boolean(item))
+  );
+  const planEvidencePaths = params.researchProgram.planAlternatives.flatMap((option) => {
+    if (option.linkedTrackId === params.track.trackId || optionIds.has(option.optionId)) {
+      return option.graphEvidencePaths;
+    }
+    return [];
+  });
+  return uniqueStrings([
+    ...selection.decisiveGraphEvidencePaths,
+    ...planEvidencePaths,
+  ]);
+}
+
+function evidencePacketPathFields(): Record<string, string> {
+  return {
+    implementation_evidence_packet_path: CODE_EXPERIMENT_ARTIFACTS.implementationEvidence,
+    baseline_alignment_packet_path: CODE_EXPERIMENT_ARTIFACTS.baselineAlignment,
+    hyperparameter_source_map_path: CODE_EXPERIMENT_ARTIFACTS.hyperparameterSourceMap,
+    dataset_protocol_lock_path: CODE_EXPERIMENT_ARTIFACTS.datasetProtocolLock,
+    reproduction_risk_ledger_path: CODE_EXPERIMENT_ARTIFACTS.reproductionRiskLedger,
+  };
+}
+
 function inferTopic(params: {
   manifest: ManifestLike;
   researchProgram: ResearchProgramState;
@@ -206,6 +273,15 @@ async function pathExists(filePath: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+async function codeEvidencePacketsExist(projectRoot: string): Promise<boolean> {
+  for (const relativePath of Object.values(evidencePacketPathFields())) {
+    if (!(await pathExists(path.join(projectRoot, relativePath)))) {
+      return false;
+    }
+  }
+  return true;
 }
 
 function isLegacyLocalProxyText(value: string | null | undefined): boolean {
@@ -565,7 +641,7 @@ export async function shouldMaterializeCodeExperimentBundleImpl(params: {
   if (
     bundles.some((bundle) => isCompleteAlignedCodeBundle(bundle, track))
   ) {
-    return false;
+    return !(await codeEvidencePacketsExist(projectRoot));
   }
   if (
     bundles.some(
@@ -1119,6 +1195,447 @@ function buildGcdReferenceDatasetJsonl(): string {
   return `${rows.join("\n")}\n`;
 }
 
+function buildCitationGroundingSummary(params: {
+  researchProgram: ResearchProgramState;
+  track: ResearchProgramTrack;
+}): Record<string, unknown> {
+  const graphEvidencePaths = selectedPlanEvidencePaths(params);
+  const allowedClaimIds = params.track.writeScope.allowedClaimIds;
+  const evidenceCardIds = uniqueStrings([
+    ...graphEvidencePaths.map((entry) => `graph:${entry}`),
+    ...allowedClaimIds.map((entry) => `claim:${entry}`),
+  ]);
+  return {
+    status:
+      graphEvidencePaths.length > 0 || allowedClaimIds.length > 0
+        ? "grounded"
+        : "needs_citation_grounding",
+    decisive_graph_evidence_paths:
+      params.researchProgram.planSelection.decisiveGraphEvidencePaths,
+    selected_plan_evidence_paths: graphEvidencePaths,
+    allowed_claim_ids: allowedClaimIds,
+    evidence_card_ids: evidenceCardIds,
+  };
+}
+
+function buildCompletenessGates(params: {
+  experimentManifest: Record<string, unknown>;
+  researchProgram: ResearchProgramState;
+  track: ResearchProgramTrack;
+  citationGrounding: Record<string, unknown>;
+}): Array<Record<string, unknown>> {
+  const proof = implementationProofRecord(params.experimentManifest);
+  const changedFiles = listStringArray(proof.changed_files ?? proof.changedFiles);
+  const integrationPoints = listObjectEntries(
+    proof.integration_points ?? proof.integrationPoints
+  );
+  const activationSignals = listObjectEntries(
+    proof.activation_signals ?? proof.activationSignals
+  );
+  const executionCommand = pickString(proof, ["execution_command", "executionCommand"]);
+  const groundingStatus = pickString(params.citationGrounding, ["status"]);
+  return [
+    {
+      gate: "hypothesis_present",
+      status: params.track.hypothesis ? "pass" : "needs_input",
+      source: "research_program.tracks[].hypothesis",
+    },
+    {
+      gate: "novelty_basis_present",
+      status: params.track.noveltyBasis ? "pass" : "needs_input",
+      source: "research_program.tracks[].novelty_basis",
+    },
+    {
+      gate: "citation_grounding_present",
+      status: groundingStatus === "grounded" ? "pass" : "needs_input",
+      source: "research_program.plan_selection.decisive_graph_evidence_paths",
+    },
+    {
+      gate: "changed_files_declared",
+      status: changedFiles.length > 0 ? "pass" : "needs_input",
+      source: "EXPERIMENT_MANIFEST.json.implementation_proof.changed_files",
+    },
+    {
+      gate: "integration_points_declared",
+      status: integrationPoints.length > 0 ? "pass" : "needs_input",
+      source: "EXPERIMENT_MANIFEST.json.implementation_proof.integration_points",
+    },
+    {
+      gate: "activation_signals_declared",
+      status: activationSignals.length > 0 ? "pass" : "needs_input",
+      source: "EXPERIMENT_MANIFEST.json.implementation_proof.activation_signals",
+    },
+    {
+      gate: "execution_command_locked",
+      status: executionCommand ? "pass" : "needs_input",
+      source: "EXPERIMENT_MANIFEST.json.implementation_proof.execution_command",
+    },
+  ];
+}
+
+function buildImplementationEvidencePacket(params: {
+  topic: string;
+  researchProgram: ResearchProgramState;
+  track: ResearchProgramTrack;
+  experimentManifest: Record<string, unknown>;
+  experimentId: string;
+  bundleRelativeDir: string;
+  executionCommand: string;
+}): Record<string, unknown> {
+  const proof = implementationProofRecord(params.experimentManifest);
+  const citationGrounding = buildCitationGroundingSummary({
+    researchProgram: params.researchProgram,
+    track: params.track,
+  });
+  const changedFiles = uniqueStrings([
+    ...listStringArray(proof.changed_files ?? proof.changedFiles),
+    `${params.bundleRelativeDir}/${CODE_EXPERIMENT_ARTIFACTS.train}`,
+    `${params.bundleRelativeDir}/${CODE_EXPERIMENT_ARTIFACTS.manifest}`,
+    `${params.bundleRelativeDir}/${CODE_EXPERIMENT_ARTIFACTS.protocol}`,
+    `${params.bundleRelativeDir}/${CODE_EXPERIMENT_ARTIFACTS.dataset}`,
+  ]);
+  return {
+    schema_version: 1,
+    packet_type: "implementation_evidence",
+    generated_at: new Date().toISOString(),
+    status:
+      pickString(citationGrounding, ["status"]) === "grounded"
+        ? "citation_grounded"
+        : "needs_citation_grounding",
+    track_id: params.track.trackId,
+    experiment_id: params.experimentId,
+    bundle_dir: params.bundleRelativeDir,
+    topic: params.topic,
+    hypothesis:
+      params.track.hypothesis ??
+      pickString(params.experimentManifest, ["hypothesis", "track_hypothesis"]),
+    novelty_basis:
+      params.track.noveltyBasis ??
+      pickString(params.experimentManifest, ["novelty_basis", "noveltyBasis"]),
+    citation_grounding: citationGrounding,
+    implementation_contract: {
+      implementation_type: pickString(params.experimentManifest, [
+        "implementation_type",
+        "implementationType",
+      ]),
+      entry_point: pickString(params.experimentManifest, ["entry_point", "entryPoint"]),
+      changed_files: changedFiles,
+      integration_points: listObjectEntries(
+        proof.integration_points ?? proof.integrationPoints
+      ),
+      activation_signals: listObjectEntries(
+        proof.activation_signals ?? proof.activationSignals
+      ),
+      execution_command: params.executionCommand,
+    },
+    reviewer_contract: {
+      required_baselines: params.track.requiredBaselines,
+      required_ablations: params.track.requiredAblations,
+      required_controls: params.track.requiredControls,
+      success_threshold: params.track.successThreshold,
+      stop_rules: params.track.stopRules,
+      rollback_triggers: params.track.rollbackTriggers,
+    },
+    artifact_paths: evidencePacketPathFields(),
+    completeness_gates: buildCompletenessGates({
+      experimentManifest: params.experimentManifest,
+      researchProgram: params.researchProgram,
+      track: params.track,
+      citationGrounding,
+    }),
+  };
+}
+
+function buildBaselineAlignmentPacket(params: {
+  researchProgram: ResearchProgramState;
+  track: ResearchProgramTrack;
+  experimentManifest: Record<string, unknown>;
+  experimentId: string;
+  bundleRelativeDir: string;
+}): Record<string, unknown> {
+  const baselineReference =
+    pickString(params.experimentManifest, ["baseline_reference", "baselineReference"]) ??
+    params.researchProgram.baselineReference ??
+    "unspecified baseline";
+  const requiredBaselines = uniqueStrings([
+    ...params.track.requiredBaselines,
+    baselineReference,
+  ]);
+  return {
+    schema_version: 1,
+    packet_type: "baseline_alignment",
+    generated_at: new Date().toISOString(),
+    status: requiredBaselines.length > 0 ? "baseline_locked" : "needs_baseline",
+    track_id: params.track.trackId,
+    experiment_id: params.experimentId,
+    bundle_dir: params.bundleRelativeDir,
+    baseline_reference: baselineReference,
+    required_baselines: requiredBaselines,
+    primary_metric:
+      pickString(params.experimentManifest, [
+        "primary_baseline_metric",
+        "primaryBaselineMetric",
+      ]) ??
+      params.track.mainMetric ??
+      params.researchProgram.primaryMetric,
+    target_improvement: pickString(params.experimentManifest, [
+      "target_improvement",
+      "targetImprovement",
+    ]),
+    baseline_training_protocol: pickString(params.experimentManifest, [
+      "baseline_training_protocol",
+      "baselineTrainingProtocol",
+    ]),
+    baseline_eval_protocol: pickString(params.experimentManifest, [
+      "baseline_eval_protocol",
+      "baselineEvalProtocol",
+    ]),
+    benchmark_protocol_path: pickString(params.experimentManifest, [
+      "benchmark_protocol_path",
+      "benchmarkProtocolPath",
+    ]),
+    dataset_path: pickString(params.experimentManifest, ["dataset_path", "datasetPath"]),
+    datasets: listStringArray(params.experimentManifest.datasets),
+    reference_dataset: asRecord(params.experimentManifest.reference_dataset) ?? null,
+    fairness_constraints: [
+      "baseline and proposed method must use the same dataset_path",
+      "baseline and proposed method must use the same benchmark_protocol_path",
+      "known/novel class partitions must remain locked across ablations",
+      "result tables must report baseline, proposed, and ablation metrics from RESULT_SUMMARY.json",
+    ],
+    citation_grounding: buildCitationGroundingSummary({
+      researchProgram: params.researchProgram,
+      track: params.track,
+    }),
+  };
+}
+
+function buildHyperparameterSourceMap(params: {
+  track: ResearchProgramTrack;
+  experimentManifest: Record<string, unknown>;
+  experimentId: string;
+  bundleRelativeDir: string;
+}): Record<string, unknown> {
+  const trainPath = `${params.bundleRelativeDir}/${CODE_EXPERIMENT_ARTIFACTS.train}`;
+  const protocolPath =
+    pickString(params.experimentManifest, ["benchmark_protocol_path", "benchmarkProtocolPath"]) ??
+    `${params.bundleRelativeDir}/${CODE_EXPERIMENT_ARTIFACTS.protocol}`;
+  const datasetPath =
+    pickString(params.experimentManifest, ["dataset_path", "datasetPath"]) ??
+    `${params.bundleRelativeDir}/${CODE_EXPERIMENT_ARTIFACTS.dataset}`;
+  return {
+    schema_version: 1,
+    packet_type: "hyperparameter_source_map",
+    generated_at: new Date().toISOString(),
+    status: "locked_reference_defaults",
+    track_id: params.track.trackId,
+    experiment_id: params.experimentId,
+    bundle_dir: params.bundleRelativeDir,
+    source_files: [trainPath, protocolPath, datasetPath],
+    parameters: [
+      {
+        name: "seed",
+        value: 42,
+        source_path: trainPath,
+        source_symbol: "argparse --seed default",
+        role: "reproducibility",
+      },
+      {
+        name: "weak_confidence_threshold",
+        value: 0.18,
+        source_path: trainPath,
+        source_symbol: "run_fixmatch_consistency",
+        role: "FixMatch pseudo-label confidence gate",
+      },
+      {
+        name: "weak_margin_threshold",
+        value: 0.18,
+        source_path: trainPath,
+        source_symbol: "run_fixmatch_consistency",
+        role: "weak/strong consistency margin gate",
+      },
+      {
+        name: "per_class_cap",
+        value: "max(8, len(unlabeled) // 18)",
+        source_path: trainPath,
+        source_symbol: "apply_class_balance_debiasing",
+        role: "class-balance debiasing cap",
+      },
+      {
+        name: "known_class_count",
+        value: 3,
+        source_path: trainPath,
+        source_symbol: "compute_known_novel_h_score",
+        role: "known/novel H-score partition",
+      },
+    ],
+    protocol_fields: {
+      known_classes: [0, 1, 2],
+      novel_classes: [3, 4, 5],
+      metric: "known_novel_h_score",
+      protocol_path: protocolPath,
+      dataset_path: datasetPath,
+    },
+  };
+}
+
+function buildDatasetProtocolLock(params: {
+  track: ResearchProgramTrack;
+  experimentManifest: Record<string, unknown>;
+  experimentId: string;
+  bundleRelativeDir: string;
+}): Record<string, unknown> {
+  const protocolPath =
+    pickString(params.experimentManifest, ["benchmark_protocol_path", "benchmarkProtocolPath"]) ??
+    `${params.bundleRelativeDir}/${CODE_EXPERIMENT_ARTIFACTS.protocol}`;
+  const datasetPath =
+    pickString(params.experimentManifest, ["dataset_path", "datasetPath"]) ??
+    `${params.bundleRelativeDir}/${CODE_EXPERIMENT_ARTIFACTS.dataset}`;
+  return {
+    schema_version: 1,
+    packet_type: "dataset_protocol_lock",
+    generated_at: new Date().toISOString(),
+    status: "locked",
+    track_id: params.track.trackId,
+    experiment_id: params.experimentId,
+    bundle_dir: params.bundleRelativeDir,
+    benchmark_protocol_path: protocolPath,
+    dataset_path: datasetPath,
+    datasets: listStringArray(params.experimentManifest.datasets),
+    reference_dataset: asRecord(params.experimentManifest.reference_dataset) ?? null,
+    split_contract: {
+      labeled: {
+        classes: [0, 1, 2],
+        rows_per_class: 8,
+        total_rows: 24,
+        source_function: "buildGcdReferenceDatasetJsonl",
+      },
+      unlabeled: {
+        classes: [0, 1, 2, 3, 4, 5],
+        rows_per_class: 36,
+        total_rows: 216,
+        source_function: "buildGcdReferenceDatasetJsonl",
+      },
+      validation: {
+        classes: [0, 1, 2, 3, 4, 5],
+        rows_per_class: 30,
+        total_rows: 180,
+        source_function: "buildGcdReferenceDatasetJsonl",
+      },
+    },
+    lock_rules: [
+      "Do not change known_classes or novel_classes between baseline and proposed runs.",
+      "Do not change dataset_path between ablations.",
+      "Do not report external benchmark claims from this local reference packet.",
+    ],
+  };
+}
+
+function buildReproductionRiskLedger(params: {
+  researchProgram: ResearchProgramState;
+  track: ResearchProgramTrack;
+  experimentManifest: Record<string, unknown>;
+  experimentId: string;
+  bundleRelativeDir: string;
+}): Record<string, unknown> {
+  const citationGrounding = buildCitationGroundingSummary({
+    researchProgram: params.researchProgram,
+    track: params.track,
+  });
+  const grounded = pickString(citationGrounding, ["status"]) === "grounded";
+  return {
+    schema_version: 1,
+    packet_type: "reproduction_risk_ledger",
+    generated_at: new Date().toISOString(),
+    status: grounded ? "bounded_reference" : "needs_citation_grounding",
+    track_id: params.track.trackId,
+    experiment_id: params.experimentId,
+    bundle_dir: params.bundleRelativeDir,
+    implementation_type: pickString(params.experimentManifest, [
+      "implementation_type",
+      "implementationType",
+    ]),
+    risks: [
+      {
+        risk_id: "bounded_reference_benchmark",
+        severity: "medium",
+        status: "accepted",
+        reason:
+          "The generated bundle is a deterministic local reference benchmark, not a full external reproduction.",
+        mitigation:
+          "Manifest and README label the implementation_type as local_reference_gcd_benchmark and keep claims scoped to the local reference dataset.",
+      },
+      {
+        risk_id: "citation_grounding_gap",
+        severity: grounded ? "low" : "high",
+        status: grounded ? "mitigated" : "open",
+        reason:
+          "Implementation choices should trace back to graph evidence paths or allowed claim IDs before writing strong paper claims.",
+        mitigation:
+          "Populate research_program.plan_selection.decisive_graph_evidence_paths or track.write_scope.allowed_claim_ids before treating code results as citation-grounded.",
+        evidence: citationGrounding,
+      },
+      {
+        risk_id: "single_seed_default",
+        severity: "medium",
+        status: params.researchProgram.globalConstraints.mustRunMultiSeedBeforeAnalysis
+          ? "controlled"
+          : "accepted",
+        reason: "The code bundle defaults to seed 42 for deterministic smoke execution.",
+        mitigation:
+          "Experiment-stage analysis must run multi-seed aggregation before paper-level claims when the global constraint is enabled.",
+      },
+      {
+        risk_id: "external_dataset_absent",
+        severity: "medium",
+        status: "documented",
+        reason:
+          "The workflow avoids external dataset downloads in the local code-stage bundle.",
+        mitigation:
+          "Treat this artifact as implementation evidence and require a separate analyzer/reviewer gate for external benchmark claims.",
+      },
+    ],
+  };
+}
+
+async function writeCodeEvidencePackets(params: {
+  projectRoot: string;
+  topic: string;
+  researchProgram: ResearchProgramState;
+  track: ResearchProgramTrack;
+  experimentManifest: Record<string, unknown>;
+  experimentId: string;
+  bundleRelativeDir: string;
+  executionCommand: string;
+}): Promise<string[]> {
+  const packets: Array<[string, Record<string, unknown>]> = [
+    [
+      CODE_EXPERIMENT_ARTIFACTS.implementationEvidence,
+      buildImplementationEvidencePacket(params),
+    ],
+    [
+      CODE_EXPERIMENT_ARTIFACTS.baselineAlignment,
+      buildBaselineAlignmentPacket(params),
+    ],
+    [
+      CODE_EXPERIMENT_ARTIFACTS.hyperparameterSourceMap,
+      buildHyperparameterSourceMap(params),
+    ],
+    [
+      CODE_EXPERIMENT_ARTIFACTS.datasetProtocolLock,
+      buildDatasetProtocolLock(params),
+    ],
+    [
+      CODE_EXPERIMENT_ARTIFACTS.reproductionRiskLedger,
+      buildReproductionRiskLedger(params),
+    ],
+  ];
+  for (const [relativePath, packet] of packets) {
+    await writeJsonEnsured(path.join(params.projectRoot, relativePath), packet);
+  }
+  return packets.map(([relativePath]) => relativePath);
+}
+
 function buildReadme(params: {
   topic: string;
   track: ResearchProgramTrack;
@@ -1159,6 +1676,14 @@ The script writes \`${params.bundleRelativeDir}/RESULT_SUMMARY.json\` with basel
 proposed, and ablation metrics. The benchmark is intentionally deterministic and
 standard-library-only so the workflow can run a repeatable code review and Karpathy loop
 without Discord, GPUs, or external dataset downloads.
+
+## Evidence Packets
+
+- \`${CODE_EXPERIMENT_ARTIFACTS.implementationEvidence}\`: hypothesis, novelty basis, graph/claim evidence paths, changed files, integration points, and activation signals.
+- \`${CODE_EXPERIMENT_ARTIFACTS.baselineAlignment}\`: required baselines, primary metric, shared dataset/protocol paths, and fairness constraints.
+- \`${CODE_EXPERIMENT_ARTIFACTS.hyperparameterSourceMap}\`: seed, thresholds, class partitions, and their source symbols in \`${params.bundleRelativeDir}/train.py\`.
+- \`${CODE_EXPERIMENT_ARTIFACTS.datasetProtocolLock}\`: locked known/novel classes, split sizes, and dataset/protocol immutability rules.
+- \`${CODE_EXPERIMENT_ARTIFACTS.reproductionRiskLedger}\`: bounded-reference risks and the citation-grounding status for implementation claims.
 	`;
 }
 
@@ -1416,10 +1941,13 @@ export async function materializeCodeExperimentBundleImpl(params: {
     bundleRelativeDir,
     defaultProof: asRecord(defaultExperimentManifest.implementation_proof) ?? {},
   });
+  Object.assign(experimentManifest, evidencePacketPathFields());
   const status = pickString(existingManifest ?? {}, ["status"]);
   if (status) {
     experimentManifest.status = status;
   }
+  const resolvedExperimentId =
+    pickString(experimentManifest, ["experiment_id", "experimentId"]) ?? experimentId;
   const executionCommand =
     pickString(
       asRecord(experimentManifest.implementation_proof) ?? {},
@@ -1455,6 +1983,18 @@ export async function materializeCodeExperimentBundleImpl(params: {
     experimentManifest
   );
   generatedFiles.push(`${bundleRelativeDir}/${CODE_EXPERIMENT_ARTIFACTS.manifest}`);
+  generatedFiles.push(
+    ...(await writeCodeEvidencePackets({
+      projectRoot,
+      topic,
+      researchProgram,
+      track,
+      experimentManifest,
+      experimentId: resolvedExperimentId,
+      bundleRelativeDir,
+      executionCommand,
+    }))
+  );
 
   const existingReadme = await readTextIfExists(
     path.join(bundleDir, CODE_EXPERIMENT_ARTIFACTS.readme)
@@ -1470,8 +2010,7 @@ export async function materializeCodeExperimentBundleImpl(params: {
       buildReadme({
         topic,
         track,
-        experimentId:
-          pickString(experimentManifest, ["experiment_id", "experimentId"]) ?? experimentId,
+        experimentId: resolvedExperimentId,
         bundleRelativeDir,
         command: executionCommand,
         manifest: experimentManifest,
@@ -1597,8 +2136,7 @@ export async function materializeCodeExperimentBundleImpl(params: {
     buildExperimentIndex({
       topic,
       track,
-      experimentId:
-        pickString(experimentManifest, ["experiment_id", "experimentId"]) ?? experimentId,
+      experimentId: resolvedExperimentId,
       bundleRelativeDir,
       command: executionCommand,
       manifest: experimentManifest,
