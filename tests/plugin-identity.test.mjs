@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 
 const repoRoot = process.cwd();
 
@@ -32,4 +33,13 @@ test("plugin identity is aligned to ClawAutoResearch", () => {
   assert.match(runtimeApiSidecar, /export \* from "\.\/runtime-api\.ts"/);
   assert.match(recommended, /"ClawAutoResearch":\s*\{/);
   assert.match(installScript, /PLUGIN_LINK="\$OC_PLUGINS_DIR\/ClawAutoResearch"/);
+});
+
+test("compiled plugin entry loads without an installed openclaw package", async () => {
+  const runtimeApiSource = readText("dist/runtime-api.js");
+  assert.doesNotMatch(runtimeApiSource, /openclaw\/plugin-sdk\/plugin-entry/);
+
+  const entry = await import(pathToFileURL(path.join(repoRoot, "dist", "index.js")).href);
+  assert.equal(entry.default?.id, "ClawAutoResearch");
+  assert.equal(typeof entry.default?.register, "function");
 });

@@ -27,6 +27,29 @@ function hasFlag(argv, name) {
   return argv.includes(name);
 }
 
+function formatUsage() {
+  return [
+    "Usage: node scripts/run_auto_workflow_e2e_test.mjs [command] [options]",
+    "",
+    "Commands:",
+    "  full                  Run both /auto-research and /auto-review lanes.",
+    "  /auto-research        Run the experiment research lane.",
+    "  /auto-review          Run the survey/review lane.",
+    "",
+    "Options:",
+    "  --mode live|fixture   Select live OpenClaw runtime or deterministic fixture mode.",
+    "  --topic <text>        Research topic.",
+    "  --projects-root <dir> Project root for generated workflow projects.",
+    "  --project-id <id>     Explicit project id.",
+    "  --timeout-ms <ms>     Overall child-run timeout.",
+    "  --max-iterations <n>  Live auto-iterator budget.",
+    "  --allow-partial       Treat partial live progress as a reportable outcome.",
+    "  --json                Print the summary JSON.",
+    "  --help, -h            Show this help text without starting a run.",
+    "",
+  ].join("\n");
+}
+
 function numberArgValue(argv, name, fallback = null) {
   const raw = argValue(argv, name, null);
   if (raw === null) {
@@ -1371,6 +1394,11 @@ function formatHumanSummary(summary) {
 }
 
 async function main(argv = process.argv) {
+  if (hasFlag(argv, "--help") || hasFlag(argv, "-h")) {
+    process.stdout.write(formatUsage());
+    return;
+  }
+
   const command = normalizeAutoWorkflowCommand(
     argValue(argv, "--command", null) ?? firstPositional(argv) ?? "full"
   );

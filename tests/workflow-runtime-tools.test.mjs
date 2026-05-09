@@ -33,6 +33,7 @@ import {
 } from "../tools/workflow-runtime-state.ts";
 import { getWorkflowTraceLogPath } from "../tools/workflow-trace.ts";
 import { materializeWorkflowTaskGraph, readWorkflowTaskGraphStore } from "../tools/workflow-team/task-graph.ts";
+import { recordWorkflowNotificationChannelForProject } from "../tools/workflow-notification-channels.ts";
 
 async function makeProjectRoot() {
   const projectRoot = await fs.mkdtemp(
@@ -53,6 +54,22 @@ async function makeProjectRoot() {
     "utf8"
   );
   return projectRoot;
+}
+
+async function recordDiscordNotificationTarget(
+  projectRoot,
+  projectId = "demo-project",
+  sessionKey = "agent:researcher:discord:group:paper-lab"
+) {
+  await recordWorkflowNotificationChannelForProject({
+    projectRoot,
+    projectId,
+    messageChannel: "discord",
+    channelKey: "discord:group:paper-lab",
+    sessionKey,
+    source: "test",
+    notes: "Discord is a notification channel, not a project binding.",
+  });
 }
 
 function createResearchWorkflowTool(params = {}) {
@@ -6295,6 +6312,7 @@ test("research_workflow set_paper_ingestion broadcasts each newly completed Pape
   });
 
   process.env.OPENCLAW_PROJECT = projectRoot;
+  await recordDiscordNotificationTarget(projectRoot);
   const tool = createResearchWorkflowTool({
     workspaceDir: projectRoot,
     sessionKey: "agent:researcher:discord:group:paper-lab",
@@ -6419,6 +6437,7 @@ test("research_workflow set_paper_ingestion persists batch manifest progress and
   });
 
   process.env.OPENCLAW_PROJECT = projectRoot;
+  await recordDiscordNotificationTarget(projectRoot);
   const tool = createResearchWorkflowTool({
     workspaceDir: projectRoot,
     sessionKey: "agent:researcher:discord:group:paper-lab",
@@ -6596,6 +6615,7 @@ test("research_workflow set_paper_ingestion merges enriched completion metadata 
   });
 
   process.env.OPENCLAW_PROJECT = projectRoot;
+  await recordDiscordNotificationTarget(projectRoot);
   const tool = createResearchWorkflowTool({
     workspaceDir: projectRoot,
     sessionKey: "agent:researcher:discord:group:paper-lab",
@@ -6671,6 +6691,7 @@ test("research_workflow set_paper_ingestion tracks per-paper timeout state and b
   });
 
   process.env.OPENCLAW_PROJECT = projectRoot;
+  await recordDiscordNotificationTarget(projectRoot);
   const tool = createResearchWorkflowTool({
     workspaceDir: projectRoot,
     sessionKey: "agent:researcher:discord:group:paper-lab",
@@ -6875,6 +6896,7 @@ test("research_workflow start_background_run broadcasts queued status when the r
   process.env.OPENCLAW_PROJECT = projectRoot;
   process.env.OPENCLAW_RESEARCH_BACKGROUND_RUN_REGISTRY_PATH = registryPath;
   await clearBackgroundWorkflowRunRegistryForTests();
+  await recordDiscordNotificationTarget(projectRoot);
 
   await recordBackgroundWorkflowRun({
     ownerAgent: "researcher",
@@ -6969,6 +6991,7 @@ test("research_workflow start_background_run broadcasts reused status context wh
   process.env.OPENCLAW_PROJECT = projectRoot;
   process.env.OPENCLAW_RESEARCH_BACKGROUND_RUN_REGISTRY_PATH = registryPath;
   await clearBackgroundWorkflowRunRegistryForTests();
+  await recordDiscordNotificationTarget(projectRoot);
 
   await recordBackgroundWorkflowRun({
     ownerAgent: "researcher",
@@ -7045,6 +7068,7 @@ test("research_workflow run_papernexus_wrapper starts a dedicated wrapper-first 
   });
 
   process.env.OPENCLAW_PROJECT = projectRoot;
+  await recordDiscordNotificationTarget(projectRoot);
   const tool = createResearchWorkflowTool({
     workspaceDir: projectRoot,
     sessionKey: "agent:researcher:discord:group:paper-lab",

@@ -55,6 +55,7 @@ export type WorkflowCommandKind =
   | "auto_review"
   | "bind_project"
   | "clear_project_binding"
+  | "clear_projects_state"
   | "workflow_status"
   | "handoff_status"
   | "show_commands"
@@ -144,6 +145,7 @@ export const COMMAND_LABELS: Record<WorkflowCommandKind, string> = {
   auto_review: "/auto-review",
   bind_project: "/bind-project",
   clear_project_binding: "/clear-project-binding",
+  clear_projects_state: "/clear-projects-state",
   workflow_status: "/workflow-status",
   handoff_status: "/handoff-status",
   show_commands: "/show-commands",

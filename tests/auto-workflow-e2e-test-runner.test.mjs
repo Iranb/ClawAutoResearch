@@ -81,6 +81,22 @@ test("auto workflow E2E runner normalizes user-facing command aliases", () => {
   );
 });
 
+test("auto workflow E2E runner help exits before live preflight", async () => {
+  const { stdout, stderr } = await execFile(
+    process.execPath,
+    [
+      path.join(process.cwd(), "scripts", "run_auto_workflow_e2e_test.mjs"),
+      "--help",
+    ],
+    { maxBuffer: 1024 * 1024 }
+  );
+
+  assert.match(stdout, /Usage: node scripts\/run_auto_workflow_e2e_test\.mjs/);
+  assert.match(stdout, /--mode live\|fixture/);
+  assert.doesNotMatch(stdout, /Auto workflow E2E: fail/);
+  assert.equal(stderr, "");
+});
+
 test("auto workflow E2E runner defaults live projects root to plugin config", async (t) => {
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "auto-workflow-root-config-"));
   const sourceConfigPath = path.join(tempRoot, "openclaw.json");

@@ -43,6 +43,7 @@ import {
   drainQueuedBackgroundWorkflowRuns,
   startBackgroundWorkflowRun,
   type BackgroundRunRequest,
+  type BackgroundRunStartResult,
 } from "./workflow-fast-paths";
 import {
   readGateReviewStore,
@@ -80,7 +81,12 @@ import {
   extractQuotedSegment,
   formatWorkflowCommandArgument,
 } from "./workflow-commands/parsers.js";
-import { readJsonIfExists, writeJsonEnsured } from "./workflow-guard-core/fs";
+import {
+  readJsonIfExists,
+  withAdvisoryLock,
+  writeJsonAtomicEnsured,
+  writeJsonEnsured,
+} from "./workflow-guard-core/fs";
 
 function createWorkflowCommandRuntime(params: {
   api: WorkflowCommandApi;
@@ -139,6 +145,8 @@ type WorkflowGateReviewStore = Awaited<ReturnType<typeof readGateReviewStore>>;
 type WorkflowCodeReviewStore = Awaited<ReturnType<typeof readCodeReviewStore>>;
 type WorkflowAutoDiscussionStore = Awaited<ReturnType<typeof readAutoModeDiscussionStore>>;
 
+const NATIVE_DISCORD_BACKGROUND_ACK_TIMEOUT_MS = 1500;
+
 function deriveWorkflowRoleSessionKey(params: {
   sessionKey: string | null;
   role: DispatchableWorkflowRole;
@@ -165,6 +173,108 @@ function resolveChannelProjectBindingPolicy<T extends { enableChannelProjectBind
         ...policy,
         enableChannelProjectBindings: false,
       };
+}
+
+function isNativeDiscordCommand(
+  ctx: Pick<WorkflowCommandContext, "channel" | "commandSource">
+): boolean {
+  return ctx.channel === "discord" && readString(ctx.commandSource) === "native";
+}
+
+function deriveBindingChannelKeyFromSessionKey(params: {
+  sessionKey?: string | null;
+  accountId?: string | null;
+}): string | null {
+  const sessionKey = readString(params.sessionKey);
+  if (!sessionKey?.startsWith("agent:")) {
+    return null;
+  }
+  const parts = sessionKey.split(":");
+  if (parts.length < 4) {
+    return null;
+  }
+  const channel = readString(parts[2]);
+  if (!channel || !["discord", "local", "telegram"].includes(channel)) {
+    return null;
+  }
+  const rawConversation = parts.slice(3).join(":");
+  const subagentMarker = rawConversation.indexOf(":subagent:");
+  const conversationId = (subagentMarker > 0
+    ? rawConversation.slice(0, subagentMarker)
+    : rawConversation
+  ).trim();
+  if (
+    !conversationId ||
+    (channel === "discord" && conversationId.startsWith("slash:"))
+  ) {
+    return null;
+  }
+  return buildWorkflowConversationBindingKeyFromConversation({
+    channel,
+    accountId: readString(params.accountId) ?? "default",
+    conversationId,
+  });
+}
+
+async function withNativeDiscordBackgroundAckTimeout(params: {
+  api: WorkflowCommandApi;
+  ctx: Pick<WorkflowCommandContext, "channel" | "commandSource">;
+  commandLabel: string;
+  projectRoot: string | null | undefined;
+  projectId: string | null | undefined;
+  launch: Promise<BackgroundRunStartResult>;
+}): Promise<BackgroundRunStartResult> {
+  if (!isNativeDiscordCommand(params.ctx)) {
+    return params.launch;
+  }
+  const timedOut = Symbol("native_discord_background_ack_timeout");
+  let timeout: ReturnType<typeof setTimeout> | null = null;
+  const first = await Promise.race([
+    params.launch,
+    new Promise<typeof timedOut>((resolve) => {
+      timeout = setTimeout(
+        resolve,
+        NATIVE_DISCORD_BACKGROUND_ACK_TIMEOUT_MS,
+        timedOut
+      );
+    }),
+  ]);
+  if (timeout) {
+    clearTimeout(timeout);
+  }
+  if (first !== timedOut) {
+    return first;
+  }
+  params.api.logger?.info?.("Native Discord workflow command acknowledged before background launch completed.", {
+    commandLabel: params.commandLabel,
+    projectRoot: params.projectRoot,
+    projectId: params.projectId,
+    timeoutMs: NATIVE_DISCORD_BACKGROUND_ACK_TIMEOUT_MS,
+    nextAction: "background_launch_continues",
+  });
+  void params.launch.catch((error) => {
+    params.api.logger?.warn?.("Native Discord workflow background launch failed after fast ack.", {
+      commandLabel: params.commandLabel,
+      projectRoot: params.projectRoot,
+      projectId: params.projectId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  });
+  return {
+    started: false,
+    reason: "session_unavailable",
+    runId: null,
+    sessionKey: null,
+    projectRoot: params.projectRoot ?? null,
+    projectId: params.projectId ?? null,
+    summary:
+      `Accepted ${params.commandLabel}; background launch is still starting. ` +
+      "Use /workflow-status or /handoff-status for progress.",
+    reusedIdleSession: false,
+    activeResearcherSessionsInChannel: null,
+    queued: true,
+    queueKey: null,
+  };
 }
 
 async function recordCommandNotificationChannel(params: {
@@ -384,6 +494,10 @@ const SHOW_COMMANDS_ENTRIES: readonly ShowCommandsEntry[] = [
     intro: "清空当前消息渠道的 workflow 项目绑定，适合渠道上下文指向错误项目时执行。",
   },
   {
+    label: COMMAND_LABELS.clear_projects_state,
+    intro: "清空 PROJECTS_STATE.json 里的项目注册列表，只保留项目目录和其它状态文件。",
+  },
+  {
     label: COMMAND_LABELS.research_pipeline,
     intro: "启动或继续普通论文主研究流程。",
   },
@@ -474,6 +588,75 @@ async function pathExists(filePath: string): Promise<boolean> {
     }
     throw error;
   }
+}
+
+function asPlainRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function expandHomePath(value: string): string {
+  const home = readString(process.env.HOME);
+  if (!home) {
+    return value;
+  }
+  if (value === "~") {
+    return home;
+  }
+  return value.startsWith("~/") ? path.join(home, value.slice(2)) : value;
+}
+
+function resolveProjectsStatePathFromCommand(params: {
+  api: WorkflowCommandApi;
+  ctx: PluginCommandContext;
+}): string | null {
+  const explicitTarget = extractQuotedSegment(params.ctx.args) ?? readString(params.ctx.args);
+  if (explicitTarget) {
+    const resolvedTarget = path.resolve(expandHomePath(explicitTarget));
+    return path.basename(resolvedTarget) === "PROJECTS_STATE.json"
+      ? resolvedTarget
+      : path.join(resolvedTarget, "PROJECTS_STATE.json");
+  }
+
+  const workflowPolicy = getWorkflowGuardPolicy(resolvePluginConfig(params.api));
+  const projectsRoot = readString(workflowPolicy.projectsRoot);
+  return projectsRoot
+    ? path.join(path.resolve(expandHomePath(projectsRoot)), "PROJECTS_STATE.json")
+    : null;
+}
+
+async function clearProjectsStateProjects(params: {
+  projectsStatePath: string;
+}): Promise<{
+  projectsStatePath: string;
+  removedProjectCount: number;
+  created: boolean;
+}> {
+  const projectsStatePath = path.resolve(params.projectsStatePath);
+  return withAdvisoryLock({
+    lockPath: `${projectsStatePath}.lock`,
+    task: async () => {
+      const existing = asPlainRecord(
+        await readJsonIfExists<Record<string, unknown>>(projectsStatePath)
+      );
+      const projects = Array.isArray(existing?.projects) ? existing.projects : [];
+      const nextState: Record<string, unknown> = {
+        ...(existing ?? {
+          gpu_allocation: {},
+          total_gpu_hours_used: 0,
+        }),
+        projects: [],
+        updated_at: new Date().toISOString(),
+      };
+      await writeJsonAtomicEnsured(projectsStatePath, nextState);
+      return {
+        projectsStatePath,
+        removedProjectCount: projects.length,
+        created: !existing,
+      };
+    },
+  });
 }
 
 async function resolveExistingWorkflowProjectSelection(params: {
@@ -649,7 +832,11 @@ export function resolveWorkflowCommandSessionTarget(
       ? api.runtime.agent.resolveAgentWorkspaceDir(ctx.config, agentId)
       : null;
   const bindingChannelKey =
-    buildWorkflowConversationBindingKeyFromConversation(bindingConversation) ?? null;
+    buildWorkflowConversationBindingKeyFromConversation(bindingConversation) ??
+    deriveBindingChannelKeyFromSessionKey({
+      sessionKey,
+      accountId: ctx.accountId,
+    });
   return {
     sessionKey,
     agentId,
@@ -804,7 +991,7 @@ function createBackgroundWorkflowCommandHandler(
         };
       }
 
-      const result = await enqueueWorkflowTask({
+      const queuedLaunch = enqueueWorkflowTask({
         key: resolveWorkflowQueueKey({
           projectRoot: explicitProject?.projectRoot ?? snapshot.projectRoot,
           workspaceDir: target.workspaceDir,
@@ -840,23 +1027,54 @@ function createBackgroundWorkflowCommandHandler(
               ? buildZoteroSyncBackgroundCommand(ctx.commandBody)
               : undefined;
 
-      const researcherBackgroundKind =
-        kind === "graph_build" ||
-        kind === "zotero_sync" ||
-        kind === "literature_review";
-      const resolvedBackgroundAgentId =
-        researcherBackgroundKind
-          ? "researcher"
-          : target.agentId ?? currentSnapshot.role ?? undefined;
-      const resolvedBackgroundWorkspaceDir =
-        researcherBackgroundKind &&
-        typeof api.runtime?.agent?.resolveAgentWorkspaceDir === "function"
-          ? readString(api.runtime.agent.resolveAgentWorkspaceDir(ctx.config, "researcher")) ??
-            target.workspaceDir ??
-            undefined
-          : target.workspaceDir ?? undefined;
+          const researcherBackgroundKind =
+            kind === "graph_build" ||
+            kind === "zotero_sync" ||
+            kind === "literature_review";
+          const resolvedBackgroundAgentId =
+            researcherBackgroundKind
+              ? "researcher"
+              : target.agentId ?? currentSnapshot.role ?? undefined;
+          const resolvedBackgroundWorkspaceDir =
+            researcherBackgroundKind &&
+            typeof api.runtime?.agent?.resolveAgentWorkspaceDir === "function"
+              ? readString(api.runtime.agent.resolveAgentWorkspaceDir(ctx.config, "researcher")) ??
+                target.workspaceDir ??
+                undefined
+              : target.workspaceDir ?? undefined;
+          const backgroundRun = buildBackgroundRunRequest(kind, ctx, {
+            ...(graphBuildCommandText ? { commandText: graphBuildCommandText } : {}),
+            ...(zoteroSyncCommandText ? { commandText: zoteroSyncCommandText } : {}),
+            projectId:
+              explicitProject?.projectId ??
+              (kind === "survey_review" ? surveyProjectId : undefined) ??
+              (researcherBackgroundKind ? commandSnapshot.projectId ?? undefined : undefined),
+            projectRoot:
+              explicitProject?.projectRoot ??
+              (researcherBackgroundKind ? commandSnapshot.projectRoot ?? undefined : undefined),
+            title: kind === "survey_review" ? surveyTopic ?? undefined : undefined,
+          });
 
-          return deps.startBackgroundWorkflowRun({
+          if (
+            commandSnapshot.projectRoot &&
+            !shouldUseChannelProjectBindingForWorkflow({
+              messageChannel: ctx.channel,
+              channelKey: target.bindingChannelKey,
+              sessionKey: targetSessionKey,
+            })
+          ) {
+            await recordCommandNotificationChannel({
+              projectRoot: commandSnapshot.projectRoot,
+              projectId: commandSnapshot.projectId ?? null,
+              ctx,
+              target,
+              sessionKey: targetSessionKey,
+              source: `${kind}_command`,
+              notes: `Recorded notification-only channel before ${COMMAND_LABELS[kind]} background launch.`,
+            });
+          }
+
+          const launch = deps.startBackgroundWorkflowRun({
             workflowRuntime: createWorkflowCommandRuntime({
               api,
               workspaceDir:
@@ -876,20 +1094,21 @@ function createBackgroundWorkflowCommandHandler(
               channelKey: target.bindingChannelKey ?? undefined,
             },
             snapshot: commandSnapshot,
-            backgroundRun: buildBackgroundRunRequest(kind, ctx, {
-              ...(graphBuildCommandText ? { commandText: graphBuildCommandText } : {}),
-              ...(zoteroSyncCommandText ? { commandText: zoteroSyncCommandText } : {}),
-              projectId:
-                explicitProject?.projectId ??
-                (kind === "survey_review" ? surveyProjectId : undefined) ??
-                (researcherBackgroundKind ? commandSnapshot.projectId ?? undefined : undefined),
-              projectRoot:
-                explicitProject?.projectRoot ??
-                (researcherBackgroundKind ? commandSnapshot.projectRoot ?? undefined : undefined),
-              title: kind === "survey_review" ? surveyTopic ?? undefined : undefined,
-            }),
+            backgroundRun,
           });
+          return launch;
         },
+      });
+      const result = await withNativeDiscordBackgroundAckTimeout({
+        api,
+        ctx,
+        commandLabel,
+        projectRoot: explicitProject?.projectRoot ?? snapshot.projectRoot,
+        projectId:
+          explicitProject?.projectId ??
+          (kind === "survey_review" ? surveyProjectId : undefined) ??
+          snapshot.projectId,
+        launch: queuedLaunch,
       });
 
       return {
@@ -1638,6 +1857,46 @@ function createClearProjectBindingCommandHandler(
   };
 }
 
+function createClearProjectsStateCommandHandler(api: WorkflowCommandApi) {
+  return async (ctx: PluginCommandContext) => {
+    const commandLabel = COMMAND_LABELS.clear_projects_state;
+    try {
+      const projectsStatePath = resolveProjectsStatePathFromCommand({ api, ctx });
+      if (!projectsStatePath) {
+        return {
+          text:
+            `❌ ${commandLabel} requires plugin config projectsRoot or an explicit projects root / PROJECTS_STATE.json path.`,
+        };
+      }
+
+      const result = await clearProjectsStateProjects({ projectsStatePath });
+      api.logger?.info?.("Cleared workflow projects registry from slash command.", {
+        commandLabel,
+        projectsStatePath: result.projectsStatePath,
+        removedProjectCount: result.removedProjectCount,
+        created: result.created,
+      });
+
+      return {
+        text:
+          "Cleared all project registry bindings from PROJECTS_STATE.json.\n" +
+          `removed_projects=${result.removedProjectCount}\n` +
+          `projects_state=${result.projectsStatePath}\n` +
+          "project_files=preserved",
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown error";
+      api.logger?.warn?.("Failed to clear workflow projects registry.", {
+        channel: ctx.channel,
+        error: message,
+      });
+      return {
+        text: `❌ Failed to clear PROJECTS_STATE.json project bindings: ${message}`,
+      };
+    }
+  };
+}
+
 function createBindProjectCommandHandler(
   api: WorkflowCommandApi,
   deps: WorkflowCommandDependencies
@@ -2329,6 +2588,13 @@ export function createResearchWorkflowCommands(
         "Clear the current channel's workflow project binding. Must be called inside the channel you want to unbind.",
       acceptsArgs: false,
       handler: createClearProjectBindingCommandHandler(api, resolvedDeps),
+    },
+    {
+      name: "clear-projects-state",
+      description:
+        "Clear every project registry entry from PROJECTS_STATE.json while preserving project directories and other workflow files.",
+      acceptsArgs: true,
+      handler: createClearProjectsStateCommandHandler(api),
     },
     {
       name: "research-pipeline",

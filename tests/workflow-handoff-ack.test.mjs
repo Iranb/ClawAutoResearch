@@ -8,6 +8,7 @@ import { createPluginRegistrationContext } from "../tools/plugin-registration-sh
 import { registerWorkflowTools } from "../tools/register-workflow-tools.ts";
 import { readWorkflowHandoffIntentStore, upsertWorkflowHandoffIntent, transitionWorkflowHandoffIntent } from "../tools/workflow-handoff/handoff-store.ts";
 import { materializeWorkflowTaskGraph, readWorkflowTaskGraphStore } from "../tools/workflow-team/task-graph.ts";
+import { recordWorkflowNotificationChannelForProject } from "../tools/workflow-notification-channels.ts";
 
 function createTool(params) {
   let registered = null;
@@ -36,6 +37,18 @@ function createTool(params) {
 async function execute(tool, params) {
   const response = await tool.execute("test", params);
   return JSON.parse(response.content[0].text);
+}
+
+async function recordDiscordNotificationTarget(projectRoot, projectId = "demo") {
+  await recordWorkflowNotificationChannelForProject({
+    projectRoot,
+    projectId,
+    messageChannel: "discord",
+    channelKey: "discord:group:paper-lab",
+    sessionKey: "agent:researcher:discord:group:paper-lab",
+    source: "test",
+    notes: "Discord is a notification channel, not a project binding.",
+  });
 }
 
 test("handoff ack/claim enforces owner and claims target task", async (t) => {
@@ -230,6 +243,7 @@ test("handoff lifecycle actions broadcast simple Discord status updates", async 
       },
     ],
   });
+  await recordDiscordNotificationTarget(projectRoot);
 
   const researcherTool = createTool({
     projectRoot,

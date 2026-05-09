@@ -122,6 +122,27 @@ test("resolveWorkflowCommandSessionTarget prefers CommandTargetSessionKey for na
   assert.equal(target.workspaceDir, "/tmp/workspace-researcher");
 });
 
+test("resolveWorkflowCommandSessionTarget derives native Discord binding key from target session", () => {
+  const target = resolveWorkflowCommandSessionTarget(
+    makeApi(),
+    {
+      channel: "discord",
+      from: "slash:owner",
+      to: "slash:owner",
+      originatingTo: undefined,
+      accountId: "default",
+      config: {},
+      commandSource: "native",
+      commandTargetSessionKey: "agent:researcher:discord:channel:gcd-lab",
+      sessionKey: "agent:researcher:discord:slash:owner",
+    },
+    () => null
+  );
+
+  assert.equal(target.sessionKey, "agent:researcher:discord:channel:gcd-lab");
+  assert.equal(target.bindingChannelKey, "binding:discord:default:channel:gcd-lab");
+});
+
 test("native slash replay harness starts /auto-research against a local projects root", async () => {
   const projectsRoot = await fs.mkdtemp(path.join(os.tmpdir(), "workflow-native-research-"));
   const scriptPath = path.join(

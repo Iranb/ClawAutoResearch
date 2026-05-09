@@ -13,6 +13,23 @@ import {
 import { readWorkflowBroadcastOutboxStore } from "../tools/workflow-runtime-state.ts";
 import { readWorkflowRuntimeIncidentsStore } from "../tools/workflow-runtime-incidents.ts";
 import { bindChannelProjectForWorkflow } from "../tools/workflow-guard.ts";
+import { recordWorkflowNotificationChannelForProject } from "../tools/workflow-notification-channels.ts";
+
+async function recordDiscordNotificationTarget(
+  projectRoot,
+  projectId = "demo-project",
+  sessionKey = "agent:researcher:discord:group:paper-lab"
+) {
+  await recordWorkflowNotificationChannelForProject({
+    projectRoot,
+    projectId,
+    messageChannel: "discord",
+    channelKey: "discord:group:paper-lab",
+    sessionKey,
+    source: "test",
+    notes: "Discord is a notification channel, not a project binding.",
+  });
+}
 
 test("buildAutoIteratorStageBroadcastMessage captures transition, owner, and dispatch context", () => {
   const message = buildAutoIteratorStageBroadcastMessage({
@@ -99,12 +116,64 @@ test("maybeBroadcastAutoIteratorStageChange skips when the stage is unchanged", 
   assert.equal(result.reasonSkipped, "stage_unchanged");
 });
 
+test("workflow broadcasts skip Discord sessions when no notification channel is bound", async (t) => {
+  const projectRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "openclaw-research-stage-broadcast-unbound-")
+  );
+  const calls = [];
+
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  const stageResult = await maybeBroadcastAutoIteratorStageChange({
+    workflowRuntime: {
+      async run(params) {
+        calls.push(params);
+        return { runId: "should-not-run" };
+      },
+    },
+    sessionKey: "agent:researcher:discord:group:paper-lab",
+    projectId: "demo-project",
+    projectRoot,
+    stageBefore: "frontier_mapping",
+    stageAfter: "idea",
+    stageChanged: true,
+    ownerBefore: "researcher",
+    ownerAfter: "researcher",
+    nextAction: "/idea-phase",
+    blockingReason: null,
+  });
+  const statusResult = await maybeBroadcastWorkflowStatusUpdate({
+    workflowRuntime: {
+      async run(params) {
+        calls.push(params);
+        return { runId: "should-not-run" };
+      },
+    },
+    sessionKey: "agent:researcher:discord:group:paper-lab",
+    projectId: "demo-project",
+    projectRoot,
+    status: "waiting",
+    stage: "idea",
+    summary: "This should not be posted without a notification target.",
+    idempotencyKeySuffix: "unbound",
+  });
+
+  assert.equal(stageResult.broadcasted, false);
+  assert.equal(stageResult.reasonSkipped, "notification_channel_unbound");
+  assert.equal(statusResult.broadcasted, false);
+  assert.equal(statusResult.reasonSkipped, "notification_channel_unbound");
+  assert.equal(calls.length, 0);
+});
+
 test("maybeBroadcastAutoIteratorStageChange posts a deliverable nested run when the stage changes", async () => {
   const projectRoot = await fs.mkdtemp(
     path.join(os.tmpdir(), "openclaw-research-stage-broadcast-")
   );
   const calls = [];
   try {
+    await recordDiscordNotificationTarget(projectRoot);
     const result = await maybeBroadcastAutoIteratorStageChange({
       workflowRuntime: {
         async run(params) {
@@ -153,6 +222,7 @@ test("maybeBroadcastWorkflowStatusUpdate records delivery in the project-local b
     path.join(os.tmpdir(), "openclaw-research-stage-broadcast-")
   );
   const calls = [];
+  const notificationSessionKey = "agent:researcher:discord:group:paper-lab";
 
   t.after(async () => {
     await fs.rm(projectRoot, { recursive: true, force: true });
@@ -163,6 +233,11 @@ test("maybeBroadcastWorkflowStatusUpdate records delivery in the project-local b
     `${JSON.stringify({ project_id: "demo-project", current_stage: "idea" }, null, 2)}\n`,
     "utf8"
   );
+  await recordDiscordNotificationTarget(
+    projectRoot,
+    "demo-project",
+    notificationSessionKey
+  );
 
   const result = await maybeBroadcastWorkflowStatusUpdate({
     workflowRuntime: {
@@ -171,7 +246,7 @@ test("maybeBroadcastWorkflowStatusUpdate records delivery in the project-local b
         return { runId: "status-run-1" };
       },
     },
-    sessionKey: "agent:researcher:discord:group:paper-lab",
+    sessionKey: "agent:orchestrator:local:conversation:other-room",
     projectId: "demo-project",
     projectRoot,
     status: "recovered_after_restart",
@@ -183,6 +258,8 @@ test("maybeBroadcastWorkflowStatusUpdate records delivery in the project-local b
   assert.equal(result.broadcasted, true);
   assert.equal(result.runId, "status-run-1");
   assert.equal(calls.length, 1);
+  assert.equal(result.sessionKey, notificationSessionKey);
+  assert.equal(calls[0].sessionKey, notificationSessionKey);
 
   const outbox = await readWorkflowBroadcastOutboxStore(projectRoot);
   assert.equal(outbox.entries.length, 1);
@@ -199,6 +276,7 @@ test("maybeBroadcastAutoIteratorStageChange short-circuits duplicate broadcast i
   t.after(async () => {
     await fs.rm(projectRoot, { recursive: true, force: true });
   });
+  await recordDiscordNotificationTarget(projectRoot);
 
   const base = {
     workflowRuntime: {
@@ -235,6 +313,7 @@ test("maybeBroadcastAutoIteratorStageChange records Discord inbound timeout as i
   t.after(async () => {
     await fs.rm(projectRoot, { recursive: true, force: true });
   });
+  await recordDiscordNotificationTarget(projectRoot);
 
   const result = await maybeBroadcastAutoIteratorStageChange({
     workflowRuntime: {
@@ -269,6 +348,7 @@ test("maybeBroadcastAutoIteratorStageChange supersedes stale pending/failed stag
   t.after(async () => {
     await fs.rm(projectRoot, { recursive: true, force: true });
   });
+  await recordDiscordNotificationTarget(projectRoot);
 
   await maybeBroadcastAutoIteratorStageChange({
     workflowRuntime: {
@@ -375,7 +455,7 @@ test("maybeBroadcastWorkflowStatusUpdate suppresses stale cross-project broadcas
   assert.equal(outbox.entries[0].deliveryStatus, "superseded");
 });
 
-test("maybeBroadcastWorkflowStatusUpdate treats Discord sessions as notification-only even when legacy bindings moved", async (t) => {
+test("maybeBroadcastWorkflowStatusUpdate skips moved Discord sessions without a project notification target", async (t) => {
   const workspaceRoot = await fs.mkdtemp(
     path.join(os.tmpdir(), "openclaw-research-stage-broadcast-discord-")
   );
@@ -429,14 +509,13 @@ test("maybeBroadcastWorkflowStatusUpdate treats Discord sessions as notification
     projectRoot: staleProjectRoot,
     status: "waiting",
     stage: "plan",
-    summary: "Discord should remain a notification target, not a project binding gate.",
+    summary: "Discord should not receive stale project updates without a project notification target.",
     idempotencyKeySuffix: "discord-notification-only",
   });
 
-  assert.equal(result.broadcasted, true);
-  assert.equal(result.reasonSkipped, null);
-  assert.equal(calls.length, 1);
+  assert.equal(result.broadcasted, false);
+  assert.equal(result.reasonSkipped, "notification_channel_unbound");
+  assert.equal(calls.length, 0);
   const outbox = await readWorkflowBroadcastOutboxStore(staleProjectRoot);
-  assert.equal(outbox.entries.length, 1);
-  assert.equal(outbox.entries[0].deliveryStatus, "delivered");
+  assert.equal(outbox.entries.length, 0);
 });

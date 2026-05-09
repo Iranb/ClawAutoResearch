@@ -249,6 +249,191 @@ test("research-pipeline command starts a background continuation on the bound re
   );
 });
 
+test("native Discord research-pipeline responds before a slow background launch and records notification target", async (t) => {
+  const projectsRoot = await makeProjectsRoot();
+  const projectRoot = await makeProject(projectsRoot, "paper-lab", "graph_build");
+  let captured = null;
+  let releaseSlowLaunch = null;
+
+  t.after(async () => {
+    releaseSlowLaunch?.();
+    await fs.rm(projectsRoot, { recursive: true, force: true });
+  });
+
+  const api = makeApi({
+    pluginConfig: {
+      enableChannelProjectBindings: true,
+      projectsRoot,
+    },
+  });
+  const pipelineCommand = getCommand(createResearchWorkflowCommands(api, {
+    resolveConversationBindingRecord() {
+      return null;
+    },
+    async buildWorkflowSnapshot(params) {
+      captured = {
+        ...(captured ?? {}),
+        snapshotParams: params,
+      };
+      return {
+        role: "researcher",
+        projectRoot,
+        projectId: "paper-lab",
+        channelProjectBindingsEnabled: false,
+      };
+    },
+    async startBackgroundWorkflowRun(params) {
+      captured = {
+        ...(captured ?? {}),
+        backgroundParams: params,
+      };
+      return await new Promise((resolve) => {
+        releaseSlowLaunch = () =>
+          resolve({
+            started: true,
+            runId: "bg-run-slow",
+            sessionKey: params.agentCtx.sessionKey,
+            projectRoot: params.snapshot.projectRoot,
+            projectId: params.snapshot.projectId,
+            summary: "Slow background launch finished.",
+          });
+      });
+    },
+  }), "research-pipeline");
+
+  const startedAt = Date.now();
+  const result = await pipelineCommand.handler({
+    channel: "discord",
+    commandSource: "native",
+    commandTargetSessionKey: "agent:researcher:discord:channel:paper-lab",
+    isAuthorizedSender: true,
+    commandBody: '/research-pipeline "semantic shift robustness"',
+    args: '"semantic shift robustness"',
+    config: {},
+    from: "slash:owner",
+    to: "slash:owner",
+    accountId: "default",
+    requestConversationBinding: async () => ({ status: "error" }),
+    detachConversationBinding: async () => ({ removed: false }),
+    getCurrentConversationBinding: async () => null,
+  });
+  const elapsedMs = Date.now() - startedAt;
+
+  assert.match(result.text, /Accepted \/research-pipeline/);
+  assert.ok(elapsedMs < 2500, `Expected native slash to respond quickly, got ${elapsedMs}ms`);
+  assert.equal(
+    captured.backgroundParams.agentCtx.channelKey,
+    "binding:discord:default:channel:paper-lab"
+  );
+
+  const notifications = await listWorkflowNotificationChannelsForProject(projectRoot);
+  assert.equal(notifications.length, 1);
+  assert.equal(notifications[0].messageChannel, "discord");
+  assert.equal(notifications[0].channelKey, "binding:discord:default:channel:paper-lab");
+  assert.equal(notifications[0].sessionKey, "agent:researcher:discord:channel:paper-lab");
+
+  releaseSlowLaunch();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+});
+
+test("native Discord research-pipeline responds while an earlier workflow queue task is still running", async (t) => {
+  const projectRoot = "/tmp/projects/paper-lab";
+  const calls = [];
+  let releaseFirstLaunch;
+  let firstLaunchStarted;
+  const firstLaunchStartedPromise = new Promise((resolve) => {
+    firstLaunchStarted = resolve;
+  });
+  let secondLaunchStarted;
+  const secondLaunchStartedPromise = new Promise((resolve) => {
+    secondLaunchStarted = resolve;
+  });
+  t.after(() => {
+    releaseFirstLaunch?.();
+  });
+
+  const api = makeApi();
+  const pipelineCommand = getCommand(createResearchWorkflowCommands(api, {
+    resolveConversationBindingRecord(conversation) {
+      return conversation.conversationId === "channel:paper-lab"
+        ? { targetSessionKey: "agent:researcher:discord:channel:paper-lab" }
+        : null;
+    },
+    async buildWorkflowSnapshot() {
+      return {
+        role: "researcher",
+        projectRoot,
+        projectId: "paper-lab",
+        channelProjectBindingsEnabled: false,
+      };
+    },
+    async startBackgroundWorkflowRun(params) {
+      calls.push(params);
+      if (calls.length === 1) {
+        firstLaunchStarted();
+        return await new Promise((resolve) => {
+          releaseFirstLaunch = () =>
+            resolve({
+              started: true,
+              runId: "bg-run-first",
+              sessionKey: params.agentCtx.sessionKey,
+              projectRoot: params.snapshot.projectRoot,
+              projectId: params.snapshot.projectId,
+              summary: "First background launch finished.",
+            });
+        });
+      }
+      secondLaunchStarted();
+      return {
+        started: true,
+        runId: "bg-run-second",
+        sessionKey: params.agentCtx.sessionKey,
+        projectRoot: params.snapshot.projectRoot,
+        projectId: params.snapshot.projectId,
+        summary: "Second background launch finished.",
+      };
+    },
+  }), "research-pipeline");
+
+  const commonContext = {
+    channel: "discord",
+    isAuthorizedSender: true,
+    commandBody: '/research-pipeline "semantic shift robustness"',
+    args: '"semantic shift robustness"',
+    config: {},
+    accountId: "default",
+    requestConversationBinding: async () => ({ status: "error" }),
+    detachConversationBinding: async () => ({ removed: false }),
+    getCurrentConversationBinding: async () => null,
+  };
+  const firstResultPromise = pipelineCommand.handler({
+    ...commonContext,
+    from: "discord:channel:paper-lab",
+    to: undefined,
+  });
+  await firstLaunchStartedPromise;
+
+  const startedAt = Date.now();
+  const nativeResult = await pipelineCommand.handler({
+    ...commonContext,
+    commandSource: "native",
+    commandTargetSessionKey: "agent:researcher:discord:channel:paper-lab",
+    from: "slash:owner",
+    to: "slash:owner",
+  });
+  const elapsedMs = Date.now() - startedAt;
+
+  assert.match(nativeResult.text, /Accepted \/research-pipeline/);
+  assert.ok(elapsedMs < 2500, `Expected native slash to respond quickly, got ${elapsedMs}ms`);
+  assert.equal(calls.length, 1);
+
+  releaseFirstLaunch();
+  assert.equal((await firstResultPromise).text, "First background launch finished.");
+  await secondLaunchStartedPromise;
+  assert.equal(calls.length, 2);
+  assert.equal(calls[1].agentCtx.channelKey, "binding:discord:default:channel:paper-lab");
+});
+
 test("survey-pipeline command starts a projectless background continuation on the bound researcher session", async () => {
   let captured = null;
   const api = makeApi();
@@ -626,6 +811,7 @@ test("show-commands command lists the available slash commands and when to use t
   assert.match(result.text, /\/research-pipeline/);
   assert.match(result.text, /\/survey-pipeline/);
   assert.match(result.text, /\/clear-project-binding/);
+  assert.match(result.text, /\/clear-projects-state/);
   assert.match(result.text, /\/handoff-status/);
   assert.match(result.text, /\/idea-catalyst-search/);
   assert.match(result.text, /\/broad-paper-search/);
@@ -635,6 +821,66 @@ test("show-commands command lists the available slash commands and when to use t
   assert.match(result.text, /\/capture-diagnostics/);
   assert.match(result.text, /\/show-commands/);
   assert.match(result.text, /普通论文从 \/project-init 或 \/research-pipeline 开始/);
+});
+
+test("clear-projects-state command clears only PROJECTS_STATE project entries", async (t) => {
+  const projectsRoot = await makeProjectsRoot();
+  const alphaRoot = await makeProject(projectsRoot, "alpha", "graph_build");
+  const statePath = path.join(projectsRoot, "PROJECTS_STATE.json");
+  await fs.writeFile(
+    statePath,
+    `${JSON.stringify(
+      {
+        updated_at: "2026-05-01T00:00:00.000Z",
+        gpu_allocation: { "0": "alpha" },
+        total_gpu_hours_used: 7,
+        projects: [
+          { id: "alpha", dir: "alpha/", status: "active" },
+          { id: "beta", dir: "beta/", status: "active" },
+        ],
+      },
+      null,
+      2
+    )}\n`,
+    "utf8"
+  );
+
+  t.after(async () => {
+    await fs.rm(projectsRoot, { recursive: true, force: true });
+  });
+
+  const api = makeApi({
+    pluginConfig: {
+      enableChannelProjectBindings: true,
+      projectsRoot,
+    },
+  });
+  const command = getCommand(
+    createResearchWorkflowCommands(api),
+    "clear-projects-state"
+  );
+
+  const result = await command.handler({
+    channel: "local",
+    isAuthorizedSender: true,
+    commandBody: "/clear-projects-state",
+    args: undefined,
+    config: {},
+    from: "local:conversation:paper-lab",
+    to: "local:conversation:paper-lab",
+    accountId: "default",
+    requestConversationBinding: async () => ({ status: "error" }),
+    detachConversationBinding: async () => ({ removed: false }),
+    getCurrentConversationBinding: async () => null,
+  });
+
+  const state = JSON.parse(await fs.readFile(statePath, "utf8"));
+  assert.deepEqual(state.projects, []);
+  assert.deepEqual(state.gpu_allocation, { "0": "alpha" });
+  assert.equal(state.total_gpu_hours_used, 7);
+  await fs.access(path.join(alphaRoot, "PROJECT_MANIFEST.json"));
+  assert.match(result.text, /removed_projects=2/);
+  assert.match(result.text, /project_files=preserved/);
 });
 
 test("handoff-status command summarizes the current handoff control-plane state", async () => {

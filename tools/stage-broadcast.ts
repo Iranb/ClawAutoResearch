@@ -13,6 +13,7 @@ import {
   type ChannelProjectBindingPolicy,
 } from "./channel-project-bindings";
 import { isWorkflowNotificationOnlySessionKey } from "./workflow-message-channels.js";
+import { resolveWorkflowNotificationTargetForProjectSync } from "./workflow-notification-channels.js";
 
 export type StageBroadcastRuntime = {
   run: (params: {
@@ -74,6 +75,46 @@ export type WorkflowStatusBroadcastResult = {
   sessionKey: string | null;
   idempotencyKey: string | null;
 };
+
+function resolveWorkflowBroadcastTarget(params: {
+  projectRoot: string | null;
+  sessionKey?: string | null;
+}): {
+  sessionKey: string | null;
+  reasonSkipped: string | null;
+} {
+  const notificationTarget = params.projectRoot
+    ? resolveWorkflowNotificationTargetForProjectSync(params.projectRoot)
+    : null;
+  if (notificationTarget?.sessionKey) {
+    return {
+      sessionKey: notificationTarget.sessionKey,
+      reasonSkipped: null,
+    };
+  }
+  if (notificationTarget) {
+    return {
+      sessionKey: null,
+      reasonSkipped: "notification_session_unavailable",
+    };
+  }
+  if (isWorkflowNotificationOnlySessionKey(params.sessionKey)) {
+    return {
+      sessionKey: null,
+      reasonSkipped: "notification_channel_unbound",
+    };
+  }
+  if (params.sessionKey) {
+    return {
+      sessionKey: params.sessionKey,
+      reasonSkipped: null,
+    };
+  }
+  return {
+    sessionKey: null,
+    reasonSkipped: "session_unavailable",
+  };
+}
 
 async function maybeSuppressBindingMismatchedBroadcast(params: {
   bindingPolicy?: ChannelProjectBindingPolicy;
@@ -444,19 +485,24 @@ export async function maybeBroadcastAutoIteratorStageChange(params: {
       idempotencyKey: null,
     };
   }
-  if (!params.sessionKey) {
+  const broadcastTarget = resolveWorkflowBroadcastTarget({
+    projectRoot: params.projectRoot,
+    sessionKey: params.sessionKey,
+  });
+  if (!broadcastTarget.sessionKey) {
     return {
       broadcasted: false,
-      reasonSkipped: "session_unavailable",
+      reasonSkipped: broadcastTarget.reasonSkipped,
       runId: null,
       sessionKey: null,
       idempotencyKey: null,
     };
   }
+  const sessionKey = broadcastTarget.sessionKey;
 
   const idempotencyKey = [
     "openclaw-research:stage-broadcast",
-    params.sessionKey,
+    sessionKey,
     params.projectId ?? "unknown-project",
     params.stageBefore ?? "unknown-before",
     params.stageAfter ?? "unknown-after",
@@ -478,7 +524,7 @@ export async function maybeBroadcastAutoIteratorStageChange(params: {
   });
   const bindingSuppressed = await maybeSuppressBindingMismatchedBroadcast({
     bindingPolicy: params.bindingPolicy,
-    sessionKey: params.sessionKey,
+    sessionKey,
     projectId: params.projectId,
     projectRoot: params.projectRoot,
     idempotencyKey,
@@ -495,7 +541,7 @@ export async function maybeBroadcastAutoIteratorStageChange(params: {
       broadcasted: false,
       reasonSkipped: "binding_mismatch",
       runId: null,
-      sessionKey: params.sessionKey,
+      sessionKey,
       idempotencyKey,
     };
   }
@@ -506,7 +552,7 @@ export async function maybeBroadcastAutoIteratorStageChange(params: {
       entry.idempotencyKey.startsWith(
         [
           "openclaw-research:stage-broadcast",
-          params.sessionKey,
+          sessionKey,
           params.projectId ?? "unknown-project",
         ].join(":")
       ) &&
@@ -532,7 +578,7 @@ export async function maybeBroadcastAutoIteratorStageChange(params: {
       projectId: params.projectId,
       broadcastId: idempotencyKey,
       idempotencyKey,
-      sessionKey: params.sessionKey,
+      sessionKey,
       status:
         params.agentTaskDispatch?.dispatched === true ? "handed_off" : "continued",
       stage: params.stageAfter,
@@ -551,7 +597,7 @@ export async function maybeBroadcastAutoIteratorStageChange(params: {
         broadcasted: false,
         reasonSkipped: `duplicate_${recorded.entry.deliveryStatus}`,
         runId: null,
-        sessionKey: params.sessionKey,
+        sessionKey,
         idempotencyKey,
       };
     }
@@ -559,7 +605,7 @@ export async function maybeBroadcastAutoIteratorStageChange(params: {
   const budgeted = await applyWorkflowBroadcastBudget({
     projectRoot: params.projectRoot,
     projectId: params.projectId,
-    sessionKey: params.sessionKey,
+    sessionKey,
     broadcastId: idempotencyKey,
     idempotencyKey,
     message,
@@ -570,7 +616,7 @@ export async function maybeBroadcastAutoIteratorStageChange(params: {
   try {
     const runId = (
       await params.workflowRuntime.run({
-        sessionKey: params.sessionKey,
+        sessionKey,
         message: budgeted.message,
         lane: "nested",
         deliver: true,
@@ -596,7 +642,7 @@ export async function maybeBroadcastAutoIteratorStageChange(params: {
       broadcasted: true,
       reasonSkipped: null,
       runId,
-      sessionKey: params.sessionKey,
+      sessionKey,
       idempotencyKey,
     };
   } catch (error) {
@@ -619,7 +665,7 @@ export async function maybeBroadcastAutoIteratorStageChange(params: {
           severity: "warning",
           summary:
             "Discord inbound worker timed out while delivering a workflow stage broadcast.",
-          sessionKey: params.sessionKey,
+          sessionKey,
           error: errorMessage,
           details: {
             broadcastId: idempotencyKey,
@@ -633,7 +679,7 @@ export async function maybeBroadcastAutoIteratorStageChange(params: {
       broadcasted: false,
       reasonSkipped: "runtime_error",
       runId: null,
-      sessionKey: params.sessionKey,
+      sessionKey,
       idempotencyKey,
     };
   }
@@ -659,28 +705,33 @@ export async function maybeBroadcastWorkflowStatusUpdate(params: {
       idempotencyKey: null,
     };
   }
-  if (!params.sessionKey) {
+  const broadcastTarget = resolveWorkflowBroadcastTarget({
+    projectRoot: params.projectRoot,
+    sessionKey: params.sessionKey,
+  });
+  if (!broadcastTarget.sessionKey) {
     return {
       broadcasted: false,
-      reasonSkipped: "session_unavailable",
+      reasonSkipped: broadcastTarget.reasonSkipped,
       runId: null,
       sessionKey: null,
       idempotencyKey: null,
     };
   }
+  const sessionKey = broadcastTarget.sessionKey;
   if (!params.summary.trim()) {
     return {
       broadcasted: false,
       reasonSkipped: "empty_summary",
       runId: null,
-      sessionKey: params.sessionKey,
+      sessionKey,
       idempotencyKey: null,
     };
   }
 
   const idempotencyKey = [
     "openclaw-research:status-broadcast",
-    params.sessionKey,
+    sessionKey,
     params.projectId ?? "unknown-project",
     params.status,
     params.stage ?? "unknown-stage",
@@ -688,7 +739,7 @@ export async function maybeBroadcastWorkflowStatusUpdate(params: {
   ].join(":");
   const bindingSuppressed = await maybeSuppressBindingMismatchedBroadcast({
     bindingPolicy: params.bindingPolicy,
-    sessionKey: params.sessionKey,
+    sessionKey,
     projectId: params.projectId,
     projectRoot: params.projectRoot,
     idempotencyKey,
@@ -702,7 +753,7 @@ export async function maybeBroadcastWorkflowStatusUpdate(params: {
       broadcasted: false,
       reasonSkipped: "binding_mismatch",
       runId: null,
-      sessionKey: params.sessionKey,
+      sessionKey,
       idempotencyKey,
     };
   }
@@ -712,7 +763,7 @@ export async function maybeBroadcastWorkflowStatusUpdate(params: {
       projectId: params.projectId,
       broadcastId: idempotencyKey,
       idempotencyKey,
-      sessionKey: params.sessionKey,
+      sessionKey,
       status: params.status,
       stage: params.stage,
       summary: params.summary,
@@ -728,7 +779,7 @@ export async function maybeBroadcastWorkflowStatusUpdate(params: {
         broadcasted: false,
         reasonSkipped: `duplicate_${recorded.entry.deliveryStatus}`,
         runId: null,
-        sessionKey: params.sessionKey,
+        sessionKey,
         idempotencyKey,
       };
     }
@@ -736,7 +787,7 @@ export async function maybeBroadcastWorkflowStatusUpdate(params: {
   const budgeted = await applyWorkflowBroadcastBudget({
     projectRoot: params.projectRoot,
     projectId: params.projectId,
-    sessionKey: params.sessionKey,
+    sessionKey,
     broadcastId: idempotencyKey,
     idempotencyKey,
     message: buildWorkflowStatusBroadcastMessage({
@@ -751,7 +802,7 @@ export async function maybeBroadcastWorkflowStatusUpdate(params: {
   try {
     const runId = (
       await params.workflowRuntime.run({
-        sessionKey: params.sessionKey,
+        sessionKey,
         message: budgeted.message,
         lane: "nested",
         deliver: true,
@@ -775,7 +826,7 @@ export async function maybeBroadcastWorkflowStatusUpdate(params: {
       broadcasted: true,
       reasonSkipped: null,
       runId,
-      sessionKey: params.sessionKey,
+      sessionKey,
       idempotencyKey,
     };
   } catch (error) {
@@ -798,7 +849,7 @@ export async function maybeBroadcastWorkflowStatusUpdate(params: {
           severity: "warning",
           summary:
             "Discord inbound worker timed out while delivering a workflow status broadcast.",
-          sessionKey: params.sessionKey,
+          sessionKey,
           error: errorMessage,
           details: {
             broadcastId: idempotencyKey,
@@ -812,7 +863,7 @@ export async function maybeBroadcastWorkflowStatusUpdate(params: {
       broadcasted: false,
       reasonSkipped: "runtime_error",
       runId: null,
-      sessionKey: params.sessionKey,
+      sessionKey,
       idempotencyKey,
     };
   }
