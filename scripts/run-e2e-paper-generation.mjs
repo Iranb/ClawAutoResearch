@@ -1806,17 +1806,19 @@ const resultTableValues = {
   minusBalance: fixed4(canonicalExperimentResults?.ablations?.minus_class_balance_debiasing?.h_score),
   minusConsistency: fixed4(canonicalExperimentResults?.ablations?.minus_consistency_filtering?.h_score),
 };
+const headlineResultValues = [
+  resultTableValues.baselineHScore,
+  resultTableValues.baselineKnown,
+  resultTableValues.baselineNovel,
+  resultTableValues.proposedHScore,
+  resultTableValues.proposedKnown,
+  resultTableValues.proposedNovel,
+  resultTableValues.deltaH,
+].filter((value) => value !== null);
 const headlineTableMatchesResultSummary =
   !canonicalExperimentResults ||
-  [
-    resultTableValues.baselineHScore,
-    resultTableValues.baselineKnown,
-    resultTableValues.baselineNovel,
-    resultTableValues.proposedHScore,
-    resultTableValues.proposedKnown,
-    resultTableValues.proposedNovel,
-    resultTableValues.deltaH,
-  ].every((value) => value && String(mainTex ?? "").includes(value));
+  (headlineResultValues.length > 0 &&
+    headlineResultValues.every((value) => String(mainTex ?? "").includes(value)));
 const ablationTableMatchesResultSummary =
   !canonicalExperimentResults ||
   [resultTableValues.minusBalance, resultTableValues.minusConsistency].every((value) =>
@@ -1824,10 +1826,23 @@ const ablationTableMatchesResultSummary =
   );
 const figurePackEntries = Array.isArray(figurePack?.entries) ? figurePack.entries : [];
 const tablePackEntries = Array.isArray(tablePack?.entries) ? tablePack.entries : [];
+const resultProvenancePattern = /researcher\/artifacts\/results\/results\.json/;
+const hasResultProvenance = (entry) =>
+  resultProvenancePattern.test(String(entry?.data_provenance ?? entry?.source_path ?? ""));
 const figurePackHasResultProvenance = figurePackEntries.some((entry) =>
-  /researcher\/artifacts\/results\/results\.json/.test(String(entry?.data_provenance ?? entry?.source_path ?? ""))
+  hasResultProvenance(entry)
 );
 const tablePackHasMetricValues = tablePackEntries.some((entry) => entry?.metric_values && typeof entry.metric_values === "object");
+const figurePackMetricEntries = figurePackEntries.filter(
+  (entry) => entry?.metric_values && typeof entry.metric_values === "object"
+);
+const tablePackMetricEntries = tablePackEntries.filter(
+  (entry) => entry?.metric_values && typeof entry.metric_values === "object"
+);
+const figurePackMetricProvenanceComplete =
+  figurePackMetricEntries.length > 0 && figurePackMetricEntries.every((entry) => hasResultProvenance(entry));
+const tablePackMetricProvenanceComplete =
+  tablePackMetricEntries.length > 0 && tablePackMetricEntries.every((entry) => hasResultProvenance(entry));
 const contentQualityChecks = [
   {
     name: "paper_word_count_min",
@@ -1926,16 +1941,34 @@ const contentQualityChecks = [
           expected: "FIGURE_PACK entries backed by researcher/artifacts/results/results.json",
         },
         {
+          name: "figure_pack_metric_provenance_complete",
+          ok: figurePackMetricProvenanceComplete,
+          observed: {
+            metric_entries: figurePackMetricEntries.length,
+            result_provenance_complete: figurePackMetricProvenanceComplete,
+          },
+          expected: "all FIGURE_PACK metric entries carry result provenance",
+        },
+        {
           name: "table_pack_metric_values",
           ok: tablePackEntries.length > 0 && tablePackHasMetricValues,
           observed: { entries: tablePackEntries.length, has_metric_values: tablePackHasMetricValues },
           expected: "TABLE_PACK entries include metric_values",
         },
         {
+          name: "table_pack_metric_provenance_complete",
+          ok: tablePackMetricProvenanceComplete,
+          observed: {
+            metric_entries: tablePackMetricEntries.length,
+            result_provenance_complete: tablePackMetricProvenanceComplete,
+          },
+          expected: "all TABLE_PACK metric entries carry result provenance",
+        },
+        {
           name: "headline_table_matches_result_summary",
           ok: headlineTableMatchesResultSummary,
           observed: resultTableValues,
-          expected: "headline table contains RESULT_SUMMARY values",
+          expected: "headline table contains available RESULT_SUMMARY values",
         },
         {
           name: "ablation_table_matches_result_summary",
@@ -2246,8 +2279,10 @@ const resultBackedFigureTablePass =
   lane === "survey" ||
   (figurePackEntries.length > 0 &&
     figurePackHasResultProvenance &&
+    figurePackMetricProvenanceComplete &&
     tablePackEntries.length > 0 &&
     tablePackHasMetricValues &&
+    tablePackMetricProvenanceComplete &&
     headlineTableMatchesResultSummary &&
     ablationTableMatchesResultSummary);
 const benchmarkAdapter = buildBenchmarkAdapterScorecard({
@@ -2540,7 +2575,9 @@ const scorecard = {
     headline_table_matches_result_summary: headlineTableMatchesResultSummary,
     ablation_table_matches_result_summary: ablationTableMatchesResultSummary,
     figure_pack_result_provenance: figurePackHasResultProvenance,
+    figure_pack_metric_provenance_complete: figurePackMetricProvenanceComplete,
     table_pack_metric_values: tablePackHasMetricValues,
+    table_pack_metric_provenance_complete: tablePackMetricProvenanceComplete,
   },
   runtime_safety: {
     open_incidents: openIncidents.length,

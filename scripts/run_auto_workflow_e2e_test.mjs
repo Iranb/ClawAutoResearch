@@ -43,6 +43,7 @@ function formatUsage() {
     "  --project-id <id>     Explicit project id.",
     "  --timeout-ms <ms>     Overall child-run timeout.",
     "  --max-iterations <n>  Live auto-iterator budget.",
+    "  --strict-content      Enforce publication-depth content quality checks in the paper harness.",
     "  --allow-partial       Treat partial live progress as a reportable outcome.",
     "  --json                Print the summary JSON.",
     "  --help, -h            Show this help text without starting a run.",
@@ -1415,6 +1416,7 @@ async function main(argv = process.argv) {
   const jsonOutput = hasFlag(argv, "--json");
   const quiet = hasFlag(argv, "--quiet") || jsonOutput;
   const allowPartial = hasFlag(argv, "--allow-partial");
+  const strictContent = hasFlag(argv, "--strict-content");
   const noPreflight = hasFlag(argv, "--no-preflight");
   const isolatedGateway = !hasFlag(argv, "--no-isolated-gateway");
   const timestamp = timestampSlug();
@@ -1562,6 +1564,9 @@ async function main(argv = process.argv) {
   }
   if (childMaxIterations !== null) {
     childArgs.push("--max-iterations", String(childMaxIterations));
+  }
+  if (strictContent) {
+    childArgs.push("--strict-content");
   }
   if (gatewayStartupTimeoutMs !== null) {
     childArgs.push("--gateway-startup-timeout-ms", String(gatewayStartupTimeoutMs));
@@ -1719,6 +1724,7 @@ async function main(argv = process.argv) {
     topic,
     projectId: resultSummary.projectId ?? explicitProjectId,
     mode,
+    strictContent,
     bootstrapTransport,
     conversationId,
     runRoot,

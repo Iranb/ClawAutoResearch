@@ -71,75 +71,284 @@ async function writeJson(filePath, value) {
   await writeText(filePath, `${JSON.stringify(value, null, 2)}\n`);
 }
 
+const surveyReferences = [
+  ["gcdsurvey2026", "Survey Protocols for Generalized Category Discovery", "Surveyer, Ada", "ArXiv", 2026],
+  ["gcdbaseline2023", "Baseline Families for Generalized Category Discovery", "Baseline, Ben", "ICCV", 2023],
+  ["openworld2024", "Open World Recognition under Partial Supervision", "Open, Clara", "CVPR", 2024],
+  ["taxonomy2025", "Taxonomies for Novel Class Discovery", "Taxon, Devon", "NeurIPS", 2025],
+  ["coverage2025", "Coverage Audits for Literature Synthesis", "Cover, Ellis", "ACL", 2025],
+  ["benchmark2024", "Benchmark Drift in Category Discovery", "Bench, Fatima", "ICML", 2024],
+  ["retrieval2025", "Retrieval Led Evidence Control for Survey Writing", "Retrieve, Gray", "EMNLP", 2025],
+  ["synthesis2026", "Claim Grounded Scientific Synthesis", "Synthesis, Harper", "TACL", 2026],
+  ["evaluation2023", "Evaluation Stability for Discovery Models", "Stable, Ira", "ECCV", 2023],
+  ["prototypes2024", "Prototype Learning for Novel Categories", "Proto, Jules", "WACV", 2024],
+  ["graphgcd2025", "Graph Structures in Category Discovery", "Graph, Kai", "KDD", 2025],
+  ["verification2026", "Verification Gates for Research Automation", "Verifier, Lee", "ArXiv", 2026],
+  ["dualsystems2011", "Thinking Fast and Slow", "Kahneman, Daniel", "Farrar Straus and Giroux", 2011],
+];
+
+const experimentReferences = [
+  ["gcdmethod2026", "Generalized Category Discovery with Verification Gates", "Researcher, Ada", "ArXiv", 2026],
+  ["gcdbaseline2023", "A Baseline for Generalized Category Discovery", "Baseline, Ben", "ICCV", 2023],
+  ["dualsystems2011", "Thinking Fast and Slow", "Kahneman, Daniel", "Farrar Straus and Giroux", 2011],
+  ["openworld2024", "Open World Recognition under Partial Supervision", "Open, Clara", "CVPR", 2024],
+  ["evaluation2023", "Evaluation Stability for Discovery Models", "Stable, Ira", "ECCV", 2023],
+  ["verification2026", "Verification Gates for Research Automation", "Verifier, Lee", "ArXiv", 2026],
+  ["benchmark2024", "Benchmark Drift in Category Discovery", "Bench, Fatima", "ICML", 2024],
+  ["synthesis2026", "Claim Grounded Scientific Synthesis", "Synthesis, Harper", "TACL", 2026],
+];
+
+function bibEntriesFor(references) {
+  return references
+    .map(
+      ([key, title, author, venue, year]) =>
+        `@article{${key},\n  title={${title}},\n  author={${author}},\n  journal={${venue}},\n  year={${year}}\n}\n`
+    )
+    .join("\n");
+}
+
+function cite(keys) {
+  return `\\cite{${keys.join(",")}}`;
+}
+
+function surveySectionBody(spec) {
+  const citation = cite(spec.citations);
+  return [
+    `${spec.opening} ${citation}. The section treats ${spec.focus} as an operational contract rather than a loose narrative label, because a benchmark-facing survey has to show how papers were found, screened, compared, and converted into claims. It records what evidence is allowed to support each family, how boundary cases are handled, and where missing coverage changes the strength of a conclusion. This makes the synthesis reproducible enough for a reader to inspect the route from source packet to final prose.`,
+    `For ${spec.focus}, the most important design pressure is ${spec.pressure}. The workflow therefore keeps a visible chain between retrieval notes, included-paper records, matrix rows, and the claims that appear in the manuscript. Each subsection states the scope first, then explains the comparison axis, then describes failure modes that would make the conclusion weaker. This ordering mirrors SurveyBench-style expectations: the output is not just a fluent summary, it is a coverage artifact with durable memory about evidence, exclusions, and benchmark relevance.`,
+    `The practical consequence is that ${spec.consequence}. A thin draft can mention the same method families, but it cannot prove that representative systems, datasets, metrics, and disagreements were all considered. A stronger draft keeps taxonomy, benchmark landscape, and gap synthesis synchronized, so a later reviewer can replay why a claim is broad, narrow, or explicitly blocked. That replayable memory is the main difference between an ordinary literature overview and a survey that can be scored for coverage, faithfulness, and usefulness.`,
+    `The section also records how citation-grounded implementation should behave. A claim must name the evidence family it draws from, keep the supporting papers resolvable in the bibliography, and avoid silently upgrading weak agreement into a broad conclusion. When a method family is represented by only a few papers, the prose marks that boundary instead of using it as a field-wide signal. When a benchmark row is missing a metric, the synthesis treats the gap as an evaluation limitation rather than filling it with an inferred number.`,
+    `This durable memory is intentionally repetitive across the survey because long-form synthesis fails when local notes disappear between retrieval, planning, writing, and review. The review packet, SOTA matrix, and final manuscript should all preserve the same inclusion logic. That makes the workflow easier to audit under a benchmark that rewards coverage and coherence, and it gives later optimization work concrete failure points when the output is shallow, under-cited, or detached from its source artifacts.`,
+  ].join("\n\n");
+}
+
+function buildSurveyMainTex(topic) {
+  const sections = [
+    {
+      title: "Introduction",
+      focus: "survey purpose and benchmark alignment",
+      citations: ["gcdsurvey2026", "coverage2025"],
+      opening:
+        "This survey studies generalized category discovery as a field where retrieval coverage, taxonomy stability, and benchmark comparability determine whether a synthesis is trustworthy",
+      pressure: "connecting a long-form narrative to auditable evidence rather than relying on fluent but ungrounded summaries",
+      consequence:
+        "the introduction defines the review question, the expected evidence trail, and the difference between descriptive coverage and actionable research guidance",
+    },
+    {
+      title: "Search And Screening Protocol",
+      focus: "query design and paper inclusion",
+      citations: ["retrieval2025", "openworld2024"],
+      opening:
+        "Search quality controls the entire review because omitted families can make a later taxonomy look cleaner than the literature actually is",
+      pressure: "showing that keyword expansion, venue coverage, and exclusion notes were all preserved before synthesis began",
+      consequence:
+        "the review packet can separate absent evidence from negative evidence, which prevents the manuscript from overstating gaps that were only retrieval failures",
+    },
+    {
+      title: "Problem Setting",
+      focus: "task definitions and supervision assumptions",
+      citations: ["gcdbaseline2023", "evaluation2023"],
+      opening:
+        "Generalized category discovery combines partial labels, unlabeled examples, and unknown classes, so definitions must be fixed before method comparisons are meaningful",
+      pressure: "distinguishing known-class accuracy, novel-class discovery, clustering stability, and open-world deployment assumptions",
+      consequence:
+        "the survey can compare systems without collapsing different supervision regimes into a single apparent leaderboard",
+    },
+    {
+      title: "Method Taxonomy",
+      focus: "method family organization",
+      citations: ["taxonomy2025", "prototypes2024", "graphgcd2025"],
+      opening:
+        "The taxonomy groups methods by the mechanism that carries evidence from representation learning into final category assignments",
+      pressure: "keeping prototype-heavy, graph-aware, contrastive, and verification-driven families distinct while still noting where hybrids appear",
+      consequence:
+        "readers can see whether a claimed advance changes the core discovery mechanism or only changes training hygiene around a familiar family",
+    },
+    {
+      title: "Benchmark Landscape",
+      focus: "datasets, metrics, and comparison stability",
+      citations: ["benchmark2024", "evaluation2023"],
+      opening:
+        "Benchmark interpretation is difficult because datasets, known-novel splits, and reported metrics often shift across papers",
+      pressure: "recording which metric each paper optimizes and whether a comparison is fair, partial, or merely illustrative",
+      consequence:
+        "the SOTA matrix becomes a source of constraints for the prose instead of a decorative table detached from the claims",
+    },
+    {
+      title: "Evidence Synthesis",
+      focus: "claim construction from source packets",
+      citations: ["synthesis2026", "verification2026"],
+      opening:
+        "Evidence synthesis turns screened papers into claims only after the source packet has enough agreement to support the stated strength",
+      pressure: "preventing confident survey language when the included papers disagree, omit ablations, or use incompatible evaluation settings",
+      consequence:
+        "the final text can state consensus, tension, and uncertainty with different claim strengths, making citation grounding systematic rather than incidental",
+    },
+    {
+      title: "Cross Domain Signals",
+      focus: "reusable ideas from verification and retrieval systems",
+      citations: ["retrieval2025", "verification2026", "dualsystems2011"],
+      opening:
+        "Cross-domain inspiration is useful only when it clarifies an operational mechanism that can be checked against the category discovery literature",
+      pressure: "borrowing evidence-routing ideas without replacing domain-specific benchmark requirements or paper inclusion rules",
+      consequence:
+        "the survey can use verification language to improve process discipline while still keeping the scientific conclusions tied to domain sources",
+    },
+    {
+      title: "Open Problems",
+      focus: "research gaps and future benchmark design",
+      citations: ["gcdsurvey2026", "benchmark2024", "synthesis2026"],
+      opening:
+        "Open problems should be framed as evidence-weighted gaps, not as generic future-work lists that could apply to any discovery task",
+      pressure: "separating unresolved technical questions from tooling gaps in retrieval, provenance, and benchmark reporting",
+      consequence:
+        "the conclusion can prioritize harder coverage audits, standardized result packets, and citation-grounded implementation checks for future automated research runs",
+    },
+  ];
+
+  return [
+    "\\documentclass{article}",
+    "\\usepackage{hyperref}",
+    "\\begin{document}",
+    `\\title{${topic}}`,
+    "\\maketitle",
+    ...sections.flatMap((section) => [
+      `\\section{${section.title}}`,
+      surveySectionBody(section),
+    ]),
+    "\\bibliographystyle{plain}",
+    "\\bibliography{refs}",
+    "\\end{document}",
+    "",
+  ].join("\n");
+}
+
+function experimentSectionBody(spec) {
+  const citation = cite(spec.citations);
+  return [
+    `${spec.opening} ${citation}. The goal is to keep the experiment lane close to a PaperBench-style reproduction task: code execution, result capture, analysis, and writing must preserve a durable link between the implemented change and the numbers reported in the paper. A successful closeout therefore needs more than a generated manuscript. It needs result artifacts, a ledger entry, figure and table packs, and prose that cites the exact metric values used for the headline claim.`,
+    `This section records ${spec.focus}. The baseline H-score is 0.6123, the proposed H-score is 0.6345, and the measured delta H is 0.0222. Known-class accuracy moves from 0.7010 to 0.7180, while novel-class accuracy moves from 0.5410 to 0.5670. The ablation without class-balance debiasing is 0.6210, and the ablation without consistency filtering is 0.6260. These values are repeated in the paper because the strict harness must confirm that RESULT\\_SUMMARY-derived values are visible in the final artifact.`,
+    `${spec.consequence}. The text also states the limitation that this deterministic run validates workflow integration and provenance controls, not broad benchmark dominance. That limitation matters because benchmark-aligned automation should avoid converting a local score into an unsupported scientific claim. The result is a compact but substantive paper artifact whose claims can be checked against the ledger, table pack, figure pack, and bibliography.`,
+    `Specifically, the implementation consequence is a stronger handoff contract between coding, analysis, and writing. The coder stage emits structured metrics, the analyzer keeps the result interpretation bounded, and the academic writer repeats only values that exist in the durable packet. If a figure or table is generated later, it must carry data provenance back to the result artifact. This prevents the final manuscript from drifting away from the run that produced the evidence.`,
+    `Beyond this, the benchmark-facing consequence is similarly concrete. A reproduction task should reward working code and measurable output, but it should also penalize untraceable numbers, missing ablations, and claims that cannot be connected to a recorded source. The fixture therefore keeps numeric values, ablation controls, and citation coverage visible in every section. It is not a substitute for a large benchmark campaign; it is a regression guard that catches the same classes of failure before a live run spends more time or model budget.`,
+  ].join("\n\n");
+}
+
+function buildExperimentMainTex(topic) {
+  const sections = [
+    {
+      title: "Introduction",
+      focus: "the research motivation and evaluation target",
+      citations: ["gcdmethod2026", "gcdbaseline2023"],
+      opening:
+        "We evaluate a verification-oriented workflow for generalized category discovery with explicit result provenance",
+      consequence:
+        "The introduction frames verification as a control-plane improvement that reduces unsupported claims during automated research",
+    },
+    {
+      title: "Related Work",
+      focus: "the relation to prototype, open-world, and verification literature",
+      citations: ["gcdbaseline2023", "openworld2024", "dualsystems2011"],
+      opening:
+        "Prior systems emphasize representation learning, pseudo-label refinement, and open-world recognition assumptions",
+      consequence:
+        "The comparison positions our contribution as a workflow discipline layer rather than a replacement for domain methods",
+    },
+    {
+      title: "Method",
+      focus: "the verification gate and artifact contract",
+      citations: ["verification2026", "gcdmethod2026"],
+      opening:
+        "The method adds an artifact gate that requires completed experiments to publish structured metrics before writing",
+      consequence:
+        "The gate turns implementation output into a stable memory primitive that later stages can replay without inference",
+    },
+    {
+      title: "Experimental Setup",
+      focus: "the bounded benchmark split and deterministic evaluation packet",
+      citations: ["evaluation2023", "gcdbaseline2023"],
+      opening:
+        "The evaluation uses a bounded category discovery split with fixed known and novel class partitions",
+      consequence:
+        "The setup makes the experiment reproducible enough for E2E validation while keeping the benchmark scope explicit",
+    },
+    {
+      title: "Results",
+      focus: "the headline metric table and ablation evidence",
+      citations: ["evaluation2023", "verification2026"],
+      opening:
+        "The result packet records a positive but bounded non-regression signal for the proposed verification workflow",
+      consequence:
+        "The results section ties every numerical claim to durable JSON evidence and prevents the prose from inventing unsupported metrics",
+    },
+    {
+      title: "Discussion",
+      focus: "the claim boundary and implementation implications",
+      citations: ["gcdmethod2026", "openworld2024"],
+      opening:
+        "The main implication is that automated research needs explicit memory for what was implemented, measured, and cited",
+      consequence:
+        "The discussion keeps the scientific claim narrow while identifying provenance and citation grounding as the reusable improvement",
+    },
+    {
+      title: "Limitations",
+      focus: "remaining risks in local benchmark alignment",
+      citations: ["benchmark2024", "synthesis2026"],
+      opening:
+        "The validation does not claim full benchmark coverage, external leaderboard parity, or superiority over all discovery methods",
+      consequence:
+        "The limitation section gives future runs a clear path to add harder tasks, larger corpora, and independent reproduction checks",
+    },
+  ];
+
+  return [
+    "\\documentclass{article}",
+    "\\usepackage{booktabs}",
+    "\\usepackage{hyperref}",
+    "\\begin{document}",
+    `\\title{${topic}}`,
+    "\\maketitle",
+    ...sections.flatMap((section) => [
+      `\\section{${section.title}}`,
+      experimentSectionBody(section),
+    ]),
+    "\\begin{table}[t]",
+    "\\centering",
+    "\\begin{tabular}{lrrr}",
+    "\\toprule",
+    "System & H-score & Known & Novel \\\\",
+    "\\midrule",
+    "Baseline & 0.6123 & 0.7010 & 0.5410 \\\\",
+    "Proposed & 0.6345 & 0.7180 & 0.5670 \\\\",
+    "Delta H & 0.0222 & -- & -- \\\\",
+    "\\bottomrule",
+    "\\end{tabular}",
+    "\\caption{Headline metrics copied from RESULT\\_SUMMARY evidence.}",
+    "\\end{table}",
+    "\\begin{table}[t]",
+    "\\centering",
+    "\\begin{tabular}{lr}",
+    "\\toprule",
+    "Ablation & H-score \\\\",
+    "\\midrule",
+    "Full verification gate & 0.6345 \\\\",
+    "Minus class-balance debiasing & 0.6210 \\\\",
+    "Minus consistency filtering & 0.6260 \\\\",
+    "\\bottomrule",
+    "\\end{tabular}",
+    "\\caption{Ablation metrics copied from RESULT\\_SUMMARY evidence.}",
+    "\\end{table}",
+    "\\bibliographystyle{plain}",
+    "\\bibliography{refs}",
+    "\\end{document}",
+    "",
+  ].join("\n");
+}
+
 async function seedSharedWritingArtifacts(params) {
   const { projectRoot, topic, lane } = params;
-  const bibEntries =
-    lane === "survey"
-      ? [
-          "@article{gcdsurvey2026,\n  title={Generalized Category Discovery Survey},\n  author={Test, Surveyer},\n  journal={ArXiv},\n  year={2026}\n}\n",
-          "@article{gcdbaseline2023,\n  title={A Baseline for Generalized Category Discovery},\n  author={Test, Baseline},\n  journal={ICCV},\n  year={2023}\n}\n",
-        ].join("\n")
-      : [
-          "@article{gcdmethod2026,\n  title={Generalized Category Discovery with Verification Gates},\n  author={Test, Researcher},\n  journal={ArXiv},\n  year={2026}\n}\n",
-          "@article{gcdbaseline2023,\n  title={A Baseline for Generalized Category Discovery},\n  author={Test, Baseline},\n  journal={ICCV},\n  year={2023}\n}\n",
-          "@article{dualsystems2011,\n  title={Thinking, Fast and Slow},\n  author={Kahneman, Daniel},\n  journal={Farrar Straus and Giroux},\n  year={2011}\n}\n",
-        ].join("\n");
-  const mainTex =
-    lane === "survey"
-      ? [
-          "\\documentclass{article}",
-          "\\usepackage{hyperref}",
-          "\\begin{document}",
-          `\\title{${topic}}`,
-          "\\maketitle",
-          "\\section{Introduction}",
-          "We survey generalized category discovery literature and organizing principles \\cite{gcdsurvey2026,gcdbaseline2023}.",
-          "\\section{Problem Setting}",
-          "The field studies category discovery under partial supervision and open-world label spaces \\cite{gcdbaseline2023}.",
-          "\\section{Taxonomy}",
-          "We separate prototype-heavy, graph-aware, and verification-driven families.",
-          "\\section{Representative Methods}",
-          "Representative methods expose different clustering and novelty signals \\cite{gcdbaseline2023}.",
-          "\\section{Benchmarks}",
-          "Benchmarks remain fragmented across datasets and evaluation metrics.",
-          "\\section{Cross-Domain Inspirations}",
-          "Evidence-first verification offers a useful framing for how survey synthesis should gate claims.",
-          "\\section{Open Problems}",
-          "Coverage gaps and evaluation inconsistency remain major open problems.",
-          "\\section{Conclusion}",
-          "Generalized category discovery needs stronger evaluation and evidence-grounded writing.",
-          "\\bibliographystyle{plain}",
-          "\\bibliography{refs}",
-          "\\end{document}",
-          "",
-        ].join("\n")
-      : [
-          "\\documentclass{article}",
-          "\\usepackage{hyperref}",
-          "\\begin{document}",
-          `\\title{${topic}}`,
-          "\\maketitle",
-          "\\section{Introduction}",
-          "We evaluate a verification-oriented workflow for generalized category discovery \\cite{gcdmethod2026,gcdbaseline2023}.",
-          "\\section{Related Work}",
-          "Prior generalized category discovery systems emphasize prototype and pseudo-label pipelines \\cite{gcdbaseline2023}.",
-          "\\section{Method}",
-          "Our method adds a verification gate inspired by dual-process reasoning \\cite{dualsystems2011}.",
-          "\\section{Experimental Setup}",
-          "We run a deterministic smoke experiment on a controlled benchmark split.",
-          "\\section{Results}",
-          "The smoke evaluation demonstrates a stable non-regression signal for the proposed workflow gate.",
-          "\\section{Discussion}",
-          "The main value lies in reducing confirmation-bias-heavy failure modes.",
-          "\\section{Limitations}",
-          "This validation covers workflow integration more than full benchmark breadth.",
-          "\\section{Conclusion}",
-          "Verification-first orchestration is promising for more reliable GCD iteration.",
-          "\\bibliographystyle{plain}",
-          "\\bibliography{refs}",
-          "\\end{document}",
-          "",
-        ].join("\n");
+  const bibEntries = bibEntriesFor(lane === "survey" ? surveyReferences : experimentReferences);
+  const mainTex = lane === "survey" ? buildSurveyMainTex(topic) : buildExperimentMainTex(topic);
 
   await Promise.all([
     writeText(
@@ -290,8 +499,22 @@ async function seedSurveyArtifacts(projectRoot, topic) {
     ),
     writeText(
       path.join(projectRoot, "researcher", "SOTA_MATRIX.md"),
-      "# SOTA Matrix\n\n| Paper | Family | Dataset | Metric |\n| --- | --- | --- | --- |\n| A | prototype-heavy | CIFAR | ACC |\n| B | graph-aware | CUB | H-score |\n| C | verification-first | Aircraft | ACC |\n| D | prototype-heavy | ImageNet100 | NMI |\n| E | graph-aware | Herbarium | F1 |\n"
+      "# SOTA Matrix\n\n| Paper | Family | Dataset | Metric |\n| --- | --- | --- | --- |\n| A | prototype-heavy | CIFAR | ACC |\n| B | graph-aware | CUB | H-score |\n| C | verification-first | Aircraft | ACC |\n| D | prototype-heavy | ImageNet100 | NMI |\n| E | graph-aware | Herbarium | F1 |\n| F | contrastive | StanfordCars | NMI |\n| G | pseudo-label | ImageNet100 | H-score |\n| H | retrieval-aware | iNaturalist | ACC |\n"
     ),
+    writeJson(path.join(projectRoot, "researcher", "BENCHMARK_ADAPTER_FIXTURE.json"), {
+      adapter: "paperguru-surveybench-local-protocol",
+      benchmark_id: "paperguru-surveybench-local-fixture",
+      task_type: "survey",
+      metric: "coverage_score",
+      baseline_score: 0.58,
+      candidate_score: 0.818,
+      holdout_score: 0.79,
+      evidence_paths: [
+        "researcher/INCLUDED_PAPERS.json",
+        "researcher/SOTA_MATRIX.md",
+        "academic_writer/paper/main.tex",
+      ],
+    }),
     writeText(
       path.join(projectRoot, "researcher", "GAP_SYNTHESIS.md"),
       "# Gap Synthesis\n\n- Benchmark comparisons remain inconsistent.\n- Verification methods are underexplored.\n"
@@ -336,33 +559,63 @@ async function seedExperimentArtifacts(projectRoot, topic) {
       ],
     }),
     writeJson(path.join(projectRoot, "researcher", "artifacts", "results", "results.json"), {
-      baseline: { h_score: 0.6123 },
-      proposed: { h_score: 0.6345 },
+      baseline: { h_score: 0.6123, known_accuracy: 0.701, novel_accuracy: 0.541 },
+      proposed: { h_score: 0.6345, known_accuracy: 0.718, novel_accuracy: 0.567 },
       delta_h: 0.0222,
+      ablations: {
+        minus_class_balance_debiasing: { h_score: 0.621 },
+        minus_consistency_filtering: { h_score: 0.626 },
+      },
+      metrics: { h_score: 0.6345, known_accuracy: 0.718, novel_accuracy: 0.567, delta_h_score: 0.0222 },
       verdict: "pass",
     }),
     writeJson(path.join(projectRoot, "researcher", "artifacts", "results", "smoke_results.json"), {
-      baseline: { h_score: 0.6123 },
-      proposed: { h_score: 0.6345 },
+      baseline: { h_score: 0.6123, known_accuracy: 0.701, novel_accuracy: 0.541 },
+      proposed: { h_score: 0.6345, known_accuracy: 0.718, novel_accuracy: 0.567 },
       delta_h: 0.0222,
+      ablations: {
+        minus_class_balance_debiasing: { h_score: 0.621 },
+        minus_consistency_filtering: { h_score: 0.626 },
+      },
+      metrics: { h_score: 0.6345, known_accuracy: 0.718, novel_accuracy: 0.567, delta_h_score: 0.0222 },
       verdict: "pass",
+    }),
+    writeJson(path.join(projectRoot, "researcher", "BENCHMARK_ADAPTER_FIXTURE.json"), {
+      adapter: "paperguru-paperbench-local-protocol",
+      benchmark_id: "paperguru-paperbench-local-fixture",
+      task_type: "paper_to_code",
+      metric: "h_score",
+      baseline_score: 0.6123,
+      candidate_score: 0.6345,
+      holdout_score: 0.628,
+      evidence_paths: [
+        "researcher/artifacts/results/results.json",
+        "researcher/EXPERIMENT_LEDGER.json",
+        "academic_writer/TABLE_PACK.json",
+        "academic_writer/FIGURE_PACK.json",
+      ],
     }),
   ]);
 }
 
-async function runHarness(projectRoot, lane) {
-  const { stdout } = await execFile(process.execPath, [
+async function runHarness(projectRoot, lane, options = {}) {
+  const args = [
     path.join(process.cwd(), "scripts", "run-e2e-paper-generation.mjs"),
     "--project-root",
     projectRoot,
     "--lane",
     lane,
-  ]);
+  ];
+  if (options.strictContent) {
+    args.push("--strict-content");
+  }
+  const { stdout } = await execFile(process.execPath, args);
   return JSON.parse(stdout);
 }
 
 async function runFixtureLane(params) {
   const { lane, topic, projectsRoot, bootstrapTransport = "local", projectId = null } = params;
+  const strictContent = Boolean(params.strictContent);
   const commandName = lane === "survey" ? "auto-review" : "auto-research";
   const transportContext = buildWorkflowTransportContext({
     transport: bootstrapTransport,
@@ -435,7 +688,7 @@ async function runFixtureLane(params) {
         summary: "Survey draft is ready for review closeout.",
       })
     );
-    const harness = await runHarness(projectRoot, "survey");
+    const harness = await runHarness(projectRoot, "survey", { strictContent });
     return {
       transport: transportContext.transport,
       conversationId: transportContext.conversationId,
@@ -520,7 +773,7 @@ async function runFixtureLane(params) {
       summary: "Conference draft is ready for review closeout.",
     })
   );
-  const harness = await runHarness(projectRoot, "experiment");
+  const harness = await runHarness(projectRoot, "experiment", { strictContent });
   return {
     transport: transportContext.transport,
     conversationId: transportContext.conversationId,
@@ -539,6 +792,7 @@ async function main() {
   const bootstrapTransport = argValue("--bootstrap-transport", "local");
   const conversationId = argValue("--conversation-id", null);
   const projectId = argValue("--project-id", null);
+  const strictContent = hasFlag("--strict-content");
   const sourceConfigPath = argValue("--source-config-path", null);
   const explicitProjectsRoot = argValue("--projects-root", null);
   const projectsRoot =
@@ -571,6 +825,7 @@ async function main() {
       isolatedGateway: !hasFlag("--no-isolated-gateway"),
       pluginConfigOverrides: localPapernexus.pluginOverrides,
       envOverrides: localPapernexus.envOverrides,
+      ...(strictContent ? { strictContent } : {}),
     };
     if (lane === "experiment" || lane === "full") {
       result.experiment = await runAutoCommandEndToEndLive({
@@ -602,6 +857,7 @@ async function main() {
           conversationId,
           projectId,
           projectsRoot,
+          strictContent,
           localPapernexus: localPapernexus.summary,
           result,
         },
@@ -621,6 +877,7 @@ async function main() {
       bootstrapTransport,
       conversationId: conversationIdForLane(conversationId, "experiment", lane),
       projectId: projectIdForLane(projectId, "experiment", lane),
+      strictContent,
     });
   }
   if (lane === "survey" || lane === "full") {
@@ -631,11 +888,12 @@ async function main() {
       bootstrapTransport,
       conversationId: conversationIdForLane(conversationId, "survey", lane),
       projectId: projectIdForLane(projectId, "survey", lane),
+      strictContent,
     });
   }
 
   console.log(
-    JSON.stringify({ topic, lane, mode, bootstrapTransport, conversationId, projectId, projectsRoot, result }, null, 2)
+    JSON.stringify({ topic, lane, mode, bootstrapTransport, conversationId, projectId, projectsRoot, strictContent, result }, null, 2)
   );
 }
 

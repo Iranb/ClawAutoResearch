@@ -26,10 +26,12 @@ test("auto-research and auto-review can bootstrap to a passing deterministic E2E
     "e2e-unit-conversation",
     "--projects-root",
     projectsRoot,
+    "--strict-content",
   ]);
   const payload = JSON.parse(stdout);
 
   assert.equal(payload.bootstrapTransport, "local");
+  assert.equal(payload.strictContent, true);
   assert.equal(payload.conversationId, "e2e-unit-conversation");
   assert.equal(payload.result.experiment.transport, "local");
   assert.equal(payload.result.survey.transport, "local");
@@ -39,6 +41,10 @@ test("auto-research and auto-review can bootstrap to a passing deterministic E2E
   assert.match(payload.result.survey.bootstrap.sessionKey, /e2e-unit-conversation-survey/);
   assert.equal(payload.result.experiment.harness.finalVerdict, "pass");
   assert.equal(payload.result.survey.harness.finalVerdict, "pass");
+  assert.equal(payload.result.experiment.harness.strictContent, true);
+  assert.equal(payload.result.survey.harness.strictContent, true);
+  assert.equal(payload.result.experiment.harness.contentQuality.status, "pass");
+  assert.equal(payload.result.survey.harness.contentQuality.status, "pass");
   assert.ok((payload.result.experiment.handoffs ?? []).length >= 5);
   assert.ok((payload.result.survey.handoffs ?? []).length >= 2);
   assert.doesNotMatch(JSON.stringify(payload), /agent:[^"]*:discord:/);
@@ -55,6 +61,20 @@ test("auto-research and auto-review can bootstrap to a passing deterministic E2E
 
   assert.match(experimentReport, /final_verdict: pass/);
   assert.match(surveyReport, /final_verdict: pass/);
+  const surveyChecklist = JSON.parse(
+    await fs.readFile(
+      path.join(payload.result.survey.projectRoot, ".openclaw-research", "E2E_ARTIFACT_CHECKLIST.json"),
+      "utf8"
+    )
+  );
+  const surveyChecks = new Map(
+    surveyChecklist.content_quality.checks.map((entry) => [entry.name, entry])
+  );
+  assert.equal(surveyChecks.get("paper_word_count_min").ok, true);
+  assert.equal(surveyChecks.get("citation_density_min").ok, true);
+  assert.equal(surveyChecks.get("bibliography_depth_min").ok, true);
+  assert.equal(surveyChecks.get("sota_matrix_rows_min").ok, true);
+  assert.equal(payload.result.survey.harness.benchmarkAdapter.status, "pass");
   assert.ok(await fs.access(path.join(payload.result.experiment.projectRoot, "academic_writer", "paper", "main.pdf")).then(() => true, () => false));
   assert.ok(await fs.access(path.join(payload.result.survey.projectRoot, "academic_writer", "paper", "main.pdf")).then(() => true, () => false));
 });

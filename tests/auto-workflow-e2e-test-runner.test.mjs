@@ -93,8 +93,45 @@ test("auto workflow E2E runner help exits before live preflight", async () => {
 
   assert.match(stdout, /Usage: node scripts\/run_auto_workflow_e2e_test\.mjs/);
   assert.match(stdout, /--mode live\|fixture/);
+  assert.match(stdout, /--strict-content/);
   assert.doesNotMatch(stdout, /Auto workflow E2E: fail/);
   assert.equal(stderr, "");
+});
+
+test("auto workflow E2E runner forwards strict content to fixture child runs", async (t) => {
+  const runRoot = await fs.mkdtemp(path.join(os.tmpdir(), "auto-workflow-strict-forward-"));
+  t.after(async () => {
+    await fs.rm(runRoot, { recursive: true, force: true });
+  });
+
+  const { stdout } = await execFile(
+    process.execPath,
+    [
+      path.join(process.cwd(), "scripts", "run_auto_workflow_e2e_test.mjs"),
+      "--mode",
+      "fixture",
+      "--command",
+      "/auto-review",
+      "--topic",
+      "PaperGuru SurveyBench alignment",
+      "--run-root",
+      runRoot,
+      "--no-preflight",
+      "--strict-content",
+      "--json",
+    ],
+    { maxBuffer: 20 * 1024 * 1024 }
+  );
+  const summary = JSON.parse(stdout);
+  const commandText = await fs.readFile(path.join(runRoot, "command.txt"), "utf8");
+  const payload = JSON.parse(await fs.readFile(path.join(runRoot, "payload.json"), "utf8"));
+
+  assert.equal(summary.status, "pass");
+  assert.equal(summary.strictContent, true);
+  assert.match(commandText, /--strict-content/);
+  assert.equal(payload.strictContent, true);
+  assert.equal(payload.result.survey.harness.strictContent, true);
+  assert.equal(payload.result.survey.harness.contentQuality.status, "pass");
 });
 
 test("auto workflow E2E runner defaults live projects root to plugin config", async (t) => {
