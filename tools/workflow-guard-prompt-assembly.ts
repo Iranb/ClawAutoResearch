@@ -1,5 +1,11 @@
 import os from "node:os";
 import { normalizeStage } from "./workflow-guard-core/coercion";
+import {
+  getPromptLines,
+  getPromptText,
+  renderPromptLines,
+  type WorkflowPromptConfig,
+} from "./workflow-prompt-config";
 
 type SnapshotLike = Record<string, any>;
 
@@ -106,6 +112,7 @@ export function buildFocusedPromptAssemblyImpl(
   params: {
     snapshot: SnapshotLike;
     trigger?: string;
+    promptConfig?: WorkflowPromptConfig | null;
   },
   deps: {
     buildNonOwnerRoutingAdvice: (snapshot: SnapshotLike) => string[];
@@ -113,6 +120,14 @@ export function buildFocusedPromptAssemblyImpl(
   }
 ): FocusedPromptAssemblyLike {
   const snapshot = params.snapshot;
+  const promptConfig = params.promptConfig ?? null;
+  const promptValues = {
+    role: snapshot.role ?? "unknown",
+    owner: snapshot.recommendedOwner ?? snapshot.ownerAgent ?? "unset",
+    currentStage: snapshot.currentStage ?? "this stage",
+    currentMicroStage: snapshot.currentMicroStage ?? "unknown",
+    trigger: params.trigger ?? "manual",
+  };
   const sectionContextId =
     normalizeStage(snapshot.writingCurrentSection ?? null) ??
     normalizeStage(snapshot.currentStage ?? null);
@@ -129,11 +144,24 @@ export function buildFocusedPromptAssemblyImpl(
       ? `review-round-${snapshot.reviewSessionRound}`
       : null;
   const layer1Lines = [
-    "Layer 1: Stable Policy",
+    getPromptText(
+      promptConfig,
+      ["workflowGuard", "focused", "layerLabels", "stablePolicy"],
+      "Layer 1: Stable Policy"
+    ),
     `Role=${snapshot.role ?? "unknown"}`,
     `Owner=${snapshot.recommendedOwner ?? snapshot.ownerAgent ?? "unset"}`,
-    "Do only the owner-scoped task for this round.",
-    "Do not widen scope or replay the entire workflow history.",
+    ...renderPromptLines(
+      getPromptLines(
+        promptConfig,
+        ["workflowGuard", "focused", "stablePolicyRules"],
+        [
+          "Do only the owner-scoped task for this round.",
+          "Do not widen scope or replay the entire workflow history.",
+        ]
+      ),
+      promptValues
+    ),
   ];
   if (shouldApplySharedWritingConstitutionImpl(snapshot)) {
     layer1Lines.push(...deps.getSharedWritingConstitutionLines(snapshot.role ?? null));
@@ -141,16 +169,27 @@ export function buildFocusedPromptAssemblyImpl(
   const layer1 = layer1Lines.join("\n");
 
   const layer2Lines = [
-    "Layer 2: Stage-Local Control State",
+    getPromptText(
+      promptConfig,
+      ["workflowGuard", "focused", "layerLabels", "stageLocalState"],
+      "Layer 2: Stage-Local Control State"
+    ),
     `Stage=${snapshot.currentStage ?? "unknown"}/${snapshot.currentMicroStage ?? "unknown"}`,
   ];
   layer2Lines.push(...deps.buildNonOwnerRoutingAdvice(snapshot));
   if (snapshot.role && snapshot.recommendedOwner && snapshot.role === snapshot.recommendedOwner) {
     layer2Lines.push(
-      `Owner gate: you are the responsible owner for ${snapshot.currentStage ?? "this stage"}. Produce the stage artifacts, keep durable state current, and hand off only after your outputs exist.`
-    );
-    layer2Lines.push(
-      "Handoff correctness rule: do not emit a [HANDOFF] block, raw @next-owner, or a stage-transition claim unless the latest research_workflow.auto_iterator_tick actually changes the live Workflow Guard stage or owner. If the stage stays the same or any required signals are still missing, report the blocker and keep ownership unchanged."
+      ...renderPromptLines(
+        getPromptLines(
+          promptConfig,
+          ["workflowGuard", "focused", "ownerGateRules"],
+          [
+            "Owner gate: you are the responsible owner for {{currentStage}}. Produce the stage artifacts, keep durable state current, and hand off only after your outputs exist.",
+            "Handoff correctness rule: do not emit a [HANDOFF] block, raw @next-owner, or a stage-transition claim unless the latest research_workflow.auto_iterator_tick actually changes the live Workflow Guard stage or owner. If the stage stays the same or any required signals are still missing, report the blocker and keep ownership unchanged.",
+          ]
+        ),
+        promptValues
+      )
     );
   }
   if (snapshot.channelProjectBindingWorkflowSessionKey) {
@@ -220,38 +259,39 @@ export function buildFocusedPromptAssemblyImpl(
   }
   if (snapshot.currentStage === "plan" || snapshot.role === "orchestrator") {
     layer2Lines.push(
-      "Plan contract rule: PLAN.md, TODOS.md, and PLAN_AUDIT.md are human-readable derivatives. The durable source of truth is PROJECT_MANIFEST.json.research_program, and plan stage is not complete until it records graph-grounded multi-option comparison plus a locked selection."
-    );
-    layer2Lines.push(
-      "Canonical plan-state rule: after writing PLAN.md, TODOS.md, and PLAN_AUDIT.md, call research_workflow.materialize_plan_state or set_research_program instead of hand-editing PROJECT_MANIFEST.json. The workflow tool will canonicalize active tracks, experiment_stage_matrix, task_graph coverage, plan_alternatives, and plan_selection."
-    );
-    layer2Lines.push(
-      "Planner rigor rule: research_program.plan_alternatives must compare at least two options, and research_program.plan_selection must record the selected option/track, compared option ids, decisive graph evidence, and rationale before handing work to Coder."
-    );
-    layer2Lines.push(
-      "Evo-style planning rule: after choosing the winning option, express the selected track as staged tasks with success signals, baseline/ablation coverage, expected artifacts, retry budget, and fallback path."
-    );
-    layer2Lines.push(
-      "Plan schema rule: each active track must carry experiment_stage_matrix as a string array containing baseline_implementation, baseline_tuning, creative_research, and ablation_studies. task_graph must be an array of per-track tasks with non-empty entry_criteria, expected_outputs, and exit_criteria."
+      ...renderPromptLines(
+        getPromptLines(
+          promptConfig,
+          ["workflowGuard", "focused", "planRules"],
+          [
+            "Plan contract rule: PLAN.md, TODOS.md, and PLAN_AUDIT.md are human-readable derivatives. The durable source of truth is PROJECT_MANIFEST.json.research_program, and plan stage is not complete until it records graph-grounded multi-option comparison plus a locked selection.",
+            "Canonical plan-state rule: after writing PLAN.md, TODOS.md, and PLAN_AUDIT.md, call research_workflow.materialize_plan_state or set_research_program instead of hand-editing PROJECT_MANIFEST.json. The workflow tool will canonicalize active tracks, experiment_stage_matrix, task_graph coverage, plan_alternatives, and plan_selection.",
+            "Planner rigor rule: research_program.plan_alternatives must compare at least two options, and research_program.plan_selection must record the selected option/track, compared option ids, decisive graph evidence, and rationale before handing work to Coder.",
+            "Evo-style planning rule: after choosing the winning option, express the selected track as staged tasks with success signals, baseline/ablation coverage, expected artifacts, retry budget, and fallback path.",
+            "Plan schema rule: each active track must carry experiment_stage_matrix as a string array containing baseline_implementation, baseline_tuning, creative_research, and ablation_studies. task_graph must be an array of per-track tasks with non-empty entry_criteria, expected_outputs, and exit_criteria.",
+          ]
+        ),
+        promptValues
+      )
     );
   }
   layer2Lines.push(
-    "Communication rule: normal Discord/chat status reports must use plain labels like [coder] / [researcher] / [writer]. Only a stage-completion handoff message may include one raw @next-owner, and it must use the [STATUS]/[HANDOFF]/[ARTIFACTS]/[NEXT] block."
-  );
-  layer2Lines.push(
-    "Workflow truth rule: chat-level handoff text never overrides Workflow Guard ownership. Only the live snapshot or a successful auto_iterator_tick may move the stage owner."
-  );
-  layer2Lines.push(
-    "Reply style rule: acknowledge handoffs with plain text or role labels, not repeated raw @mentions. Do not echo the same raw mention across follow-up replies."
-  );
-  layer2Lines.push(
-    "Contact cooldown rule: after routing work to another agent, do not ping the same target again immediately; wait for the workflow cooldown unless new durable state changes the request."
-  );
-  layer2Lines.push(
-    "Interruptibility rule: keep the main session interruptible. If a task needs more than a quick turn to scope or execute safely, split it into a bounded packet, delegated branch, or workflow-owned background action instead of monopolizing the thread."
-  );
-  layer2Lines.push(
-    'Exec approval safety rule: do not paste long heredocs, inline Python writers, or bulk LaTeX/Markdown/JSON payloads into the exec tool. For long text artifacts, use research_workflow with action "write_text_artifact". Reserve file-backed exec packets for long shell commands that truly need shell execution.'
+    ...renderPromptLines(
+      getPromptLines(
+        promptConfig,
+        ["workflowGuard", "focused", "commonStageRules"],
+        [
+          "Communication rule: normal Discord/chat status reports must use plain labels like [coder] / [researcher] / [writer]. Only a stage-completion handoff message may include one raw @next-owner, and it must use the [STATUS]/[HANDOFF]/[ARTIFACTS]/[NEXT] block.",
+          "Workflow truth rule: chat-level handoff text never overrides Workflow Guard ownership. Only the live snapshot or a successful auto_iterator_tick may move the stage owner.",
+          "Reply style rule: acknowledge handoffs with plain text or role labels, not repeated raw @mentions. Do not echo the same raw mention across follow-up replies.",
+          "Contact cooldown rule: after routing work to another agent, do not ping the same target again immediately; wait for the workflow cooldown unless new durable state changes the request.",
+          "Interruptibility rule: keep the main session interruptible. If a task needs more than a quick turn to scope or execute safely, split it into a bounded packet, delegated branch, or workflow-owned background action instead of monopolizing the thread.",
+          'Exec approval safety rule: do not paste long heredocs, inline Python writers, or bulk LaTeX/Markdown/JSON payloads into the exec tool. For long text artifacts, use research_workflow with action "write_text_artifact". Reserve file-backed exec packets for long shell commands that truly need shell execution.',
+          "Stage completion rule: when your stage outputs are ready, call research_workflow.auto_iterator_tick before narrating or starting the next stage yourself, so owner routing and handoff happen deterministically.",
+        ]
+      ),
+      promptValues
+    )
   );
   if (
     snapshot.role === "researcher" &&
@@ -262,9 +302,6 @@ export function buildFocusedPromptAssemblyImpl(
       "Foreground queue rule: if workflow-owned literature discovery or other long queue work is pending, keep the main chat session responsive. Start or monitor that work through research_workflow.start_background_run or the queued wrapper flow, and answer direct user questions in the foreground instead of consuming the whole reply with queue execution."
     );
   }
-  layer2Lines.push(
-    "Stage completion rule: when your stage outputs are ready, call research_workflow.auto_iterator_tick before narrating or starting the next stage yourself, so owner routing and handoff happen deterministically."
-  );
   if (snapshot.autoIteratorAuditFreshness === "stale") {
     layer2Lines.push(
       "Runtime truth rule: the live Workflow Guard snapshot is the source of truth. Treat stale auto-iterator audit records as historical diagnostics only, not as the current blocker."
@@ -272,13 +309,18 @@ export function buildFocusedPromptAssemblyImpl(
   }
   if (snapshot.role === "researcher") {
     layer2Lines.push(
-      "Bootstrap-vs-guard rule: AGENTS.md only carries stable role policy. Stage-local checklists, queue state, and the next bounded action in this Workflow Guard override memory or stale templates."
-    );
-    layer2Lines.push(
-      "Auto-iterator reply rule: when the user says the workflow changed or was updated, do not repeatedly narrate that you will call auto_iterator_tick. Call it once, then report the concrete delta or the exact blocker."
-    );
-    layer2Lines.push(
-      'Auto iterator rule: before fresh stage work on heartbeat/recovery turns, call research_workflow with action "auto_iterator_tick" so stage reconciliation, owner routing, and PROJECTS_STATE sync happen deterministically.'
+      ...renderPromptLines(
+        getPromptLines(
+          promptConfig,
+          ["workflowGuard", "focused", "researcherRules"],
+          [
+            "Bootstrap-vs-guard rule: AGENTS.md only carries stable role policy. Stage-local checklists, queue state, and the next bounded action in this Workflow Guard override memory or stale templates.",
+            "Auto-iterator reply rule: when the user says the workflow changed or was updated, do not repeatedly narrate that you will call auto_iterator_tick. Call it once, then report the concrete delta or the exact blocker.",
+            'Auto iterator rule: before fresh stage work on heartbeat/recovery turns, call research_workflow with action "auto_iterator_tick" so stage reconciliation, owner routing, and PROJECTS_STATE sync happen deterministically.',
+          ]
+        ),
+        promptValues
+      )
     );
     if (snapshot.autoIteratorAuditFreshness === "stale") {
       layer2Lines.push(
@@ -293,30 +335,71 @@ export function buildFocusedPromptAssemblyImpl(
   }
   if (snapshot.role === "reviewer") {
     layer2Lines.push(
-      "Review independence rule: operate only on the explicit review packet or cited paths for this request; do not widen into hidden project context or implementation help."
+      ...renderPromptLines(
+        getPromptLines(
+          promptConfig,
+          ["workflowGuard", "focused", "reviewerRules"],
+          [
+            "Review independence rule: operate only on the explicit review packet or cited paths for this request; do not widen into hidden project context or implementation help.",
+          ]
+        ),
+        promptValues
+      )
     );
   }
   if (snapshot.role === "cross-reviewer") {
     layer2Lines.push(
-      "Cross-review rule: stay stateless and finish standard novelty/outline/prose packets inline; if the request turns into multi-step evidence gathering, stop and hand it back to the caller."
+      ...renderPromptLines(
+        getPromptLines(
+          promptConfig,
+          ["workflowGuard", "focused", "crossReviewerRules"],
+          [
+            "Cross-review rule: stay stateless and finish standard novelty/outline/prose packets inline; if the request turns into multi-step evidence gathering, stop and hand it back to the caller.",
+          ]
+        ),
+        promptValues
+      )
     );
   }
   if (snapshot.role === "academic_writer") {
     layer2Lines.push(
-      "Writing helper rule: use citation-management and venue-templates when bibliography or template constraints become the blocker, and keep TEMPLATE_MAPPING.md aligned with the active template."
+      ...renderPromptLines(
+        getPromptLines(
+          promptConfig,
+          ["workflowGuard", "focused", "academicWriterRules"],
+          [
+            "Writing helper rule: use citation-management and venue-templates when bibliography or template constraints become the blocker, and keep TEMPLATE_MAPPING.md aligned with the active template.",
+          ]
+        ),
+        promptValues
+      )
     );
   }
   if (snapshot.role === "coder") {
     layer2Lines.push(
-      "Visualization helper rule: use scientific-visualization for bounded implementation-stage figures when they clarify baseline fidelity, ablations, or sanity checks."
-    );
-    layer2Lines.push(
-      "Coder git-ratchet rule: when an approved experiment search envelope exists, treat git as the acceptance gate. Work on disposable candidate branches or worktrees, keep only promoted metric wins on the incumbent branch, and do not let unpromoted changes pollute the retained history."
+      ...renderPromptLines(
+        getPromptLines(
+          promptConfig,
+          ["workflowGuard", "focused", "coderRules"],
+          [
+            "Visualization helper rule: use scientific-visualization for bounded implementation-stage figures when they clarify baseline fidelity, ablations, or sanity checks.",
+            "Coder git-ratchet rule: when an approved experiment search envelope exists, treat git as the acceptance gate. Work on disposable candidate branches or worktrees, keep only promoted metric wins on the incumbent branch, and do not let unpromoted changes pollute the retained history.",
+          ]
+        ),
+        promptValues
+      )
     );
   }
   const layer2 = layer2Lines.join("\n");
 
-  const layer3Lines = ["Layer 3: Primary Payload", `section_context=${sectionContextId ?? "unset"}`];
+  const layer3Lines = [
+    getPromptText(
+      promptConfig,
+      ["workflowGuard", "focused", "layerLabels", "primaryPayload"],
+      "Layer 3: Primary Payload"
+    ),
+    `section_context=${sectionContextId ?? "unset"}`,
+  ];
   const writingContextActive =
     snapshot.role === "academic_writer" ||
     snapshot.currentStage === "write" ||
@@ -382,7 +465,13 @@ export function buildFocusedPromptAssemblyImpl(
   }
   const layer3 = layer3Lines.join("\n");
 
-  const layer4Lines = ["Layer 4: Supporting Evidence"];
+  const layer4Lines = [
+    getPromptText(
+      promptConfig,
+      ["workflowGuard", "focused", "layerLabels", "supportingEvidence"],
+      "Layer 4: Supporting Evidence"
+    ),
+  ];
   const graphCoverage =
     snapshot.writingGraphEvidenceCoverageStatus ??
     snapshot.graphGuidedWritingEvidenceCoverageStatus;
@@ -414,7 +503,13 @@ export function buildFocusedPromptAssemblyImpl(
   }
   const layer4 = layer4Lines.length > 1 ? layer4Lines.join("\n") : null;
 
-  const layer5Lines = ["Layer 5: Reflection Delta"];
+  const layer5Lines = [
+    getPromptText(
+      promptConfig,
+      ["workflowGuard", "focused", "layerLabels", "reflectionDelta"],
+      "Layer 5: Reflection Delta"
+    ),
+  ];
   if (roundId) {
     layer5Lines.push(`round_id=${roundId}`);
   }
@@ -465,6 +560,7 @@ export function formatWorkflowSnapshotForPromptImpl(
     snapshot: SnapshotLike;
     trigger?: string;
     detailLevel?: "full" | "focused";
+    promptConfig?: WorkflowPromptConfig | null;
   },
   deps: {
     buildNonOwnerRoutingAdvice: (snapshot: SnapshotLike) => string[];
@@ -472,8 +568,16 @@ export function formatWorkflowSnapshotForPromptImpl(
   }
 ): string {
   const { snapshot, trigger } = params;
+  const promptConfig = params.promptConfig ?? null;
+  const promptValues = {
+    role: snapshot.role ?? "unknown",
+    owner: snapshot.recommendedOwner ?? snapshot.ownerAgent ?? "unset",
+    currentStage: snapshot.currentStage ?? "this stage",
+    currentMicroStage: snapshot.currentMicroStage ?? "unknown",
+    trigger: params.trigger ?? "manual",
+  };
   if ((params.detailLevel ?? "full") === "focused") {
-    return buildFocusedPromptAssemblyImpl({ snapshot, trigger }, deps).text;
+    return buildFocusedPromptAssemblyImpl({ snapshot, trigger, promptConfig }, deps).text;
   }
   const lines: string[] = [];
   lines.push("[Workflow Guard]");
@@ -490,10 +594,17 @@ export function formatWorkflowSnapshotForPromptImpl(
   lines.push(...deps.buildNonOwnerRoutingAdvice(snapshot));
   if (snapshot.role && snapshot.recommendedOwner && snapshot.role === snapshot.recommendedOwner) {
     lines.push(
-      `Owner gate: you are the responsible owner for ${snapshot.currentStage ?? "this stage"}. Produce the stage artifacts, keep durable state current, and hand off only after your outputs exist.`
-    );
-    lines.push(
-      "Handoff correctness rule: do not emit a [HANDOFF] block, raw @next-owner, or a stage-transition claim unless the latest research_workflow.auto_iterator_tick actually changes the live Workflow Guard stage or owner. If the stage stays the same or any required signals are still missing, report the blocker and keep ownership unchanged."
+      ...renderPromptLines(
+        getPromptLines(
+          promptConfig,
+          ["workflowGuard", "focused", "ownerGateRules"],
+          [
+            "Owner gate: you are the responsible owner for {{currentStage}}. Produce the stage artifacts, keep durable state current, and hand off only after your outputs exist.",
+            "Handoff correctness rule: do not emit a [HANDOFF] block, raw @next-owner, or a stage-transition claim unless the latest research_workflow.auto_iterator_tick actually changes the live Workflow Guard stage or owner. If the stage stays the same or any required signals are still missing, report the blocker and keep ownership unchanged.",
+          ]
+        ),
+        promptValues
+      )
     );
   }
   if (snapshot.channelProjectBindingWorkflowSessionKey) {
@@ -527,25 +638,22 @@ export function formatWorkflowSnapshotForPromptImpl(
   }
   if (snapshot.role === "coder") {
     lines.push(
-      "Coder dataset rule: dataset paths are read-only inputs. Read dataset_path values from the plan or manifest, but do not modify /data/datasets or any project dataset root through write/edit/bash. Put generated artifacts under {PROJ}/coder/, logs/, results/, or remote scratch."
-    );
-    lines.push(
-      "Coder folder rule: organize bundles as coder/experiments/<track-id>/<experiment-id>__<slug>/, keep EXPERIMENT_MANIFEST.json inside each bundle, and keep coder/EXPERIMENT_INDEX.md updated so later runs stay attributable to the right project and track."
-    );
-    lines.push(
-      "Coder execution rule: if Researcher assigns multiple independent bundles, inspect GPU/CPU/RAM usage first and launch as many in parallel as safe capacity allows instead of serializing everything onto one device."
-    );
-    lines.push(
-      "Coder runtime-tuning rule: you may only make bounded execution fixes such as batch size, grad accumulation, num_workers, or eval frequency. Do not change the scientific question, dataset choice, metric, or model semantics without Researcher approval."
-    );
-    lines.push(
-      "Coder git-ratchet rule: if planner/EXPERIMENT_SEARCH_SPEC.json or a bundle-local SEARCH_STATE.json exists, prefer /search-experiment over ad hoc repeated /run-experiment calls. Only promoted primary-metric wins may advance the incumbent branch; gap reduction, smoother curves, or nicer runtime alone are diagnostic signals, not promotion reasons."
-    );
-    lines.push(
-      "Workflow-owned git review rule: candidate worktree creation plus promote/discard branch operations must pass multi-agent review first. Do not run git worktree add/remove or branch promotion directly; request the operation through research_workflow and wait for approval."
-    );
-    lines.push(
-      "Coder lineage rule: record incumbent_branch/incumbent_commit plus the latest candidate branch and commit in durable state so later monitoring, reflection, and graph memory can distinguish retained knowledge from discarded attempts."
+      ...renderPromptLines(
+        getPromptLines(
+          promptConfig,
+          ["workflowGuard", "full", "coderRules"],
+          [
+            "Coder dataset rule: dataset paths are read-only inputs. Read dataset_path values from the plan or manifest, but do not modify /data/datasets or any project dataset root through write/edit/bash. Put generated artifacts under {PROJ}/coder/, logs/, results/, or remote scratch.",
+            "Coder folder rule: organize bundles as coder/experiments/<track-id>/<experiment-id>__<slug>/, keep EXPERIMENT_MANIFEST.json inside each bundle, and keep coder/EXPERIMENT_INDEX.md updated so later runs stay attributable to the right project and track.",
+            "Coder execution rule: if Researcher assigns multiple independent bundles, inspect GPU/CPU/RAM usage first and launch as many in parallel as safe capacity allows instead of serializing everything onto one device.",
+            "Coder runtime-tuning rule: you may only make bounded execution fixes such as batch size, grad accumulation, num_workers, or eval frequency. Do not change the scientific question, dataset choice, metric, or model semantics without Researcher approval.",
+            "Coder git-ratchet rule: if planner/EXPERIMENT_SEARCH_SPEC.json or a bundle-local SEARCH_STATE.json exists, prefer /search-experiment over ad hoc repeated /run-experiment calls. Only promoted primary-metric wins may advance the incumbent branch; gap reduction, smoother curves, or nicer runtime alone are diagnostic signals, not promotion reasons.",
+            "Workflow-owned git review rule: candidate worktree creation plus promote/discard branch operations must pass multi-agent review first. Do not run git worktree add/remove or branch promotion directly; request the operation through research_workflow and wait for approval.",
+            "Coder lineage rule: record incumbent_branch/incumbent_commit plus the latest candidate branch and commit in durable state so later monitoring, reflection, and graph memory can distinguish retained knowledge from discarded attempts.",
+          ]
+        ),
+        promptValues
+      )
     );
   }
   if ((snapshot.allowedContacts ?? []).length > 0 || (snapshot.allowedSpawns ?? []).length > 0) {
@@ -557,29 +665,35 @@ export function formatWorkflowSnapshotForPromptImpl(
     );
   }
   lines.push(
-    "Communication rule: normal Discord/chat status reports must use plain labels like [coder] / [researcher] / [writer]. Only a stage-completion handoff message may include one raw @next-owner, and it must use the [STATUS]/[HANDOFF]/[ARTIFACTS]/[NEXT] block."
-  );
-  lines.push(
-    "Workflow truth rule: chat-level handoff text never overrides Workflow Guard ownership. Only the live snapshot or a successful auto_iterator_tick may move the stage owner."
-  );
-  lines.push(
-    "Reply style rule: acknowledge handoffs with plain text or role labels, not repeated raw @mentions. Do not echo the same raw mention across follow-up replies."
-  );
-  lines.push(
-    "Contact cooldown rule: after routing work to another agent, do not ping the same target again immediately; wait for the workflow cooldown unless new durable state changes the request."
-  );
-  lines.push(
-    'Exec approval safety rule: do not paste long heredocs, inline Python writers, or bulk LaTeX/Markdown/JSON payloads into the exec tool. For long text artifacts, use research_workflow with action "write_text_artifact". Reserve file-backed exec packets for long shell commands that truly need shell execution.'
-  );
-  lines.push(
-    "Stage completion rule: when your stage outputs are ready, call research_workflow.auto_iterator_tick before narrating or starting the next stage yourself, so owner routing and handoff happen deterministically."
+    ...renderPromptLines(
+      getPromptLines(
+        promptConfig,
+        ["workflowGuard", "full", "commonRules"],
+        [
+          "Communication rule: normal Discord/chat status reports must use plain labels like [coder] / [researcher] / [writer]. Only a stage-completion handoff message may include one raw @next-owner, and it must use the [STATUS]/[HANDOFF]/[ARTIFACTS]/[NEXT] block.",
+          "Workflow truth rule: chat-level handoff text never overrides Workflow Guard ownership. Only the live snapshot or a successful auto_iterator_tick may move the stage owner.",
+          "Reply style rule: acknowledge handoffs with plain text or role labels, not repeated raw @mentions. Do not echo the same raw mention across follow-up replies.",
+          "Contact cooldown rule: after routing work to another agent, do not ping the same target again immediately; wait for the workflow cooldown unless new durable state changes the request.",
+          'Exec approval safety rule: do not paste long heredocs, inline Python writers, or bulk LaTeX/Markdown/JSON payloads into the exec tool. For long text artifacts, use research_workflow with action "write_text_artifact". Reserve file-backed exec packets for long shell commands that truly need shell execution.',
+          "Stage completion rule: when your stage outputs are ready, call research_workflow.auto_iterator_tick before narrating or starting the next stage yourself, so owner routing and handoff happen deterministically.",
+        ]
+      ),
+      promptValues
+    )
   );
   if (snapshot.role === "researcher") {
     lines.push(
-      "Auto-iterator reply rule: when the user says the workflow changed or was updated, do not repeatedly narrate that you will call auto_iterator_tick. Call it once, then report the concrete delta or the exact blocker."
-    );
-    lines.push(
-      'Auto iterator rule: before fresh stage work on heartbeat/recovery turns, call research_workflow with action "auto_iterator_tick" so stage reconciliation, owner routing, and PROJECTS_STATE sync happen deterministically.'
+      ...renderPromptLines(
+        getPromptLines(
+          promptConfig,
+          ["workflowGuard", "full", "researcherRules"],
+          [
+            "Auto-iterator reply rule: when the user says the workflow changed or was updated, do not repeatedly narrate that you will call auto_iterator_tick. Call it once, then report the concrete delta or the exact blocker.",
+            'Auto iterator rule: before fresh stage work on heartbeat/recovery turns, call research_workflow with action "auto_iterator_tick" so stage reconciliation, owner routing, and PROJECTS_STATE sync happen deterministically.',
+          ]
+        ),
+        promptValues
+      )
     );
     if (trigger === "heartbeat") {
       lines.push(
@@ -1090,13 +1204,18 @@ export function formatWorkflowSnapshotForPromptImpl(
     }
   }
   lines.push(
-    "Preferred paper-ingestion order: run the workflow-owned broad retrieval backbone first when breadth matters, keep /papers-cool search as the guaranteed baseline (optionally merge /pasa-paper-search when it succeeds), then once paper identity is confirmed call /hugging-face-paper-pages for arXiv papers -> if needed call /arxiv2md-api -> if needed call /markxiv -> if needed call /arxiv2md -> only if all Markdown sources are unavailable, use PDF fallback -> preserve metadata-only canonical entries for important unresolved papers -> update PAPER_SOURCE_INDEX.json source_provider/retrieval_providers -> schedule one PaperNexus import request through `research_workflow.schedule_papernexus_import` (legacy alias: `queue_paper_ingestion`; `pn_import_submit.py` + `pn_import_queue.py` for one paper, `pn_batch_import.py` with one manifest for 2+ staged papers, or the dedicated /papernexus-batch-import skill) -> /graph-build readiness + brainstorm bundle refresh."
-  );
-  lines.push(
-    "PaperNexus import rule: if new PDFs or Markdown enter through a UI/API upload, prefer the MCP-backed queued wrapper path (`pn_import_submit.py`, `pn_import_queue.py`, and for 2+ papers `pn_batch_import.py`) by recording it through `research_workflow.schedule_papernexus_import`. The legacy `queue_paper_ingestion` action remains a compatibility alias, not a PaperNexus wrapper name. The workflow PaperNexus upload worker owns launching, retrying, and reporting queued requests; agents should not run upload wrappers inline or clear `queued_requests` by hand. Use project-local staging files as temporary upload inputs; do not treat `~/.papernexus/papers` as workflow-owned storage."
-  );
-  lines.push(
-    "PaperNexus bounded-ingestion rule: use one paper per `pn_import_submit.py` call, but use `pn_batch_import.py` with one manifest for 2+ papers. Prefer /papernexus-batch-import when the task is mainly manifest-driven multi-paper sync. Keep each workflow wait pass at 60s or less, persist batch summary/items through research_workflow.set_paper_ingestion, and continue with the next status pass instead of long-polling indefinitely."
+    ...renderPromptLines(
+      getPromptLines(
+        promptConfig,
+        ["workflowGuard", "full", "paperIngestionRules"],
+        [
+          "Preferred paper-ingestion order: run the workflow-owned broad retrieval backbone first when breadth matters, keep /papers-cool search as the guaranteed baseline (optionally merge /pasa-paper-search when it succeeds), then once paper identity is confirmed call /hugging-face-paper-pages for arXiv papers -> if needed call /arxiv2md-api -> if needed call /markxiv -> if needed call /arxiv2md -> only if all Markdown sources are unavailable, use PDF fallback -> preserve metadata-only canonical entries for important unresolved papers -> update PAPER_SOURCE_INDEX.json source_provider/retrieval_providers -> schedule one PaperNexus import request through `research_workflow.schedule_papernexus_import` (legacy alias: `queue_paper_ingestion`; `pn_import_submit.py` + `pn_import_queue.py` for one paper, `pn_batch_import.py` with one manifest for 2+ staged papers, or the dedicated /papernexus-batch-import skill) -> /graph-build readiness + brainstorm bundle refresh.",
+          "PaperNexus import rule: if new PDFs or Markdown enter through a UI/API upload, prefer the MCP-backed queued wrapper path (`pn_import_submit.py`, `pn_import_queue.py`, and for 2+ papers `pn_batch_import.py`) by recording it through `research_workflow.schedule_papernexus_import`. The legacy `queue_paper_ingestion` action remains a compatibility alias, not a PaperNexus wrapper name. The workflow PaperNexus upload worker owns launching, retrying, and reporting queued requests; agents should not run upload wrappers inline or clear `queued_requests` by hand. Use project-local staging files as temporary upload inputs; do not treat `~/.papernexus/papers` as workflow-owned storage.",
+          "PaperNexus bounded-ingestion rule: use one paper per `pn_import_submit.py` call, but use `pn_batch_import.py` with one manifest for 2+ papers. Prefer /papernexus-batch-import when the task is mainly manifest-driven multi-paper sync. Keep each workflow wait pass at 60s or less, persist batch summary/items through research_workflow.set_paper_ingestion, and continue with the next status pass instead of long-polling indefinitely.",
+        ]
+      ),
+      promptValues
+    )
   );
   if (
     snapshot.role === "researcher" &&
@@ -1117,61 +1236,60 @@ export function formatWorkflowSnapshotForPromptImpl(
     );
   }
   lines.push(
-    "PaperNexus safety rule: agents may add or update understanding in the shared graph, but must not delete corpus data, wipe shared storage, or run `backup-export`, `backup-unpack`, or `backup-load` unless the user explicitly asks."
-  );
-  lines.push(
-    "Idle research rule: if idle_research is enabled and due, prefer /idle-research on that topic over ad hoc literature drift. Record each round through research_workflow.record_idle_research_run."
-  );
-  lines.push(
-    "Experiment memory rule: before launching, resuming, or interpreting runs, inspect the ledger. Do not hand-edit researcher/EXPERIMENT_LEDGER.json; use research_workflow.get_experiment_memory / upsert_experiment."
-  );
-  lines.push(
-    "Graph-backed experiment memory rule: treat researcher/papernexus/EXPERIMENT_MEMORY_PACKET.json as distilled guidance for planning, coder search, and reflection. It complements the ledger but does not replace the local runtime source of truth."
-  );
-  lines.push(
-    "Innovation reflection rule: if experiments have produced new evidence since the last reflection, run /innovation-reflection and refresh researcher/INNOVATION_REFLECTION.md before proposing or locking a new innovation direction."
+    ...renderPromptLines(
+      getPromptLines(
+        promptConfig,
+        ["workflowGuard", "full", "memoryRules"],
+        [
+          "PaperNexus safety rule: agents may add or update understanding in the shared graph, but must not delete corpus data, wipe shared storage, or run `backup-export`, `backup-unpack`, or `backup-load` unless the user explicitly asks.",
+          "Idle research rule: if idle_research is enabled and due, prefer /idle-research on that topic over ad hoc literature drift. Record each round through research_workflow.record_idle_research_run.",
+          "Experiment memory rule: before launching, resuming, or interpreting runs, inspect the ledger. Do not hand-edit researcher/EXPERIMENT_LEDGER.json; use research_workflow.get_experiment_memory / upsert_experiment.",
+          "Graph-backed experiment memory rule: treat researcher/papernexus/EXPERIMENT_MEMORY_PACKET.json as distilled guidance for planning, coder search, and reflection. It complements the ledger but does not replace the local runtime source of truth.",
+          "Innovation reflection rule: if experiments have produced new evidence since the last reflection, run /innovation-reflection and refresh researcher/INNOVATION_REFLECTION.md before proposing or locking a new innovation direction.",
+        ]
+      ),
+      promptValues
+    )
   );
   if (shouldApplySharedWritingConstitutionImpl(snapshot)) {
     lines.push(...deps.getSharedWritingConstitutionLines(snapshot.role ?? null));
   }
   if (snapshot.role === "analyzer" || snapshot.currentStage === "analyze") {
     lines.push(
-      "Theory packet rule: Analyzer should not stop at THEORY_SUPPORT_NOTE.md. Write analyzer/THEORY_STATE.json plus analyzer/proof-packets/*.json so theorem / lemma candidates, assumptions, derivation outlines, and caveats become structured objects for Writer."
-    );
-    lines.push(
-      "Theory-phase rule: after the packet set is current, run /theory-phase or research_workflow.materialize_theory_appendix so Writer receives a generated THEORY_APPENDIX_PLAN.md and appendix_theory.tex draft."
+      ...renderPromptLines(
+        getPromptLines(
+          promptConfig,
+          ["workflowGuard", "full", "analyzerRules"],
+          [
+            "Theory packet rule: Analyzer should not stop at THEORY_SUPPORT_NOTE.md. Write analyzer/THEORY_STATE.json plus analyzer/proof-packets/*.json so theorem / lemma candidates, assumptions, derivation outlines, and caveats become structured objects for Writer.",
+            "Theory-phase rule: after the packet set is current, run /theory-phase or research_workflow.materialize_theory_appendix so Writer receives a generated THEORY_APPENDIX_PLAN.md and appendix_theory.tex draft.",
+          ]
+        ),
+        promptValues
+      )
     );
   }
   if (snapshot.role === "academic_writer" || snapshot.currentStage === "write") {
     lines.push(
-      "Writing template rule: if writing_contract.template_required is true or a writing template path is configured, read the project-local template copy before /paper-plan or /paper-write. Never edit the external source template in place; keep PAPER_PLAN.md, TEMPLATE_MAPPING.md, and section drafts aligned with the copied template."
-    );
-    lines.push(
-      "Writing mode rule: conference mode targets 9 body pages + 2 reference pages; journal mode targets 12 body pages + 2 reference pages. Keep the paper to 1-2 core ideas and do not let side tracks re-enter the headline narrative."
-    );
-    lines.push(
-      "Proof-writing rule: when the writing contract enables proof-aware writing, keep the main text to theorem/lemma statements, intuition, and final consequences; move full derivations, algebra, and case-by-case proofs into the appendix."
-    );
-    lines.push(
-      "Theory support rule: use analyzer/THEORY_SUPPORT_NOTE.md or the configured theory note path as the ceiling for formal claims. Where proof confidence is weak, write conservative mechanism language in the body and spell out caveats in the appendix or limitations."
-    );
-    lines.push(
-      "Structured proof-object rule: read analyzer/THEORY_STATE.json and analyzer/proof-packets/*.json before drafting. Use those packets to decide which statements are body-safe and which derivations belong in the appendix."
-    );
-    lines.push(
-      "Appendix draft rule: start from academic_writer/THEORY_APPENDIX_PLAN.md and the configured proof_appendix_path instead of reconstructing derivations from scratch."
-    );
-    lines.push(
-      "KG storyline rule: when writing_contract.kg_storyline_required is true, build and use a KG storyline packet that maps problem -> gap -> method -> evidence -> limitations before broadening prose."
-    );
-    lines.push(
-      "Paragraph audit rule: reverse-outline each section, keep WRITING_SIGNALS.md current, and update paragraph_logic_status after every local coherence pass."
-    );
-    lines.push(
-      "Cross-paragraph logic rule: use academic_writer/PARAGRAPH_LOGIC_AUDIT.md and academic_writer/PARAGRAPH_LOGIC_REVERSE_OUTLINE.md to repair adjacent paragraph handoffs, not just sentence-level clarity. If the audit marks blocking issues, fix the weakest section before broadening new prose."
-    );
-    lines.push(
-      "Citation integrity rule: citations must come from real sources of truth (DBLP/CrossRef/DataCite/Semantic Scholar or equivalent). Do not invent BibTeX, and do not finalize submission until the citation integrity gate is verified."
+      ...renderPromptLines(
+        getPromptLines(
+          promptConfig,
+          ["workflowGuard", "full", "writerRules"],
+          [
+            "Writing template rule: if writing_contract.template_required is true or a writing template path is configured, read the project-local template copy before /paper-plan or /paper-write. Never edit the external source template in place; keep PAPER_PLAN.md, TEMPLATE_MAPPING.md, and section drafts aligned with the copied template.",
+            "Writing mode rule: conference mode targets 9 body pages + 2 reference pages; journal mode targets 12 body pages + 2 reference pages. Keep the paper to 1-2 core ideas and do not let side tracks re-enter the headline narrative.",
+            "Proof-writing rule: when the writing contract enables proof-aware writing, keep the main text to theorem/lemma statements, intuition, and final consequences; move full derivations, algebra, and case-by-case proofs into the appendix.",
+            "Theory support rule: use analyzer/THEORY_SUPPORT_NOTE.md or the configured theory note path as the ceiling for formal claims. Where proof confidence is weak, write conservative mechanism language in the body and spell out caveats in the appendix or limitations.",
+            "Structured proof-object rule: read analyzer/THEORY_STATE.json and analyzer/proof-packets/*.json before drafting. Use those packets to decide which statements are body-safe and which derivations belong in the appendix.",
+            "Appendix draft rule: start from academic_writer/THEORY_APPENDIX_PLAN.md and the configured proof_appendix_path instead of reconstructing derivations from scratch.",
+            "KG storyline rule: when writing_contract.kg_storyline_required is true, build and use a KG storyline packet that maps problem -> gap -> method -> evidence -> limitations before broadening prose.",
+            "Paragraph audit rule: reverse-outline each section, keep WRITING_SIGNALS.md current, and update paragraph_logic_status after every local coherence pass.",
+            "Cross-paragraph logic rule: use academic_writer/PARAGRAPH_LOGIC_AUDIT.md and academic_writer/PARAGRAPH_LOGIC_REVERSE_OUTLINE.md to repair adjacent paragraph handoffs, not just sentence-level clarity. If the audit marks blocking issues, fix the weakest section before broadening new prose.",
+            "Citation integrity rule: citations must come from real sources of truth (DBLP/CrossRef/DataCite/Semantic Scholar or equivalent). Do not invent BibTeX, and do not finalize submission until the citation integrity gate is verified.",
+          ]
+        ),
+        promptValues
+      )
     );
   }
   lines.push("[/Workflow Guard]");

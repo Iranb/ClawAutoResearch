@@ -77,6 +77,17 @@ The `{PROJECTS_ROOT}` path is determined by:
 1. **Plugin config** (highest priority): `openclaw.json` → `plugins.entries.ClawAutoResearch.config.projectsRoot`
 2. **Default**: `~/.openclaw/projects`
 
+## Workflow Prompt Configuration
+
+- **Default file**: [`workflow-prompts.config.json`](./workflow-prompts.config.json)
+  - Controls the high-frequency prompt rules injected by Workflow Guard, focused prompt assembly, background continuations, and workflow-owned PaperNexus/literature request workers.
+  - Also controls code-generated paper-writing workbench prompts such as title candidates, abstract/intro scaffolds, and Results/survey question ordering under `paperWriting`.
+  - `promptAnnotations` is documentation-only metadata keyed by prompt path. It records each prompt's usage scenario and function, and is ignored by the runtime loader.
+  - Edit this file to adjust prompt wording per stage/role without changing TypeScript.
+  - For an external file, set `plugins.entries.ClawAutoResearch.config.workflowPromptConfigPath` in `openclaw.json`.
+  - For one-off local runs, set `CLAW_AUTO_RESEARCH_PROMPT_CONFIG=/absolute/path/to/workflow-prompts.config.json`.
+  - Missing sections fall back to the built-in defaults, so partial override files are supported.
+
 ## Environment Variables
 
 - **`OPENCLAW_PROJECT`**: Optional current project ID fallback
@@ -92,6 +103,10 @@ The `{PROJECTS_ROOT}` path is determined by:
 - **`PAPERNEXUS_ROOT`**: Optional PaperNexus repository root
   - Can be used when PaperNexus is not discoverable as a sibling repository
   - Helps `graph-build` and related skills resolve the local PaperNexus installation
+
+- **`CLAW_AUTO_RESEARCH_PROMPT_CONFIG`**: Optional path to an alternate workflow prompt config
+  - Overrides the bundled `workflow-prompts.config.json` for local runs
+  - Plugin config `workflowPromptConfigPath` is preferred when both are set
 
 ## Remote PaperNexus Access
 

@@ -23,6 +23,7 @@ import {
 } from "../survey-review-artifacts";
 import { materializeSurveyReviewDiagnostics } from "../survey-review-diagnostics.js";
 import { materializeWorkflowPanelDiscussionState } from "../workflow-panel-discussion";
+import { materializePapernexusSurveyReadModel } from "./papernexus-survey-read-model";
 
 function hasNonWhitespaceContent(text: string | null | undefined): boolean {
   return Boolean(text && text.trim().length > 0);
@@ -366,6 +367,11 @@ export async function materializeSurveyReviewStateImpl(params: {
   const merged = normalizeSurveyReviewState({
     ...serializeSurveyReviewState(current),
     ...patch,
+  });
+  const papernexusReadModel = await materializePapernexusSurveyReadModel({
+    projectRoot,
+    manifest,
+    state: merged,
   });
 
   const [
@@ -716,6 +722,7 @@ export async function materializeSurveyReviewStateImpl(params: {
     );
   }
   const generatedFiles = uniqueStrings([
+    ...papernexusReadModel.generatedFiles,
     diagnostics.diagnosticsPath,
     "researcher/SURVEY_OUTLINE.md",
     !surveyBriefExists && surveyBriefReady ? merged.surveyBriefPath : null,

@@ -1,5 +1,14 @@
 import type { IdeaFragment } from "./ranking";
-import { getIdeaCatalystRankingCriteria } from "./prompt-contracts";
+import {
+  getPromptLines,
+  getPromptText,
+  loadWorkflowPromptConfig,
+  type WorkflowPromptConfig,
+} from "../workflow-prompt-config";
+import {
+  getIdeaCatalystRankingCriteria,
+  getIdeaCatalystRankingCriteriaDefinitions,
+} from "./prompt-contracts";
 
 export type PairwiseVote = "a" | "b" | "tie";
 
@@ -33,12 +42,64 @@ function readStringRecord(value: unknown) {
   return value && typeof value === "object" ? (value as Record<string, unknown>) : null;
 }
 
+function briefValue(value: unknown, maxLength = 650) {
+  if (value === null || value === undefined) {
+    return "n/a";
+  }
+  const raw =
+    typeof value === "string"
+      ? value
+      : JSON.stringify(value, null, 2) ?? String(value ?? "");
+  const normalized = raw.replace(/\s+/g, " ").trim();
+  return normalized.length > maxLength
+    ? `${normalized.slice(0, maxLength - 3)}...`
+    : normalized;
+}
+
+function readIdeaString(fragment: IdeaFragment, keys: string[]) {
+  const ideaRecord = readStringRecord(fragment.idea_fragment);
+  for (const key of keys) {
+    const fragmentValue = (fragment as unknown as Record<string, unknown>)[key];
+    if (typeof fragmentValue === "string" && fragmentValue.trim()) {
+      return fragmentValue.trim();
+    }
+    const ideaValue = ideaRecord?.[key];
+    if (typeof ideaValue === "string" && ideaValue.trim()) {
+      return ideaValue.trim();
+    }
+  }
+  return null;
+}
+
+function readIdeaValue(fragment: IdeaFragment, key: keyof IdeaFragment) {
+  const value = fragment[key];
+  if (value !== null && value !== undefined) {
+    return value;
+  }
+  return readStringRecord(fragment.idea_fragment)?.[key];
+}
+
+function countArray(value: unknown) {
+  return Array.isArray(value) ? value.length : 0;
+}
+
 function serializeFragment(label: string, fragment: IdeaFragment) {
   return [
     `${label}:`,
     `- fragment_id: ${fragment.fragment_id}`,
     `- title: ${fragment.title}`,
     `- source_domain: ${fragment.source_domain}`,
+    `- target_domain: ${fragment.target_domain ?? "n/a"}`,
+    `- transferred_mechanism: ${fragment.transferred_mechanism ?? "n/a"}`,
+    `- core_insight: ${readIdeaString(fragment, ["core_insight", "coreInsight"]) ?? "n/a"}`,
+    `- integration_mechanism: ${briefValue(readIdeaValue(fragment, "integration_mechanism"))}`,
+    `- challenge_resolution: ${briefValue(readIdeaValue(fragment, "challenge_resolution"))}`,
+    `- concrete_realization: ${briefValue(readIdeaValue(fragment, "concrete_realization"))}`,
+    `- evidence_tier: ${fragment.evidence_tier ?? "n/a"}`,
+    `- claim_cap: ${fragment.claim_cap ?? "n/a"}`,
+    `- bridge_path_count: ${countArray(fragment.bridge_path_ids)}`,
+    `- source_span_count: ${countArray(fragment.source_spans)}`,
+    `- evidence_chain_ref_count: ${countArray(fragment.evidence_chain_refs)}`,
     `- novelty: ${fragment.novelty}`,
     `- feasibility: ${fragment.feasibility}`,
     `- relevance: ${fragment.relevance}`,
@@ -52,9 +113,30 @@ export function buildPairwiseComparisonPrompt(params: {
   targetDomain: string;
   fragmentA: IdeaFragment;
   fragmentB: IdeaFragment;
+  promptConfig?: WorkflowPromptConfig | null;
 }) {
   const criteria = getIdeaCatalystRankingCriteria();
-  return `You are evaluating two IDEA-CATALYST fragments for interdisciplinary research design.
+  const criteriaDefinitions = getIdeaCatalystRankingCriteriaDefinitions();
+  const config = params.promptConfig ?? loadWorkflowPromptConfig();
+  const configRoot = ["ideaCatalyst", "pairwiseJudge"];
+  const role = getPromptText(
+    config,
+    [...configRoot, "role"],
+    "You are evaluating two IDEA-CATALYST fragments for interdisciplinary research design."
+  );
+  const decisionRules = getPromptLines(config, [...configRoot, "decisionRules"], [
+    "Use the fragment text, integration mechanism, challenge resolution, and supporting evidence before considering numeric scores.",
+    "Prefer the fragment that creates a non-obvious but credible target-source synthesis, not the one that is merely clearer or more immediately practical.",
+    "Do not punish larger domain distance by itself; judge whether the distance creates useful conceptual leverage.",
+    "Relevance alone is insufficient if the source-domain idea does not change the target-domain problem formulation.",
+  ]);
+  const outputRules = getPromptLines(config, [...configRoot, "outputRules"], [
+    "Give concise reasons tied to the named dimensions.",
+    "If both fragments are weak or equivalent on a dimension, mark that dimension as tie.",
+    "Do not invent new fragment content or improve either proposal during judging.",
+  ]);
+
+  return `${role}
 
 Research problem:
 ${params.researchProblem}
@@ -68,6 +150,15 @@ ${serializeFragment("Fragment B", params.fragmentB)}
 
 Judge the fragments along these dimensions:
 ${criteria.map((entry) => `- ${entry}`).join("\n")}
+
+Dimension definitions:
+${criteriaDefinitions.map((entry) => `- ${entry}`).join("\n")}
+
+Decision rules:
+${decisionRules.map((entry) => `- ${entry}`).join("\n")}
+
+Output rules:
+${outputRules.map((entry) => `- ${entry}`).join("\n")}
 
 In plain language, focus on which fragment shows deeper target-domain integration, broader multi-stage disciplinary engagement, higher innovation payoff, and the stronger combined novelty + feasibility balance.
 

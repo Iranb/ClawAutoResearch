@@ -100,12 +100,26 @@ import type {
   WorkflowRuntimeQueueEntry as PersistedWorkflowRuntimeQueueEntry,
   WorkflowRuntimeSessionEntry as PersistedWorkflowRuntimeSessionEntry,
 } from "./workflow-runtime-state.js";
+import {
+  getPromptLines,
+  loadWorkflowPromptConfig,
+  renderPromptLines,
+  type WorkflowPromptConfig,
+} from "./workflow-prompt-config";
 
 type WorkflowRuntimeApi = WorkflowExecutionRuntime;
 type WorkflowRuntimeMonitorApi = WorkflowExecutionRuntimeLike;
 
 function readString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function loadWorkflowFastPathPromptConfig(
+  workflowPolicy?: WorkflowGuardPolicy | null
+): WorkflowPromptConfig {
+  return loadWorkflowPromptConfig({
+    configPath: workflowPolicy?.promptConfigPath ?? null,
+  });
 }
 
 function normalizeAgentId(value: unknown): string | null {
@@ -2340,7 +2354,6 @@ export async function drainQueuedBackgroundWorkflowRuns(params: {
           terminal: terminalPaperArtifact,
         },
       });
-      processedEntries.push(entry);
       continue;
     }
     if (!isBackgroundQueueEntryPending(entry)) {
@@ -2915,9 +2928,15 @@ function isPapernexusBatchImportCommand(text: string | null | undefined): boolea
 function buildBackgroundWorkflowContinuationSystemPrompt(params?: {
   kind?: string | null;
   commandText?: string | null;
+  promptConfig?: WorkflowPromptConfig | null;
 }): string {
   const normalizedKind = readString(params?.kind)?.toLowerCase() ?? null;
   const commandText = readString(params?.commandText) ?? null;
+  const promptConfig = params?.promptConfig ?? null;
+  const promptValues = {
+    kind: normalizedKind ?? "generic",
+    commandText: commandText ?? "",
+  };
   const graphBuildContinuation =
     normalizedKind === "graph_build" || /^\/graph-build\b/i.test(commandText ?? "");
   const zoteroSyncContinuation =
@@ -2942,120 +2961,166 @@ function buildBackgroundWorkflowContinuationSystemPrompt(params?: {
     looksLikePapernexusHeavyCommand(commandText ?? "");
   const importLifecycleCommand = isPapernexusImportLifecycleCommand(commandText);
   const batchImportCommand = isPapernexusBatchImportCommand(commandText);
-  const lines = [
-    "BACKGROUND_WORKFLOW_CONTINUATION=1",
-    "This run was launched from a slash-command fast path into a dedicated workflow subagent session.",
-    "Continue the requested workflow in the background, keep durable state current, and do not assume the foreground session is available.",
-    "Use research_workflow mailbox for bounded handoffs, and do not call research_workflow start_background_run again from this continuation.",
-    "Workflow ownership rule: do not use the generic Agent tool or ad hoc cross-role subagents from this continuation. Let research_workflow, auto_iterator, and workflow handoff own cross-role dispatch explicitly.",
-    "Session hygiene rule: stay inside the current owner role unless workflow state changes ownership. Record durable state and queue official workflow handoffs instead of freelancing into other roles.",
-  ];
+  const lines = renderPromptLines(
+    getPromptLines(
+      promptConfig,
+      ["backgroundContinuations", "baseRules"],
+      [
+        "BACKGROUND_WORKFLOW_CONTINUATION=1",
+        "This run was launched from a slash-command fast path into a dedicated workflow subagent session.",
+        "Continue the requested workflow in the background, keep durable state current, and do not assume the foreground session is available.",
+        "Use research_workflow mailbox for bounded handoffs, and do not call research_workflow start_background_run again from this continuation.",
+        "Workflow ownership rule: do not use the generic Agent tool or ad hoc cross-role subagents from this continuation. Let research_workflow, auto_iterator, and workflow handoff own cross-role dispatch explicitly.",
+        "Session hygiene rule: stay inside the current owner role unless workflow state changes ownership. Record durable state and queue official workflow handoffs instead of freelancing into other roles.",
+      ]
+    ),
+    promptValues
+  );
   if (papernexusBackground) {
     lines.push(
-      "PaperNexus workflow rule: stay MCP-first. Use remote PaperNexus MCP tools (`research_lookup`, `research_briefing`, `idea_catalyst`, `import_workflow`, `refresh_paper_graph`) directly when available; use the authenticated Python wrappers only as MCP-backed adapters for local file staging, shell-only execution, or bounded import/status work. Do not fall back to local live-graph CLI work or hand-written REST calls."
+      ...renderPromptLines(
+        getPromptLines(
+          promptConfig,
+          ["backgroundContinuations", "papernexusRules"],
+          [
+            "PaperNexus workflow rule: stay MCP-first. Use remote PaperNexus MCP tools (`research_lookup`, `research_briefing`, `idea_catalyst`, `import_workflow`, `refresh_paper_graph`) directly when available; use the authenticated Python wrappers only as MCP-backed adapters for local file staging, shell-only execution, or bounded import/status work. Do not fall back to local live-graph CLI work or hand-written REST calls.",
+          ]
+        ),
+        promptValues
+      )
     );
   }
   if (graphBuildContinuation) {
     lines.push(
-      "Graph-build workflow rule: treat /graph-build as a bounded graph-readiness and brainstorm-refresh pass. The remote PaperNexus import worker performs the real graph mutation; do not turn this continuation into a manual rebuild loop."
-    );
-    lines.push(
-      "During /graph-build, use the local Zotero MCP server through /zotero-project-library and keep the project's bibliography synchronized under the configured project Zotero path (default <zoteroProjectRoot>/<project-id>, where zoteroProjectRoot defaults to bot)."
-    );
-    lines.push(
-      "At minimum, sync the verified canonical paper set into the configured project's selected collection, put baseline-defining papers into the baselines collection, and refresh {PROJ}/researcher/ZOTERO_PACKET.md with collection path, counts, and unresolved metadata cleanup tasks."
-    );
-    lines.push(
-      "Do not wait indefinitely on Zotero work either; keep graph readiness and brainstorm bundle refresh as the primary bounded pass, then complete the bounded project Zotero sync before reporting graph-build completion."
+      ...renderPromptLines(
+        getPromptLines(
+          promptConfig,
+          ["backgroundContinuations", "graphBuildRules"],
+          [
+            "Graph-build workflow rule: treat /graph-build as a bounded graph-readiness and brainstorm-refresh pass. The remote PaperNexus import worker performs the real graph mutation; do not turn this continuation into a manual rebuild loop.",
+            "During /graph-build, use the local Zotero MCP server through /zotero-project-library and keep the project's bibliography synchronized under the configured project Zotero path (default <zoteroProjectRoot>/<project-id>, where zoteroProjectRoot defaults to bot).",
+            "At minimum, sync the verified canonical paper set into the configured project's selected collection, put baseline-defining papers into the baselines collection, and refresh {PROJ}/researcher/ZOTERO_PACKET.md with collection path, counts, and unresolved metadata cleanup tasks.",
+            "Do not wait indefinitely on Zotero work either; keep graph readiness and brainstorm bundle refresh as the primary bounded pass, then complete the bounded project Zotero sync before reporting graph-build completion.",
+          ]
+        ),
+        promptValues
+      )
     );
     if (graphBuildRepairContinuation) {
       lines.push(
-        "Graph-build repair mode: this continuation was launched because graph sync is still missing papers while ingestion is idle. Treat it as a bounded graph-sync repair pass, not a passive status check."
+        ...renderPromptLines(
+          getPromptLines(
+            promptConfig,
+            ["backgroundContinuations", "graphBuildRepairRules"],
+            [
+              "Graph-build repair mode: this continuation was launched because graph sync is still missing papers while ingestion is idle. Treat it as a bounded graph-sync repair pass, not a passive status check.",
+              "Regenerate one manifest for the missing canonical papers and drive the repair through pn_batch_import.py submit/status/wait instead of hand-rolled loops or repeated one-paper submit commands.",
+              "If a prior workflow queue/session is marked needs_repair, treat it as stale bookkeeping and start a fresh bounded repair batch instead of waiting forever on the stale run.",
+              "Keep repair progress durable through research_workflow.set_paper_ingestion: mirror active_batches, batch_items, completed_papers, and paper_operations, and clear repair_required only after a fresh batch is running or graph_presence_status becomes ready.",
+            ]
+          ),
+          promptValues
+        )
       );
       if (graphBuildRepairTargetCorpus) {
         lines.push(
-          `Lock the repair pass to the shared corpus ${graphBuildRepairTargetCorpus}; do not switch to a project-local or differently named corpus.`
+          ...renderPromptLines(
+            getPromptLines(
+              promptConfig,
+              ["backgroundContinuations", "graphBuildRepairTargetCorpusRules"],
+              [
+                "Lock the repair pass to the shared corpus {{sharedCorpus}}; do not switch to a project-local or differently named corpus.",
+              ]
+            ),
+            { ...promptValues, sharedCorpus: graphBuildRepairTargetCorpus }
+          )
         );
       }
-      lines.push(
-        "Regenerate one manifest for the missing canonical papers and drive the repair through pn_batch_import.py submit/status/wait instead of hand-rolled loops or repeated one-paper submit commands."
-      );
-      lines.push(
-        "If a prior workflow queue/session is marked needs_repair, treat it as stale bookkeeping and start a fresh bounded repair batch instead of waiting forever on the stale run."
-      );
-      lines.push(
-        "Keep repair progress durable through research_workflow.set_paper_ingestion: mirror active_batches, batch_items, completed_papers, and paper_operations, and clear repair_required only after a fresh batch is running or graph_presence_status becomes ready."
-      );
     }
   }
   if (zoteroSyncContinuation) {
     lines.push(
-      "Zotero sync workflow rule: treat /zotero-sync as a bounded project-wide bibliography reconciliation pass, not as an inline foreground task."
-    );
-    lines.push(
-      "Use the local Zotero MCP server through /zotero-project-library, reconcile the configured project collections, and keep ZOTERO_SYNC_PACKET.json plus ZOTERO_PACKET.md truthful."
-    );
-    lines.push(
-      "Collection safety rule: remove stale papers only from the project's Zotero collections; do not delete or trash Zotero items themselves."
-    );
-    lines.push(
-      "Foreground responsiveness rule: do not block the foreground session waiting on Zotero MCP work; if Zotero is unavailable, record unavailable or failed state durably and exit."
+      ...renderPromptLines(
+        getPromptLines(
+          promptConfig,
+          ["backgroundContinuations", "zoteroSyncRules"],
+          [
+            "Zotero sync workflow rule: treat /zotero-sync as a bounded project-wide bibliography reconciliation pass, not as an inline foreground task.",
+            "Use the local Zotero MCP server through /zotero-project-library, reconcile the configured project collections, and keep ZOTERO_SYNC_PACKET.json plus ZOTERO_PACKET.md truthful.",
+            "Collection safety rule: remove stale papers only from the project's Zotero collections; do not delete or trash Zotero items themselves.",
+            "Foreground responsiveness rule: do not block the foreground session waiting on Zotero MCP work; if Zotero is unavailable, record unavailable or failed state durably and exit.",
+          ]
+        ),
+        promptValues
+      )
     );
   }
   if (literatureReviewContinuation) {
     lines.push(
-      "Literature-review workflow rule: treat /literature-review as a bounded durable review-packet pass for the current project, not as an endless foreground search session."
-    );
-    lines.push(
-      "Refresh REVIEW_PROTOCOL.md, INCLUDED_PAPERS.json, EXCLUDED_PAPERS.json, SOTA_MATRIX.md, GAP_SYNTHESIS.md, and LITERATURE_REVIEW.md coherently so downstream frontier / plan / writing stages can trust one packet."
-    );
-    lines.push(
-      "Foreground responsiveness rule: keep the foreground chat interruptible while this review pass runs; summarize progress durably rather than monopolizing the session."
+      ...renderPromptLines(
+        getPromptLines(
+          promptConfig,
+          ["backgroundContinuations", "literatureReviewRules"],
+          [
+            "Literature-review workflow rule: treat /literature-review as a bounded durable review-packet pass for the current project, not as an endless foreground search session.",
+            "Refresh REVIEW_PROTOCOL.md, INCLUDED_PAPERS.json, EXCLUDED_PAPERS.json, SOTA_MATRIX.md, GAP_SYNTHESIS.md, and LITERATURE_REVIEW.md coherently so downstream frontier / plan / writing stages can trust one packet.",
+            "Foreground responsiveness rule: keep the foreground chat interruptible while this review pass runs; summarize progress durably rather than monopolizing the session.",
+          ]
+        ),
+        promptValues
+      )
     );
   }
   if (surveyReviewContinuation) {
     lines.push(
-      "Survey workflow rule: keep the project on the survey_review -> write line. Do not steer this continuation into graph_build, frontier_mapping, idea, plan, code, or experiment unless a human explicitly switches the workflow line."
-    );
-    lines.push(
-      "Use research_workflow.set_survey_review and research_workflow.materialize_survey_review_state to keep survey_review durable while retrieval, screening, and synthesis progress."
-    );
-    lines.push(
-      "If survey literature imports or discovery runs are needed, treat them as bounded substeps inside survey_review instead of clearing paper_ingestion by hand or rewriting experiment-track artifacts."
+      ...renderPromptLines(
+        getPromptLines(
+          promptConfig,
+          ["backgroundContinuations", "surveyReviewRules"],
+          [
+            "Survey workflow rule: keep the project on the survey_review -> write line. Do not steer this continuation into graph_build, frontier_mapping, idea, plan, code, or experiment unless a human explicitly switches the workflow line.",
+            "Use research_workflow.set_survey_review and research_workflow.materialize_survey_review_state to keep survey_review durable while retrieval, screening, and synthesis progress.",
+            "If survey literature imports or discovery runs are needed, treat them as bounded substeps inside survey_review instead of clearing paper_ingestion by hand or rewriting experiment-track artifacts.",
+          ]
+        ),
+        promptValues
+      )
     );
   }
   if (importLifecycleCommand) {
     if (batchImportCommand) {
       lines.push(
-        "PaperNexus batch-import rule: when 2 or more staged papers are being synchronized, use one manifest file with pn_batch_import.py submit/status/wait instead of hand-rolled shell loops or repeated one-paper submit commands."
-      );
-      lines.push(
-        "Reuse the same manifest for submit, status, and wait. Keep each workflow wait pass bounded to 60 seconds or less, then persist progress and let the workflow continue on the next status pass instead of blocking indefinitely."
-      );
-      lines.push(
-        "After each batch status or wait result, call research_workflow.set_paper_ingestion so runtime_status, active_batches, batch_items, completed_papers, and paper_operations stay durable."
-      );
-      lines.push(
-        "Translate the wrapper summary/items view into durable workflow state: active_batches should mirror the batch summary, batch_items should mirror per-paper items, and any synced item should also write completed_papers or terminal paper_operations when appropriate."
-      );
-      lines.push(
-        "Use research_workflow.set_paper_ingestion as the channel-visible progress path; it will keep batch progress visible even if the delegated subagent never sends a free-form chat reply."
+        ...renderPromptLines(
+          getPromptLines(
+            promptConfig,
+            ["backgroundContinuations", "batchImportRules"],
+            [
+              "PaperNexus batch-import rule: when 2 or more staged papers are being synchronized, use one manifest file with pn_batch_import.py submit/status/wait instead of hand-rolled shell loops or repeated one-paper submit commands.",
+              "Reuse the same manifest for submit, status, and wait. Keep each workflow wait pass bounded to 60 seconds or less, then persist progress and let the workflow continue on the next status pass instead of blocking indefinitely.",
+              "After each batch status or wait result, call research_workflow.set_paper_ingestion so runtime_status, active_batches, batch_items, completed_papers, and paper_operations stay durable.",
+              "Translate the wrapper summary/items view into durable workflow state: active_batches should mirror the batch summary, batch_items should mirror per-paper items, and any synced item should also write completed_papers or terminal paper_operations when appropriate.",
+              "Use research_workflow.set_paper_ingestion as the channel-visible progress path; it will keep batch progress visible even if the delegated subagent never sends a free-form chat reply.",
+            ]
+          ),
+          promptValues
+        )
       );
     } else {
       lines.push(
-        "PaperNexus import rule: process one paper per import task when using pn_import_submit.py, keep each paper within a 60 seconds total wait budget, and do not poll indefinitely."
-      );
-      lines.push(
-        "Before and after each paper import or graph reconcile step, call research_workflow.set_paper_ingestion so runtime_status, import_task_ids, paper_operations, and completed_papers stay durable."
-      );
-      lines.push(
-        "When a paper completes, write completed_papers with canonical_id, title, and import_task_id. When a paper times out or fails, write paper_operations with the terminal status and move on to the next paper."
-      );
-      lines.push(
-        "If more than one staged paper needs syncing, stop using repeated one-paper submits and switch to pn_batch_import.py with one manifest."
-      );
-      lines.push(
-        "Use research_workflow.set_paper_ingestion as the channel-visible progress path; it will broadcast the per-paper completion or timeout update for you."
+        ...renderPromptLines(
+          getPromptLines(
+            promptConfig,
+            ["backgroundContinuations", "singleImportRules"],
+            [
+              "PaperNexus import rule: process one paper per import task when using pn_import_submit.py, keep each paper within a 60 seconds total wait budget, and do not poll indefinitely.",
+              "Before and after each paper import or graph reconcile step, call research_workflow.set_paper_ingestion so runtime_status, import_task_ids, paper_operations, and completed_papers stay durable.",
+              "When a paper completes, write completed_papers with canonical_id, title, and import_task_id. When a paper times out or fails, write paper_operations with the terminal status and move on to the next paper.",
+              "If more than one staged paper needs syncing, stop using repeated one-paper submits and switch to pn_batch_import.py with one manifest.",
+              "Use research_workflow.set_paper_ingestion as the channel-visible progress path; it will broadcast the per-paper completion or timeout update for you.",
+            ]
+          ),
+          promptValues
+        )
       );
     }
   }
@@ -3100,16 +3165,40 @@ function buildWorkflowOwnedIngestionRequestPrompt(params: {
   requestId: string;
   triggerKind: string;
   sharedCorpus: string | null;
+  promptConfig?: WorkflowPromptConfig | null;
 }): string {
+  const promptValues = {
+    requestId: params.requestId,
+    triggerKind: params.triggerKind,
+    sharedCorpus: params.sharedCorpus ?? "",
+  };
   const lines = [
     `WORKFLOW_OWNED_PAPER_INGESTION_REQUEST_ID=${params.requestId}`,
-    `This wrapper run was launched by workflow-owned ${params.triggerKind} trigger, not by ad-hoc agent delegation.`,
-    "Treat this as the authoritative upload execution for the queued paper ingestion request and keep the queued_requests entry synchronized through research_workflow.set_paper_ingestion.",
-    "When you report progress, include queued_requests with this request_id so status moves through running/completed/failed and preserves last_run_id, last_session_key, last_error, and detail.",
+    ...renderPromptLines(
+      getPromptLines(
+        params.promptConfig,
+        ["workflowOwnedRequests", "paperIngestion", "rules"],
+        [
+          "This wrapper run was launched by workflow-owned {{triggerKind}} trigger, not by ad-hoc agent delegation.",
+          "Treat this as the authoritative upload execution for the queued paper ingestion request and keep the queued_requests entry synchronized through research_workflow.set_paper_ingestion.",
+          "When you report progress, include queued_requests with this request_id so status moves through running/completed/failed and preserves last_run_id, last_session_key, last_error, and detail.",
+        ]
+      ),
+      promptValues
+    ),
   ];
   if (params.sharedCorpus) {
     lines.push(
-      `Use the locked shared corpus ${params.sharedCorpus} for this queued upload request and do not switch corpora mid-run.`
+      ...renderPromptLines(
+        getPromptLines(
+          params.promptConfig,
+          ["workflowOwnedRequests", "paperIngestion", "sharedCorpusRules"],
+          [
+            "Use the locked shared corpus {{sharedCorpus}} for this queued upload request and do not switch corpora mid-run.",
+          ]
+        ),
+        promptValues
+      )
     );
   }
   return `${lines.join("\n")}\n`;
@@ -3120,25 +3209,68 @@ function buildWorkflowOwnedRequisitionRequestPrompt(params: {
   triggerKind: string | null;
   manifestPath: string | null;
   sharedCorpus: string | null;
+  promptConfig?: WorkflowPromptConfig | null;
 }): string {
+  const promptValues = {
+    requestId: params.requestId,
+    triggerKind: params.triggerKind ?? "",
+    manifestPath: params.manifestPath ?? "",
+    sharedCorpus: params.sharedCorpus ?? "",
+  };
   const lines = [
     `WORKFLOW_OWNED_PAPER_INGESTION_REQUEST_ID=${params.requestId}`,
     `WORKFLOW_OWNED_LITERATURE_REQUISITION_REQUEST_ID=${params.requestId}`,
-    "This run was launched by the workflow to consume a queued literature discovery requisition without requiring a Discord foreground handoff.",
-    "Execute the command text as the authoritative requisition instructions: read the packet/scaffold, collect only sources that close the stated evidence gap, stage local Markdown/PDF sources, then materialize and run one real PaperNexus batch import for the staged sources.",
-    "Keep the queued_requests entry synchronized through research_workflow.set_paper_ingestion using this request_id. Move it to running while active, completed only after durable import evidence exists in completed_papers/batch_items or after a requisition-satisfaction report is written and referenced by validation_report_path; otherwise leave it queued/needs_repair with a concrete error.",
-    "Do not mark this requisition completed with zero collected/imported papers unless the no-new-paper decision is backed by a saved requisition-satisfaction report that explains why the current graph already closes the gap.",
-    "After imports finish or exhaust retry budget, rerun /graph-build or record the graph-build reentry requirement so the workflow can refresh graph presence before continuing downstream.",
+    ...renderPromptLines(
+      getPromptLines(
+        params.promptConfig,
+        ["workflowOwnedRequests", "literatureRequisition", "rules"],
+        [
+          "This run was launched by the workflow to consume a queued literature discovery requisition without requiring a Discord foreground handoff.",
+          "Execute the command text as the authoritative requisition instructions: read the packet/scaffold, collect only sources that close the stated evidence gap, stage local Markdown/PDF sources, then materialize and run one real PaperNexus batch import for the staged sources.",
+          "Keep the queued_requests entry synchronized through research_workflow.set_paper_ingestion using this request_id. Move it to running while active, completed only after durable import evidence exists in completed_papers/batch_items or after a requisition-satisfaction report is written and referenced by validation_report_path; otherwise leave it queued/needs_repair with a concrete error.",
+          "Do not mark this requisition completed with zero collected/imported papers unless the no-new-paper decision is backed by a saved requisition-satisfaction report that explains why the current graph already closes the gap.",
+          "After imports finish or exhaust retry budget, rerun /graph-build or record the graph-build reentry requirement so the workflow can refresh graph presence before continuing downstream.",
+        ]
+      ),
+      promptValues
+    ),
   ];
   if (params.triggerKind) {
-    lines.push(`Trigger kind: ${params.triggerKind}.`);
+    lines.push(
+      ...renderPromptLines(
+        getPromptLines(
+          params.promptConfig,
+          ["workflowOwnedRequests", "literatureRequisition", "triggerKindRules"],
+          ["Trigger kind: {{triggerKind}}."]
+        ),
+        promptValues
+      )
+    );
   }
   if (params.manifestPath) {
-    lines.push(`Requisition packet/scaffold path: {PROJ}/${params.manifestPath}.`);
+    lines.push(
+      ...renderPromptLines(
+        getPromptLines(
+          params.promptConfig,
+          ["workflowOwnedRequests", "literatureRequisition", "manifestPathRules"],
+          ["Requisition packet/scaffold path: {PROJ}/{{manifestPath}}."]
+        ),
+        promptValues
+      )
+    );
   }
   if (params.sharedCorpus) {
     lines.push(
-      `Use the locked shared corpus ${params.sharedCorpus} for any PaperNexus import produced by this requisition.`
+      ...renderPromptLines(
+        getPromptLines(
+          params.promptConfig,
+          ["workflowOwnedRequests", "literatureRequisition", "sharedCorpusRules"],
+          [
+            "Use the locked shared corpus {{sharedCorpus}} for any PaperNexus import produced by this requisition.",
+          ]
+        ),
+        promptValues
+      )
     );
   }
   return `${lines.join("\n")}\n`;
@@ -3652,6 +3784,7 @@ async function maybeTriggerQueuedLiteratureRequisitionRequest(params: {
     triggerKind: requisitionCandidate.triggerKind ?? params.triggerKind,
     manifestPath: requisitionCandidate.manifestPath,
     sharedCorpus: requisitionCandidate.sharedCorpus,
+    promptConfig: loadWorkflowFastPathPromptConfig(params.workflowPolicy),
   });
   const result = await startBackgroundWorkflowRun({
     workflowRuntime: params.workflowRuntime,
@@ -3875,6 +4008,7 @@ export async function maybeTriggerQueuedPaperIngestionRequest(params: {
     requestId: queuedCandidate.requestId,
     triggerKind: params.triggerKind,
     sharedCorpus: queuedCandidate.sharedCorpus,
+    promptConfig: loadWorkflowFastPathPromptConfig(params.workflowPolicy),
   });
 
   if (
@@ -4042,6 +4176,7 @@ async function queueBackgroundWorkflowUntilRuntimeRecovers(params: {
         buildBackgroundWorkflowContinuationSystemPrompt({
           kind: params.kind,
           commandText: params.commandText,
+          promptConfig: loadWorkflowFastPathPromptConfig(params.workflowPolicy),
         }),
         params.extraSystemPrompt
       ),
@@ -4372,6 +4507,7 @@ export async function startBackgroundWorkflowRun(params: {
   const continuationSystemPrompt = buildBackgroundWorkflowContinuationSystemPrompt({
     kind: normalizedKind,
     commandText,
+    promptConfig: loadWorkflowFastPathPromptConfig(params.workflowPolicy),
   });
   const mergedContinuationSystemPrompt = mergeBackgroundWorkflowSystemPrompt(
     continuationSystemPrompt,

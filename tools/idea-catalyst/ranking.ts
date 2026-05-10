@@ -4,6 +4,18 @@ export type IdeaFragment = {
   fragment_id: string;
   title: string;
   source_domain: string;
+  target_domain?: string | null;
+  transferred_mechanism?: string | null;
+  core_insight?: string | null;
+  integration_mechanism?: unknown;
+  challenge_resolution?: unknown;
+  concrete_realization?: unknown;
+  idea_fragment?: Record<string, unknown> | null;
+  evidence_tier?: string | null;
+  claim_cap?: string | null;
+  bridge_path_ids?: string[] | null;
+  source_spans?: unknown[] | null;
+  evidence_chain_refs?: unknown[] | null;
   novelty: number;
   feasibility: number;
   relevance: number;

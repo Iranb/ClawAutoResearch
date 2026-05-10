@@ -104,13 +104,13 @@ Use a layered test loop so live workflow repairs do not wait on full-suite runs 
 
 - Pre-test live session check: before every targeted test, full test, or live smoke involving the real AutoResearch project, inspect `.openclaw-research/workflow-runtime-sessions.json` in the live project and report active/bound session status before dispatching more work.
 - Inner loop: run only the tests that cover the touched file or reproduced bug. Prefer `node --test <test-file>` and `--test-name-pattern` when a single case is enough.
-- Workflow decision tests: use `tests/auto-iterator.test.mjs`, `tests/workflow-guard-modules.test.mjs`, `tests/workflow-fast-paths.test.mjs`, and `tests/workflow-service.test.mjs`.
-- Paper ingestion and graph catch-up tests: use `tests/graph-build-source-catchup.test.mjs`, `tests/workflow-fast-paths.test.mjs`, `tests/workflow-runtime-tools.test.mjs`, and `tests/idea-catalyst-runtime-tools.test.mjs`.
-- Runtime queue/session repair tests: use `tests/workflow-service.test.mjs`, `tests/workflow-runtime-tools.test.mjs`, and the narrow queue-related cases in `tests/workflow-fast-paths.test.mjs`.
-- Handoff and ownership tests: use `tests/workflow-handoff-activation.test.mjs`, `tests/workflow-handoff-intent.test.mjs`, `tests/workflow-auto-stage-handoff.test.mjs`, and `tests/stage-broadcast.test.mjs`.
-- Experiment routing tests: use `tests/experiment-decision-routing.test.mjs`, `tests/experiment-auto-review-loop.test.mjs`, and the experiment-focused cases in `tests/auto-iterator.test.mjs`.
-- Writing/review tests: use `tests/workflow-writing-lines-e2e.test.mjs`, `tests/workflow-writing-workbench.test.mjs`, and review/submit-focused cases in `tests/auto-iterator.test.mjs`.
-- Survey workflow tests: use `tests/survey-review-materializer.test.mjs` and survey-focused cases in `tests/auto-iterator.test.mjs`.
+- Workflow decision tests: use `npm run test:workflow:auto-iterator` and `npm run test:workflow:control-plane`, plus narrow files such as `tests/workflow/auto-iterator/auto-iterator.test.mjs` and `tests/workflow/guard/workflow-guard-modules.test.mjs`.
+- Paper ingestion and graph catch-up tests: use `npm run test:paper-ingestion`, `npm run test:workflow:runtime`, and `npm run test:idea-catalyst` for runtime-bridged ingestion cases.
+- Runtime queue/session repair tests: use `npm run test:workflow:runtime`, with narrow cases in `tests/workflow/runtime/workflow-service.test.mjs`, `tests/workflow/runtime/workflow-runtime-tools.test.mjs`, and `tests/workflow/runtime/workflow-fast-paths.test.mjs`.
+- Handoff and ownership tests: use `npm run test:workflow:handoff`, plus `tests/workflow/auto-iterator/workflow-auto-stage-handoff.test.mjs` when stage routing is involved.
+- Experiment routing tests: use `npm run test:experiment`, plus experiment-focused cases in `tests/workflow/auto-iterator/auto-iterator.test.mjs`.
+- Writing/review tests: use `npm run test:workflow:writing` and `npm run test:research-writing`, plus review/submit-focused cases in `tests/workflow/auto-iterator/auto-iterator.test.mjs`.
+- Survey workflow tests: use `npm run test:survey`, plus survey-focused cases in `tests/workflow/auto-iterator/auto-iterator.test.mjs`.
 - Live smoke: after syncing to `ClawAutoResearch`, run one real-project auto-iterator or worker replay that prints stage, owner, next action, blocking reason, missing signals, and PaperNexus graph presence. Do not repeat remote PaperNexus imports when the only observed blocker is an external corpus configuration such as a missing remote `EML` corpus.
 - Runtime sync: build in the development repo, then sync the minimum needed runtime artifacts to `ClawAutoResearch`. Avoid full iCloud-backed `rsync` loops unless files outside `dist/`, touched `tools/`, tests, or templates changed.
 
@@ -140,7 +140,7 @@ Avoid changelog-style noise. Report the real outcome and the remaining weak poin
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **ClawAutoResearch** (30808 symbols, 48895 relationships, 300 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **ClawAutoResearch** (30838 symbols, 48933 relationships, 300 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > If any GitNexus tool warns the index is stale, run `npx gitnexus analyze` in terminal first.
 

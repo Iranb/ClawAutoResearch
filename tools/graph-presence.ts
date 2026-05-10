@@ -66,6 +66,8 @@ type CorpusPaper = {
   paperTitle: string | null;
   sourceKey: string | null;
   activeInGraph: boolean;
+  graphIndexEvidence: Record<string, unknown> | null;
+  sourceSpanEvidence: Record<string, unknown> | null;
   arxivIds: Set<string>;
   dois: Set<string>;
   normalizedTitles: Set<string>;
@@ -84,6 +86,8 @@ export type GraphPresenceMatch = {
   corpusPaperId: string | null;
   corpusPaperTitle: string | null;
   corpusSourceKey: string | null;
+  graphIndexEvidence: Record<string, unknown> | null;
+  sourceSpanEvidence: Record<string, unknown> | null;
 };
 
 export type GraphPresenceMissingPaper = {
@@ -178,6 +182,7 @@ const PAPER_SOURCE_INDEX_CANDIDATE_KEYS = [
 
 const PAPER_SOURCE_INDEX_RELATIVE_PATHS = [
   path.join("researcher", "PAPER_SOURCE_INDEX.json"),
+  path.join("researcher", "paper_source", "PAPER_SOURCE_INDEX.json"),
   path.join("researcher", "paper-staging", "PAPER_SOURCE_INDEX.json"),
   path.join("graph", "PAPER_SOURCE_INDEX.json"),
 ] as const;
@@ -612,6 +617,20 @@ function hasImportableSourceSignal(paper: ExpectedPaper): boolean {
   return paper.sourceKind !== "unknown";
 }
 
+function expectedPaperSourceEvidenceScore(paper: ExpectedPaper): number {
+  let score = 0;
+  if (paper.sourceKind === "markdown" || paper.sourceKind === "pdf") {
+    score += 3;
+  }
+  if (paper.sourceHints.some((hint) => isImportableSourceHint(hint))) {
+    score += 2;
+  }
+  if (isExpectedPaperExplicitlyConfirmed(paper)) {
+    score += 1;
+  }
+  return score;
+}
+
 function expectedPapersAreMetadataOnly(papers: ExpectedPaper[]): boolean {
   return papers.length > 0 && papers.every((paper) => !hasImportableSourceSignal(paper));
 }
@@ -923,6 +942,8 @@ function buildPaperSourceIndexMatch(expected: ExpectedPaper): GraphPresenceMatch
     corpusPaperId: expected.graphPaperId ?? expected.graphNodeIds[0] ?? null,
     corpusPaperTitle: expected.title,
     corpusSourceKey: expected.sourceHints[0] ?? null,
+    graphIndexEvidence: null,
+    sourceSpanEvidence: null,
   };
 }
 
@@ -1115,26 +1136,44 @@ function isLocalPaperSourceHint(value: string): boolean {
   return !isRemoteSourceHint(value) && /\.(?:md|pdf)(?:$|[?#])/i.test(value.trim());
 }
 
-function resolveLocalPaperSourceHint(projectRoot: string, value: string): string {
-  return (
-    resolvePaperSourcePathCandidates({
-      projectRoot,
-      sourcePath: value,
-    })[0] ?? path.normalize(path.join(projectRoot, value.trim().replace(/[?#].*$/, "")))
-  );
+function resolveLocalPaperSourceHintCandidates(params: {
+  projectRoot: string;
+  value: string;
+  sourceIndexPath?: string | null;
+}): string[] {
+  const candidates = resolvePaperSourcePathCandidates({
+    projectRoot: params.projectRoot,
+    sourcePath: params.value,
+    sourceIndexPath: params.sourceIndexPath,
+  });
+  if (candidates.length > 0) {
+    return candidates;
+  }
+  return [
+    path.normalize(
+      path.join(params.projectRoot, params.value.trim().replace(/[?#].*$/, ""))
+    ),
+  ];
 }
 
 async function normalizeExpectedPaperAvailableSources(params: {
   projectRoot: string;
   paper: ExpectedPaper;
+  sourceIndexPath?: string | null;
 }): Promise<ExpectedPaper> {
   const plannedPath = params.paper.plannedStagingPath;
   if (!plannedPath || !isLocalPaperSourceHint(plannedPath)) {
     return params.paper;
   }
-  const resolved = resolveLocalPaperSourceHint(params.projectRoot, plannedPath);
-  if (await pathExists(resolved)) {
-    return params.paper;
+  const resolvedCandidates = resolveLocalPaperSourceHintCandidates({
+    projectRoot: params.projectRoot,
+    value: plannedPath,
+    sourceIndexPath: params.sourceIndexPath,
+  });
+  for (const resolved of resolvedCandidates) {
+    if (await pathExists(resolved)) {
+      return params.paper;
+    }
   }
   const sourceHints = uniqueStrings(
     params.paper.sourceHints.filter((hint) => hint !== plannedPath)
@@ -1150,12 +1189,14 @@ async function normalizeExpectedPaperAvailableSources(params: {
 async function normalizeExpectedPapersAvailableSources(params: {
   projectRoot: string;
   papers: ExpectedPaper[];
+  sourceIndexPath?: string | null;
 }): Promise<ExpectedPaper[]> {
   return Promise.all(
     params.papers.map((paper) =>
       normalizeExpectedPaperAvailableSources({
         projectRoot: params.projectRoot,
         paper,
+        sourceIndexPath: params.sourceIndexPath,
       })
     )
   );
@@ -1266,6 +1307,12 @@ async function resolveExpectedPapers(params: {
 }): Promise<ResolvedExpectedPapers> {
   let fallbackPaperSourceIndexPath: string | null = null;
   let fallbackPaperSourceIndex: unknown = null;
+  const indexedCandidates: Array<{
+    papers: ExpectedPaper[];
+    importablePapers: ExpectedPaper[];
+    paperSourceIndexPath: string;
+    paperSourceIndex: unknown;
+  }> = [];
   for (const relativePath of PAPER_SOURCE_INDEX_RELATIVE_PATHS) {
     const paperSourceIndexPath = path.join(params.projectRoot, relativePath);
     const paperSourceIndex = await readJsonIfExists<unknown>(paperSourceIndexPath);
@@ -1280,36 +1327,58 @@ async function resolveExpectedPapers(params: {
     const indexedPapers = await normalizeExpectedPapersAvailableSources({
       projectRoot: params.projectRoot,
       papers: parsePaperSourceIndex(paperSourceIndex),
+      sourceIndexPath: paperSourceIndexPath,
     });
     if (indexedPapers.length > 0) {
       const importablePapers = indexedPapers.filter((paper) =>
         hasImportableSourceSignal(paper)
       );
-      if (importablePapers.length === 0) {
-        return {
-          papers: indexedPapers,
-          paperSourceIndexPath,
-          usedPaperSourceIndex: true,
-          expectedPaperCountHint: indexedPapers.length,
-          summaryOnly: false,
-          graphPresenceOverride: resolvePaperSourceIndexGraphPresenceOverride(paperSourceIndex),
-          sourceIndexUpdatedAt:
-            pickString(asRecord(paperSourceIndex), ["updated_at", "updatedAt"]) ??
-            pickString(asRecord(paperSourceIndex), ["created_at", "createdAt"]),
-        };
-      }
-      return {
-        papers: importablePapers,
+      indexedCandidates.push({
+        papers: indexedPapers,
+        importablePapers,
         paperSourceIndexPath,
-        usedPaperSourceIndex: true,
-        expectedPaperCountHint: importablePapers.length,
-        summaryOnly: false,
-        graphPresenceOverride: resolvePaperSourceIndexGraphPresenceOverride(paperSourceIndex),
-        sourceIndexUpdatedAt:
-          pickString(asRecord(paperSourceIndex), ["updated_at", "updatedAt"]) ??
-          pickString(asRecord(paperSourceIndex), ["created_at", "createdAt"]),
-      };
+        paperSourceIndex,
+      });
     }
+  }
+  const selectedCandidate =
+    indexedCandidates
+      .map((candidate) => ({
+        candidate,
+        score: candidate.papers.reduce(
+          (total, paper) => total + expectedPaperSourceEvidenceScore(paper),
+          0
+        ),
+      }))
+      .sort((left, right) => right.score - left.score)
+      .find((entry) => entry.score > 0)?.candidate ??
+    indexedCandidates.find((candidate) => candidate.importablePapers.length > 0) ??
+    indexedCandidates[0] ??
+    null;
+  if (selectedCandidate) {
+    const selectedPapers =
+      selectedCandidate.importablePapers.length > 0
+        ? selectedCandidate.importablePapers
+        : selectedCandidate.papers;
+    return {
+      papers: selectedPapers,
+      paperSourceIndexPath: selectedCandidate.paperSourceIndexPath,
+      usedPaperSourceIndex: true,
+      expectedPaperCountHint: selectedPapers.length,
+      summaryOnly: false,
+      graphPresenceOverride: resolvePaperSourceIndexGraphPresenceOverride(
+        selectedCandidate.paperSourceIndex
+      ),
+      sourceIndexUpdatedAt:
+        pickString(asRecord(selectedCandidate.paperSourceIndex), [
+          "updated_at",
+          "updatedAt",
+        ]) ??
+        pickString(asRecord(selectedCandidate.paperSourceIndex), [
+          "created_at",
+          "createdAt",
+        ]),
+    };
   }
   const summaryCountHint = resolvePaperSourceIndexCountHint(fallbackPaperSourceIndex);
   const manifestCountHint = resolveManifestGraphPresenceCountHint(params.manifest);
@@ -1424,7 +1493,9 @@ function resolvePreferredPapernexusCorpusName(params: {
       ]),
       pickString(params.manifest, ["papernexus_corpus"]),
       params.sharedCorpus,
-      pickString(params.statusRecord ?? null, ["corpus_name", "corpusName"]),
+      shouldAutodiscover
+        ? null
+        : pickString(params.statusRecord ?? null, ["corpus_name", "corpusName"]),
     ],
     projectId: params.projectId,
     projectRoot: params.projectRoot,
@@ -1462,7 +1533,21 @@ function resolvePreferredPapernexusCorpusRoot(params: {
   );
 }
 
+function pickEvidenceRecord(
+  source: Record<string, unknown>,
+  keys: string[]
+): Record<string, unknown> | null {
+  for (const key of keys) {
+    const record = asRecord(source[key]);
+    if (record) {
+      return record;
+    }
+  }
+  return null;
+}
+
 function buildCorpusPaper(entry: Record<string, unknown>): CorpusPaper {
+  const identifiers = asRecord(entry.identifiers);
   const sourceHints = uniqueStrings([
     pickString(entry, ["sourceKey", "source_key"]),
     pickString(entry, ["inputPath", "input_path"]),
@@ -1472,23 +1557,55 @@ function buildCorpusPaper(entry: Record<string, unknown>): CorpusPaper {
     pickString(entry, ["canonicalSourceKey", "canonical_source_key"]),
     pickString(entry, ["duplicateOfSourceKey", "duplicate_of_source_key"]),
   ].filter((item): item is string => Boolean(item)));
+  const arxivIdHints = uniqueStrings([
+    pickString(entry, ["arxivId", "arxiv_id", "arxiv"]),
+    pickString(identifiers, ["arxivId", "arxiv_id", "arxiv"]),
+  ].filter((item): item is string => Boolean(item)));
+  const doiHints = uniqueStrings([
+    pickString(entry, ["doi"]),
+    pickString(identifiers, ["doi"]),
+  ].filter((item): item is string => Boolean(item)));
   const paperTitle = pickString(entry, ["paperTitle", "paper_title", "title"]);
   const titleHints = uniqueStrings([
     paperTitle,
     ...sourceHints.map((hint) => path.basename(hint, path.extname(hint))),
   ].filter((item): item is string => Boolean(item)));
+  const arxivIds = uniqueStrings([
+    ...sourceHints.flatMap((hint) => extractArxivIds(hint)),
+    ...arxivIdHints
+      .map((hint) => normalizeArxivId(hint))
+      .filter((item): item is string => Boolean(item)),
+  ]);
+  const dois = uniqueStrings([
+    ...sourceHints.flatMap((hint) => extractDois(hint)),
+    ...doiHints
+      .map((hint) => normalizeDoi(hint))
+      .filter((item): item is string => Boolean(item)),
+  ]);
   return {
     paperId: pickString(entry, ["paperId", "paper_id"]),
     paperTitle,
     sourceKey: pickString(entry, ["sourceKey", "source_key"]),
+    graphIndexEvidence: pickEvidenceRecord(entry, [
+      "graphIndexEvidence",
+      "graph_index_evidence",
+      "graphIndex",
+      "graph_index",
+    ]),
+    sourceSpanEvidence: pickEvidenceRecord(entry, [
+      "sourceSpanEvidence",
+      "source_span_evidence",
+      "sourceSpans",
+      "source_spans",
+    ]),
     activeInGraph:
       typeof entry.activeInGraph === "boolean"
         ? entry.activeInGraph
         : typeof entry.active_in_graph === "boolean"
           ? Boolean(entry.active_in_graph)
           : true,
-    arxivIds: new Set(sourceHints.flatMap((hint) => extractArxivIds(hint))),
-    dois: new Set(sourceHints.flatMap((hint) => extractDois(hint))),
+    arxivIds: new Set(arxivIds),
+    dois: new Set(dois),
     normalizedTitles: new Set(
       titleHints
         .map((value) => normalizeTitle(value))
@@ -1506,6 +1623,59 @@ function buildCorpusPaper(entry: Record<string, unknown>): CorpusPaper {
   };
 }
 
+function buildGraphPresenceMatch(
+  expected: ExpectedPaper,
+  match: CorpusPaper,
+  matchedBy: GraphPresenceMatch["matchedBy"]
+): GraphPresenceMatch {
+  return {
+    canonicalId: expected.canonicalId,
+    title: expected.title,
+    sourceKind: expected.sourceKind,
+    sourceProvider: expected.sourceProvider,
+    retrievalProviders: expected.retrievalProviders,
+    matchedBy,
+    corpusPaperId: match.paperId,
+    corpusPaperTitle: match.paperTitle,
+    corpusSourceKey: match.sourceKey,
+    graphIndexEvidence: match.graphIndexEvidence,
+    sourceSpanEvidence: match.sourceSpanEvidence,
+  };
+}
+
+function buildRemoteCorpusSummaryMatch(params: {
+  entry: Record<string, unknown>;
+  paper: CorpusPaper;
+  index: number;
+}): GraphPresenceMatch {
+  const sourceHints = [...params.paper.sourceHints];
+  const sourceKind = inferSourceKind(sourceHints);
+  const arxivId = [...params.paper.arxivIds][0] ?? null;
+  const doi = [...params.paper.dois][0] ?? null;
+  const canonicalId =
+    pickString(params.entry, ["canonicalId", "canonical_id"]) ??
+    (arxivId ? `arxiv:${arxivId}` : null) ??
+    (doi ? `doi:${doi}` : null) ??
+    params.paper.paperId ??
+    params.paper.sourceKey ??
+    `remote-corpus-paper-${params.index + 1}`;
+  return {
+    canonicalId,
+    title: params.paper.paperTitle,
+    sourceKind,
+    sourceProvider:
+      pickString(params.entry, ["sourceProvider", "source_provider"]) ??
+      inferSourceProvider(params.entry, sourceKind, sourceHints),
+    retrievalProviders: collectRetrievalProviders(params.entry),
+    matchedBy: "source_path",
+    corpusPaperId: params.paper.paperId,
+    corpusPaperTitle: params.paper.paperTitle,
+    corpusSourceKey: params.paper.sourceKey,
+    graphIndexEvidence: params.paper.graphIndexEvidence,
+    sourceSpanEvidence: params.paper.sourceSpanEvidence,
+  };
+}
+
 function matchExpectedPaper(
   expected: ExpectedPaper,
   corpus: CorpusPaper[]
@@ -1515,34 +1685,14 @@ function matchExpectedPaper(
   if (expected.arxivId) {
     const match = activeCorpus.find((entry) => entry.arxivIds.has(expected.arxivId as string));
     if (match) {
-      return {
-        canonicalId: expected.canonicalId,
-        title: expected.title,
-        sourceKind: expected.sourceKind,
-        sourceProvider: expected.sourceProvider,
-        retrievalProviders: expected.retrievalProviders,
-        matchedBy: "arxiv",
-        corpusPaperId: match.paperId,
-        corpusPaperTitle: match.paperTitle,
-        corpusSourceKey: match.sourceKey,
-      };
+      return buildGraphPresenceMatch(expected, match, "arxiv");
     }
   }
 
   if (expected.doi) {
     const match = activeCorpus.find((entry) => entry.dois.has(expected.doi as string));
     if (match) {
-      return {
-        canonicalId: expected.canonicalId,
-        title: expected.title,
-        sourceKind: expected.sourceKind,
-        sourceProvider: expected.sourceProvider,
-        retrievalProviders: expected.retrievalProviders,
-        matchedBy: "doi",
-        corpusPaperId: match.paperId,
-        corpusPaperTitle: match.paperTitle,
-        corpusSourceKey: match.sourceKey,
-      };
+      return buildGraphPresenceMatch(expected, match, "doi");
     }
   }
 
@@ -1555,17 +1705,7 @@ function matchExpectedPaper(
     sourceBasenames.some((basename) => entry.sourceBasenames.has(basename))
   );
   if (sourcePathMatch) {
-    return {
-      canonicalId: expected.canonicalId,
-      title: expected.title,
-      sourceKind: expected.sourceKind,
-      sourceProvider: expected.sourceProvider,
-      retrievalProviders: expected.retrievalProviders,
-      matchedBy: "source_path",
-      corpusPaperId: sourcePathMatch.paperId,
-      corpusPaperTitle: sourcePathMatch.paperTitle,
-      corpusSourceKey: sourcePathMatch.sourceKey,
-    };
+    return buildGraphPresenceMatch(expected, sourcePathMatch, "source_path");
   }
 
   if (expected.normalizedTitle) {
@@ -1573,17 +1713,7 @@ function matchExpectedPaper(
       entry.normalizedTitles.has(expected.normalizedTitle as string)
     );
     if (match) {
-      return {
-        canonicalId: expected.canonicalId,
-        title: expected.title,
-        sourceKind: expected.sourceKind,
-        sourceProvider: expected.sourceProvider,
-        retrievalProviders: expected.retrievalProviders,
-        matchedBy: "title",
-        corpusPaperId: match.paperId,
-        corpusPaperTitle: match.paperTitle,
-        corpusSourceKey: match.sourceKey,
-      };
+      return buildGraphPresenceMatch(expected, match, "title");
     }
   }
 
@@ -1592,17 +1722,7 @@ function matchExpectedPaper(
       entry.titleSignatures.has(expected.titleSignature as string)
     );
     if (match) {
-      return {
-        canonicalId: expected.canonicalId,
-        title: expected.title,
-        sourceKind: expected.sourceKind,
-        sourceProvider: expected.sourceProvider,
-        retrievalProviders: expected.retrievalProviders,
-        matchedBy: "title",
-        corpusPaperId: match.paperId,
-        corpusPaperTitle: match.paperTitle,
-        corpusSourceKey: match.sourceKey,
-      };
+      return buildGraphPresenceMatch(expected, match, "title");
     }
   }
 
@@ -1618,17 +1738,7 @@ function matchExpectedPaper(
       )
     );
     if (match) {
-      return {
-        canonicalId: expected.canonicalId,
-        title: expected.title,
-        sourceKind: expected.sourceKind,
-        sourceProvider: expected.sourceProvider,
-        retrievalProviders: expected.retrievalProviders,
-        matchedBy: "title",
-        corpusPaperId: match.paperId,
-        corpusPaperTitle: match.paperTitle,
-        corpusSourceKey: match.sourceKey,
-      };
+      return buildGraphPresenceMatch(expected, match, "title");
     }
   }
 
@@ -2023,6 +2133,8 @@ function serializePresentPapers(presentPapers: GraphPresenceMatch[]) {
     corpus_paper_id: paper.corpusPaperId,
     corpus_paper_title: paper.corpusPaperTitle,
     corpus_source_key: paper.corpusSourceKey,
+    graph_index_evidence: paper.graphIndexEvidence,
+    source_span_evidence: paper.sourceSpanEvidence,
   }));
 }
 
@@ -2070,6 +2182,18 @@ function deserializePresentPapers(value: unknown): GraphPresenceMatch[] {
       corpusSourceKey: pickString(entry, [
         "corpus_source_key",
         "corpusSourceKey",
+      ]),
+      graphIndexEvidence: pickEvidenceRecord(entry, [
+        "graph_index_evidence",
+        "graphIndexEvidence",
+        "graph_index",
+        "graphIndex",
+      ]),
+      sourceSpanEvidence: pickEvidenceRecord(entry, [
+        "source_span_evidence",
+        "sourceSpanEvidence",
+        "source_spans",
+        "sourceSpans",
       ]),
     }));
 }
@@ -2354,6 +2478,13 @@ function buildRemoteStatusRecordFromSources(params: {
   }
 
   const summaryOnly = params.expectedPapers.length === 0 && expectedPaperCount > 0;
+  const summaryPresentPapers = summaryOnly
+    ? corpusEntries
+        .map((paper, index) => ({ entry: sources[index] ?? {}, paper, index }))
+        .filter(({ paper }) => paper.activeInGraph)
+        .slice(0, expectedPaperCount)
+        .map(buildRemoteCorpusSummaryMatch)
+    : [];
   const presentPaperCount = summaryOnly
     ? Math.min(summaryReportedPaperCount, expectedPaperCount)
     : presentPapers.length;
@@ -2389,7 +2520,9 @@ function buildRemoteStatusRecordFromSources(params: {
     present_paper_count: presentPaperCount,
     missing_paper_count: missingPaperCount,
     missing_papers: serializeMissingPapers(missingPapers),
-    present_papers: serializePresentPapers(presentPapers),
+    present_papers: serializePresentPapers(
+      summaryOnly ? summaryPresentPapers : presentPapers
+    ),
     refresh_required: status !== "ready",
     refresh_reason:
       status === "ready"

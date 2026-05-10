@@ -18,6 +18,13 @@ import {
   type TitleCandidate,
 } from "../workflow-guard-state/title-abstract-intro-workbench";
 import { normalizeWritingContractState } from "../workflow-guard-state/writing-contract";
+import {
+  getPromptLines,
+  getPromptText,
+  loadWorkflowPromptConfig,
+  renderPromptTemplate,
+  type WorkflowPromptConfig,
+} from "../workflow-prompt-config";
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -92,27 +99,43 @@ function buildTitleCandidates(params: {
   mechanism: string | null;
   outcome: string | null;
   implication: string | null;
+  promptConfig?: WorkflowPromptConfig | null;
 }): TitleCandidate[] {
   const problem = titleizeFragment(params.problem, "Support Precision");
   const mechanism = titleizeFragment(params.mechanism, "Graph-Grounded Routing");
   const outcome = titleizeFragment(params.outcome, "Evidence-Aligned Narratives");
   const implication = titleizeFragment(params.implication, "Reviewer-Defensible Writing");
-  const rawTitles =
+  const rawTitles = getPromptLines(
+    params.promptConfig,
+    [
+      "paperWriting",
+      "titleAbstractIntroWorkbench",
+      "titleTemplates",
+      params.workflowLine,
+    ],
     params.workflowLine === "survey"
       ? [
-          `${problem}: A Survey of ${mechanism}`,
-          `${mechanism} for ${problem}`,
-          `${problem} Through ${mechanism}`,
-          `${problem}: Benchmark Landscape, Taxonomy, and Open Problems`,
-          `${mechanism}: A Structured Survey Lens for ${problem}`,
+          "{{problem}}: A Survey of {{mechanism}}",
+          "{{mechanism}} for {{problem}}",
+          "{{problem}} Through {{mechanism}}",
+          "{{problem}}: Benchmark Landscape, Taxonomy, and Open Problems",
+          "{{mechanism}}: A Structured Survey Lens for {{problem}}",
         ]
       : [
-          `${mechanism} for ${problem}`,
-          `${problem} Through ${mechanism}`,
-          `${mechanism}: ${outcome} Without Losing ${implication}`,
-          `${outcome} via ${mechanism}`,
-          `${problem}: ${mechanism} as a Story-Aligned Evidence Layer`,
-        ];
+          "{{mechanism}} for {{problem}}",
+          "{{problem}} Through {{mechanism}}",
+          "{{mechanism}}: {{outcome}} Without Losing {{implication}}",
+          "{{outcome}} via {{mechanism}}",
+          "{{problem}}: {{mechanism}} as a Story-Aligned Evidence Layer",
+        ]
+  ).map((template) =>
+    renderPromptTemplate(template, {
+      problem,
+      mechanism,
+      outcome,
+      implication,
+    })
+  );
   return rawTitles.map((title, index) => {
     const riskFlags = hasWeakTitlePattern(title) ? ["weak_title_pattern"] : [];
     return {
@@ -154,19 +177,25 @@ function renderAbstractWorkbench(params: {
   mechanism: string | null;
   result: string | null;
   implication: string | null;
+  promptConfig?: WorkflowPromptConfig | null;
 }): string {
+  const configRoot = [
+    "paperWriting",
+    "titleAbstractIntroWorkbench",
+    "abstractWorkbench",
+  ];
   return [
-    "# Abstract 5-Sentence Workbench",
+    getPromptText(params.promptConfig, [...configRoot, "heading"], "# Abstract 5-Sentence Workbench"),
     "",
-    `1. Problem\n${sentenceCase(params.problem, "State the real problem and why it matters.")}.`,
+    `${getPromptText(params.promptConfig, [...configRoot, "problemLabel"], "1. Problem")}\n${sentenceCase(params.problem, getPromptText(params.promptConfig, [...configRoot, "problemFallback"], "State the real problem and why it matters."))}.`,
     "",
-    `2. Gap\n${sentenceCase(params.gap, "State what current work still does not explain or support cleanly.")}.`,
+    `${getPromptText(params.promptConfig, [...configRoot, "gapLabel"], "2. Gap")}\n${sentenceCase(params.gap, getPromptText(params.promptConfig, [...configRoot, "gapFallback"], "State what current work still does not explain or support cleanly."))}.`,
     "",
-    `3. Method / Mechanism\n${sentenceCase(params.mechanism, params.workflowLine === "survey" ? "State the survey's organizing lens or synthesis mechanism." : "State the mechanism or system-level move that closes the gap.")}.`,
+    `${getPromptText(params.promptConfig, [...configRoot, "mechanismLabel"], "3. Method / Mechanism")}\n${sentenceCase(params.mechanism, getPromptText(params.promptConfig, [...configRoot, params.workflowLine === "survey" ? "surveyMechanismFallback" : "experimentMechanismFallback"], params.workflowLine === "survey" ? "State the survey's organizing lens or synthesis mechanism." : "State the mechanism or system-level move that closes the gap."))}.`,
     "",
-    `4. Key Result\n${sentenceCase(params.result, params.workflowLine === "survey" ? "State the most important comparative or structural synthesis result." : "State the strongest evidence-backed result in one sentence.")}.`,
+    `${getPromptText(params.promptConfig, [...configRoot, "resultLabel"], "4. Key Result")}\n${sentenceCase(params.result, getPromptText(params.promptConfig, [...configRoot, params.workflowLine === "survey" ? "surveyResultFallback" : "experimentResultFallback"], params.workflowLine === "survey" ? "State the most important comparative or structural synthesis result." : "State the strongest evidence-backed result in one sentence."))}.`,
     "",
-    `5. Implication / Boundary\n${sentenceCase(params.implication, "State what this changes and keep the boundary explicit.")}.`,
+    `${getPromptText(params.promptConfig, [...configRoot, "implicationLabel"], "5. Implication / Boundary")}\n${sentenceCase(params.implication, getPromptText(params.promptConfig, [...configRoot, "implicationFallback"], "State what this changes and keep the boundary explicit."))}.`,
   ].join("\n");
 }
 
@@ -176,39 +205,50 @@ function renderIntroWorkbench(params: {
   mechanism: string | null;
   evidenceAnchor: string | null;
   resultArc: string | null;
+  promptConfig?: WorkflowPromptConfig | null;
 }): string {
+  const configRoot = [
+    "paperWriting",
+    "titleAbstractIntroWorkbench",
+    "introWorkbench",
+  ];
   return [
-    "# Intro 5-Paragraph Workbench",
+    getPromptText(params.promptConfig, [...configRoot, "heading"], "# Intro 5-Paragraph Workbench"),
     "",
-    "## Paragraph 1: Why This Problem Matters",
+    getPromptText(params.promptConfig, [...configRoot, "paragraph1Heading"], "## Paragraph 1: Why This Problem Matters"),
     `- Core message: ${sentenceCase(params.problem, "Explain why the problem matters now.")}`,
-    "- Reader job: establish stakes, not details.",
+    `- Reader job: ${getPromptText(params.promptConfig, [...configRoot, "paragraph1ReaderJob"], "establish stakes, not details.")}`,
     "",
-    "## Paragraph 2: Why Current Work Is Insufficient",
+    getPromptText(params.promptConfig, [...configRoot, "paragraph2Heading"], "## Paragraph 2: Why Current Work Is Insufficient"),
     `- Core message: ${sentenceCase(params.gap, "Explain what the strongest current line still misses.")}`,
-    "- Reader job: make the gap feel real and reviewable.",
+    `- Reader job: ${getPromptText(params.promptConfig, [...configRoot, "paragraph2ReaderJob"], "make the gap feel real and reviewable.")}`,
     "",
-    "## Paragraph 3: What Unified Lens or Mechanism This Paper Adds",
+    getPromptText(params.promptConfig, [...configRoot, "paragraph3Heading"], "## Paragraph 3: What Unified Lens or Mechanism This Paper Adds"),
     `- Core message: ${sentenceCase(params.mechanism, "State the unified mechanism or synthesis lens.")}`,
-    "- Reader job: make the paper feel like one thesis, not a feature stack.",
+    `- Reader job: ${getPromptText(params.promptConfig, [...configRoot, "paragraph3ReaderJob"], "make the paper feel like one thesis, not a feature stack.")}`,
     "",
-    "## Paragraph 4: Why The Reader Should Believe It",
+    getPromptText(params.promptConfig, [...configRoot, "paragraph4Heading"], "## Paragraph 4: Why The Reader Should Believe It"),
     `- Core message: ${sentenceCase(params.evidenceAnchor, "Summarize the evidence arc that makes the thesis credible.")}`,
-    "- Reader job: preview the proof path without replaying the Results section.",
+    `- Reader job: ${getPromptText(params.promptConfig, [...configRoot, "paragraph4ReaderJob"], "preview the proof path without replaying the Results section.")}`,
     "",
-    "## Paragraph 5: What The Reader Should Expect Next",
+    getPromptText(params.promptConfig, [...configRoot, "paragraph5Heading"], "## Paragraph 5: What The Reader Should Expect Next"),
     `- Core message: ${sentenceCase(params.resultArc, "Preview the section order and the argument order the manuscript will follow.")}`,
-    "- Reader job: hand the reader from framing into the paper's actual proof sequence.",
+    `- Reader job: ${getPromptText(params.promptConfig, [...configRoot, "paragraph5ReaderJob"], "hand the reader from framing into the paper's actual proof sequence.")}`,
   ].join("\n");
 }
 
 export async function materializeTitleAbstractIntroWorkbench(params: {
   projectRoot: string;
   stage?: string | null;
+  promptConfigPath?: string | null;
+  promptConfig?: WorkflowPromptConfig | null;
 }): Promise<{
   state: TitleAbstractIntroWorkbenchState;
   generatedFiles: string[];
 }> {
+  const promptConfig =
+    params.promptConfig ??
+    loadWorkflowPromptConfig({ configPath: params.promptConfigPath ?? null });
   const projectRoot = path.resolve(params.projectRoot);
   const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
   const manifest = (await readJsonIfExists<Record<string, unknown>>(manifestPath)) ?? {};
@@ -277,6 +317,7 @@ export async function materializeTitleAbstractIntroWorkbench(params: {
     mechanism,
     outcome: result,
     implication,
+    promptConfig,
   });
   const selectedTitle =
     candidates.find((entry) => entry.alignment === "aligned")?.title ??
@@ -344,6 +385,7 @@ export async function materializeTitleAbstractIntroWorkbench(params: {
         mechanism,
         result,
         implication,
+        promptConfig,
       })}\n`
     );
     generatedFiles.push(state.abstractWorkbenchPath ?? "");
@@ -357,6 +399,7 @@ export async function materializeTitleAbstractIntroWorkbench(params: {
         mechanism,
         evidenceAnchor: firstMeaningfulLine(resultsQuestionOrderText, claimMapText),
         resultArc: firstMeaningfulLine(resultsQuestionOrderText, mainTexText),
+        promptConfig,
       })}\n`
     );
     generatedFiles.push(state.introWorkbenchPath ?? "");

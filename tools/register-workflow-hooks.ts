@@ -1067,7 +1067,11 @@ export function registerWorkflowHooks(plugin: PluginRegistrationContext) {
           const detailLevel = shouldUseFocusedWorkflowPrompt(snapshot) ? "focused" : "full";
           const focusedAssembly =
             detailLevel === "focused"
-              ? buildFocusedPromptAssembly({ snapshot, trigger })
+              ? buildFocusedPromptAssembly({
+                  snapshot,
+                  trigger,
+                  promptConfigPath: workflowPolicy.promptConfigPath,
+                })
               : null;
           const workflowPrompt =
             focusedAssembly?.text ??
@@ -1075,6 +1079,7 @@ export function registerWorkflowHooks(plugin: PluginRegistrationContext) {
               snapshot,
               trigger,
               detailLevel,
+              promptConfigPath: workflowPolicy.promptConfigPath,
             });
           if (detailLevel === "focused" && snapshot.projectRoot) {
             await appendWorkflowTraceEvent({

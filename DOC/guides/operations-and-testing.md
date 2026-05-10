@@ -79,11 +79,14 @@ npm test
 
 含义分别是：
 
-- `npm run build`  
+- `npm run build`
   执行 TypeScript 编译
 
-- `npm test`  
-  使用 Node 原生 test runner 运行 `tests/*.test.mjs`
+- `npm test`
+  使用 Node 原生 test runner 递归运行 `tests/` 下所有 `*.test.mjs`
+
+- `npm run test:<模块>`
+  只运行对应功能模块，例如 `npm run test:workflow:auto-iterator`、`npm run test:workflow:commands`、`npm run test:workflow:runtime`、`npm run test:paper-ingestion`、`npm run test:survey`
 
 ## 5. 当前已经存在的自动迭代测试
 
@@ -93,9 +96,9 @@ npm test
 - setup 条件齐全时自动推进到 `graph_build`
 - submit 材料齐全后在强制人工 gate 停下
 
-这些测试位于：
+这些测试现在位于：
 
-- `tests/auto-iterator.test.mjs`
+- `tests/workflow/auto-iterator/auto-iterator.test.mjs`
 
 ## 6. 推荐的扩展测试方向
 

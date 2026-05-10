@@ -83,6 +83,7 @@
     "./academic_writer/paper-compile",
     "./academic_writer/paper-phase",
     "./academic_writer/ai-research-prompt",
+    "./academic_writer/paperguru-prompt-pack",
     "./academic_writer/research-paper-writing",
     "./academic_writer/venue-templates",
     "./academic_writer/resume-pipeline",

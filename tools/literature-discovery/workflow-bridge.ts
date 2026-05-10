@@ -106,8 +106,54 @@ function buildLiteratureDiscoveryBatchManifest(params: {
 }) {
   return {
     version: 1,
+    controller: "papernexus",
+    operation: "literature_discovery_import",
     defaults: params.sharedCorpus ? { corpus: params.sharedCorpus } : {},
     papers: [],
+    run_handle: {
+      run_id: null,
+      task_ids: [],
+      artifact_path: null,
+      queue_progress_path: null,
+    },
+    refresh_policy: "reuse_existing_handle",
+    fallback: {
+      allow_metadata_supported_survey: true,
+      allow_degraded_graph_continue: true,
+    },
+    papernexus_literature_discovery: {
+      operation: "ingest",
+      async_fallback_operation: "import",
+      supplement_operation: "supplement",
+      prefer_markdown: true,
+      generate_arxiv_markdown_sources: true,
+      preserve_metadata_graph: true,
+      preserve_metadata_only_candidates: true,
+      accepted_candidate_source_kinds: ["markdown", "pdf", "metadata"],
+      source_resolution: {
+        preferred_source_kind: "markdown",
+        pdf_fallback: true,
+        metadata_only_status: "metadata_only_unresolved",
+      },
+      supplementation: {
+        tool: "literature_discovery",
+        reserved_operation: "supplement",
+        preferred_source_kind: "markdown",
+        accepted_inputs: [
+          "candidateId",
+          "canonicalId",
+          "sourcePath",
+          "markdownUrl",
+          "pdfUrl",
+          "paperMetadata",
+        ],
+      },
+      artifacts: {
+        run_handle_path: null,
+        metadata_graph_path: null,
+        source_index_path: "researcher/PAPER_SOURCE_INDEX.json",
+      },
+    },
     literature_discovery: {
       discovery_id:
         pickString(params.packet, ["discovery_id", "discoveryId"]) ??
@@ -181,12 +227,15 @@ function buildLiteratureDiscoveryCommandText(params: {
     `Origin stage: ${params.originStage ?? "unknown"}`,
     `Target reentry path: ${(reentry.length > 0 ? reentry : ["graph_build", "frontier_mapping", "idea"]).join(" -> ")}`,
     "",
-    "Execute this as a bounded workflow-owned literature discovery pass:",
-    "1. Read the discovery packet and collect only the papers that close the stated evidence gaps.",
-    "2. Use the project-local paper collection workflow to identify, retrieve, and stage candidate Markdown/PDF sources; update PAPER_SOURCE_INDEX.json and staging metadata durably.",
-    "3. Once candidate papers are staged, materialize one real batch import manifest for the staged local sources that should be imported into the shared graph.",
-    "4. Run one manifest-driven PaperNexus batch import for the collected sources and keep progress durable through research_workflow.set_paper_ingestion.",
-    "5. After the import finishes, rerun /graph-build so the workflow can refresh graph presence, frontier packets, and then continue from the appropriate downstream stage.",
+    "Execute this as a bounded PaperNexus-native literature discovery pass:",
+    "1. Read the discovery packet and submit or refresh one PaperNexus MCP literature_discovery run for the stated evidence gaps.",
+    "2. Prefer operation: ingest with importResolved=true, processImports=true, preferMarkdown=true, and generateArxivMarkdownSources=true when the pass is bounded enough to process inline; use operation: import only when import queue processing must remain asynchronous.",
+    "3. Preserve the returned metadataGraph, partialPaperCount, resolutionSummary/coverage, source.supplementation, local Markdown/PDF paths, markdownUrl/pdfUrl hints, import task ids, queue progress, and shared corpus in paper_ingestion artifacts.",
+    "4. For metadata-only candidates, keep them as coverage/taxonomy/search-direction records and use literature_discovery operation: supplement when a later Markdown/PDF/local source or URL becomes available.",
+    "5. Poll PaperNexus import_workflow queue_progress for existing task ids instead of resubmitting discovery when a run handle already exists.",
+    "6. Refresh graph presence from PaperNexus corpus_sources after import tasks reach a terminal state.",
+    "7. If full text cannot be legally resolved for every candidate, preserve metadata-only candidates as limitations rather than blocking downstream survey planning; do not use them as source-backed manuscript proof.",
+    "8. Re-enter /graph-build or /survey-review so AutoResearch can materialize local read-model artifacts from the PaperNexus discovery/graph evidence before downstream handoff.",
     "",
     `Discovery reason: ${pickString(params.packet, ["discovery_reason", "discoveryReason"]) ?? "unset"}`,
     `Target domains: ${targetDomains.length > 0 ? targetDomains.join(", ") : "unset"}`,
@@ -328,7 +377,16 @@ export async function queueLiteratureDiscoveryRequisition(params: {
     queuedRequests: [...paperIngestion.queuedRequests, normalizedRequest],
     lastUpdatedAt: normalizedRequest.updatedAt ?? new Date().toISOString(),
   };
-  manifest.paper_ingestion = serializePaperIngestionState(nextPaperIngestion);
+  const paperIngestionRecord =
+    manifest.paper_ingestion &&
+    typeof manifest.paper_ingestion === "object" &&
+    !Array.isArray(manifest.paper_ingestion)
+      ? (manifest.paper_ingestion as Record<string, unknown>)
+      : {};
+  manifest.paper_ingestion = {
+    ...paperIngestionRecord,
+    ...serializePaperIngestionState(nextPaperIngestion),
+  };
   await writeJsonEnsured(manifestPath, manifest);
 
   return {

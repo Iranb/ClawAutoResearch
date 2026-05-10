@@ -1,4 +1,10 @@
 import { asRecord, asStringArray, pickNumber, pickString } from "../workflow-guard-core/coercion";
+import {
+  getPromptLines,
+  getPromptText,
+  loadWorkflowPromptConfig,
+  type WorkflowPromptConfig,
+} from "../workflow-prompt-config";
 
 export type SufficiencyJudgment = {
   preferredDecision: "brainstorm" | "requisition";
@@ -25,6 +31,7 @@ export function buildSufficiencyPrompt(params: {
   }>;
   selectedDomains: string[];
   insufficientDomains: string[];
+  promptConfig?: WorkflowPromptConfig | null;
 }) {
   const questionLines =
     params.questionGaps.length > 0
@@ -41,8 +48,26 @@ export function buildSufficiencyPrompt(params: {
     params.insufficientDomains.length > 0
       ? params.insufficientDomains.join(", ")
       : "none";
+  const config = params.promptConfig ?? loadWorkflowPromptConfig();
+  const configRoot = ["ideaCatalyst", "sufficiency"];
+  const role = getPromptText(
+    config,
+    [...configRoot, "role"],
+    "You are the IDEA-CATALYST sufficiency judge."
+  );
+  const decisionBoundary = getPromptLines(config, [...configRoot, "decisionBoundary"], [
+    "Choose brainstorm only when current bridge evidence can support integration for the unresolved questions.",
+    "Choose requisition when source-domain takeaways are generic, only target-proximal, missing evidence anchors, or fail to cover the named question gaps.",
+    "Do not let model confidence override missing grounding; a high-confidence brainstorm without bridge evidence should still be treated as requisition.",
+  ]);
+  const evidenceChecks = getPromptLines(config, [...configRoot, "evidenceChecks"], [
+    "At least one selected source domain should offer a specific concept, framework, mechanism, or empirical pattern.",
+    "The source-domain idea should map to the domain-agnostic challenge, not only to surface keywords.",
+    "A normal brainstorm decision requires source spans, supporting papers, bridge paths, or equivalent evidence refs to be present downstream.",
+    "If most retrieved papers for a source domain appear irrelevant, list that domain as missing or insufficient.",
+  ]);
 
-  return `You are the IDEA-CATALYST sufficiency judge.
+  return `${role}
 
 Target domain:
 ${params.targetDomain}
@@ -59,6 +84,12 @@ ${questionLines}
 Decide whether the workflow should:
 - brainstorm: current bridge evidence is sufficient to continue idea integration
 - requisition: more literature discovery / graph ingestion is still required
+
+Decision boundary:
+${decisionBoundary.map((entry) => `- ${entry}`).join("\n")}
+
+Evidence checks:
+${evidenceChecks.map((entry) => `- ${entry}`).join("\n")}
 
 Return strict JSON:
 {

@@ -15,13 +15,49 @@ declare module "openclaw/plugin-sdk/plugin-entry" {
     getCurrentConversationBinding: (...args: any[]) => Promise<unknown>;
   };
 
+  export type OpenClawPresentationButton = {
+    label: string;
+    value?: string;
+    url?: string;
+    style?: "primary" | "secondary" | "success" | "danger";
+  };
+
+  export type OpenClawPresentationSelectOption = {
+    label: string;
+    value: string;
+  };
+
+  export type OpenClawPresentationBlock =
+    | { type: "text"; text: string }
+    | { type: "context"; text: string }
+    | { type: "buttons"; buttons: OpenClawPresentationButton[] }
+    | {
+        type: "select";
+        placeholder?: string;
+        options: OpenClawPresentationSelectOption[];
+      }
+    | { type: "divider" };
+
+  export type OpenClawMessagePresentation = {
+    title?: string;
+    tone?: "info" | "success" | "warning" | "danger" | "neutral";
+    blocks: OpenClawPresentationBlock[];
+  };
+
+  export type OpenClawPluginCommandResponse = {
+    text?: string;
+    presentation?: OpenClawMessagePresentation;
+  };
+
   export type OpenClawPluginCommandDefinition = {
     name: string;
     nativeNames?: Partial<Record<string, string>> & { default?: string };
     description: string;
     acceptsArgs?: boolean;
     requireAuth?: boolean;
-    handler: (ctx: PluginCommandContext) => Promise<{ text?: string }> | { text?: string };
+    handler: (
+      ctx: PluginCommandContext
+    ) => Promise<OpenClawPluginCommandResponse> | OpenClawPluginCommandResponse;
   };
 
   export type OpenClawPluginServiceContext = {

@@ -215,6 +215,32 @@ function readString(value) {
 
 export const detectLivePaperArtifactTerminal = detectWorkflowPaperArtifactTerminal;
 
+const LIVE_PAPER_ARTIFACT_TERMINAL_STAGES = new Set([
+  "write",
+  "review",
+  "submit",
+  "done",
+]);
+
+function liveStageAllowsPaperArtifactTerminal(manifest) {
+  const stage = readString(manifest?.current_stage);
+  return LIVE_PAPER_ARTIFACT_TERMINAL_STAGES.has(stage ?? "");
+}
+
+async function detectStageScopedLivePaperArtifactTerminal(params) {
+  if (!liveStageAllowsPaperArtifactTerminal(params.manifest)) {
+    return {
+      terminal: false,
+      reason: null,
+      details: {
+        stage: readString(params.manifest?.current_stage),
+        skippedReason: "workflow_not_in_paper_terminal_stage",
+      },
+    };
+  }
+  return detectLivePaperArtifactTerminal(params);
+}
+
 function sameProjectRoot(left, right) {
   const normalizedLeft = readString(left);
   const normalizedRight = readString(right);
@@ -864,7 +890,7 @@ export async function waitForProgress(params) {
     if (pdfExists && (currentStage === "submit" || currentStage === "done")) {
       return { progressed: true, manifest: latestManifest, reason: "terminal" };
     }
-    const artifactTerminal = await detectLivePaperArtifactTerminal({
+    const artifactTerminal = await detectStageScopedLivePaperArtifactTerminal({
       projectRoot: params.projectRoot,
       manifest: latestManifest,
       lane: params.lane,
@@ -1450,7 +1476,7 @@ export async function runAutoCommandEndToEndLive(params) {
       if (pdfExists && ["submit", "done"].includes(String(manifest.current_stage ?? ""))) {
         break;
       }
-      const artifactTerminal = await detectLivePaperArtifactTerminal({
+      const artifactTerminal = await detectStageScopedLivePaperArtifactTerminal({
         projectRoot,
         manifest,
         lane,

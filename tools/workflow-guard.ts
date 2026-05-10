@@ -386,8 +386,10 @@ import { materializePlanStateImpl } from "./workflow-guard-materializers/plan-st
 import { materializeCodeExperimentBundleImpl } from "./workflow-guard-materializers/code-experiment-bundle-materializer";
 import { materializeReviewPressurePacketImpl } from "./workflow-guard-materializers/review-pressure-materializer";
 import { materializeSurveyReviewStateImpl } from "./workflow-guard-materializers/survey-review-materializer";
+import { materializeFigurePromptContract } from "./research-writing/figure-prompt-contract";
 import { materializeInnovationSynthesis } from "./research-writing/innovation-synthesis";
 import { materializeResultsStoryline } from "./research-writing/results-storyline";
+import { materializeScientificEditingPassPlan } from "./research-writing/scientific-editing-pass-plan";
 import { materializeSurveyStorylinePlanner } from "./research-writing/survey-storyline-planner";
 import { materializeTitleAbstractIntroWorkbench } from "./research-writing/title-abstract-intro-workbench";
 import {
@@ -472,6 +474,11 @@ import {
   formatWorkflowSnapshotForPromptImpl,
   shouldUseFocusedWorkflowPromptImpl,
 } from "./workflow-guard-prompt-assembly";
+import {
+  loadWorkflowPromptConfig,
+  readWorkflowPromptConfigPath,
+  type WorkflowPromptConfig,
+} from "./workflow-prompt-config";
 
 // Facade-decomposition families:
 // - workflow-guard-project/* owns project resolution, gate state, and snapshot assembly
@@ -638,6 +645,7 @@ export interface WorkflowGuardPolicy extends ChannelProjectBindingPolicy {
   autoGate?: WorkflowAutoGateConfig;
   lobsterHandoff?: WorkflowLobsterHandoffConfig;
   teamRuntime?: WorkflowTeamRuntimeConfig;
+  promptConfigPath?: string;
 }
 
 export type WorkflowTeamRuntimeConfig = {
@@ -2437,6 +2445,7 @@ const DEFAULT_POLICY: Required<WorkflowGuardPolicy> = {
   autoGate: normalizeWorkflowAutoGateConfig(undefined),
   lobsterHandoff: normalizeWorkflowLobsterHandoffConfig(undefined),
   teamRuntime: { enabled: true },
+  promptConfigPath: "",
 };
 
 const WORKFLOW_ROLE_ORDER: WorkflowRole[] = [
@@ -2982,8 +2991,11 @@ function normalizePolicy(
                 .enabled === false
                 ? false
                 : true,
-          }
+            }
         : DEFAULT_POLICY.teamRuntime,
+    promptConfigPath:
+      readWorkflowPromptConfigPath(config) ??
+      DEFAULT_POLICY.promptConfigPath,
   };
 }
 
@@ -6022,24 +6034,28 @@ function summarizeClaimSupport(params: {
     }
   }
 
+  const unsupportedAuditLines = (params.unsupportedClaimsRaw ?? "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(
+      (line) =>
+        line.length > 0 &&
+        !/^#/.test(line) &&
+        !/^[-*]\s*-{2,}/.test(line)
+    )
+    .filter((line) => !isScopedUnsupportedClaimExclusion(line));
+
   const unsupportedIdsFromAudit = uniqueStrings(
-    extractClaimIdentifiers(params.unsupportedClaimsRaw ?? "")
+    extractClaimIdentifiers(unsupportedAuditLines.join("\n"))
   );
   if (unsupportedIdsFromAudit.length > 0) {
     for (const claimId of unsupportedIdsFromAudit) {
       unsupportedIds.add(claimId.toLowerCase());
     }
   } else {
-    const unsupportedLines = (params.unsupportedClaimsRaw ?? "")
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .filter(
-        (line) =>
-          line.length > 0 &&
-          !/^#/.test(line) &&
-          !/^[-*]\s*-{2,}/.test(line) &&
-          (/^[-*]\s+/.test(line) || /^\|/.test(line) || /\bunsupported\b/i.test(line))
-      );
+    const unsupportedLines = unsupportedAuditLines.filter(
+      (line) => /^[-*]\s+/.test(line) || /^\|/.test(line) || /\bunsupported\b/i.test(line)
+    );
     unsupportedFallbackCount = Math.max(
       unsupportedFallbackCount,
       unsupportedLines.length
@@ -6064,6 +6080,26 @@ function summarizeClaimSupport(params: {
     partialCount,
     unsupportedCount,
   };
+}
+
+function isScopedUnsupportedClaimExclusion(line: string): boolean {
+  const normalized = line
+    .replace(/^[-*]\s+/, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  return (
+    /\bdo not claim\b/.test(normalized) ||
+    /\bdon't claim\b/.test(normalized) ||
+    /\bclaims?\s+to\s+exclude\b/.test(normalized) ||
+    /\bprimary\s+claims?\s+to\s+exclude\b/.test(normalized) ||
+    /\bkeep\s+out\s+of\s+the\s+manuscript\b/.test(normalized) ||
+    /\bstay\s+out\s+of\s+the\s+manuscript\b/.test(normalized) ||
+    /\bscope\s+limits?\b/.test(normalized)
+  );
 }
 
 function collectTrackVerdictSignals(rawText: string | null): string[] {
@@ -6674,12 +6710,26 @@ export async function buildWorkflowSnapshot(params: {
 export function buildFocusedPromptAssembly(params: {
   snapshot: Partial<WorkflowSnapshot>;
   trigger?: string;
+  promptConfigPath?: string | null;
+  promptConfig?: WorkflowPromptConfig | null;
 }): FocusedPromptAssembly {
-  return buildFocusedPromptAssemblyImpl(params as { snapshot: Record<string, unknown>; trigger?: string }, {
-    buildNonOwnerRoutingAdvice: (snapshot) =>
-      buildNonOwnerRoutingAdvice(snapshot as Partial<WorkflowSnapshot>),
-    getSharedWritingConstitutionLines,
-  }) as FocusedPromptAssembly;
+  const promptConfig =
+    params.promptConfig ??
+    loadWorkflowPromptConfig({ configPath: params.promptConfigPath ?? null });
+  return buildFocusedPromptAssemblyImpl(
+    {
+      ...(params as {
+        snapshot: Record<string, unknown>;
+        trigger?: string;
+      }),
+      promptConfig,
+    },
+    {
+      buildNonOwnerRoutingAdvice: (snapshot) =>
+        buildNonOwnerRoutingAdvice(snapshot as Partial<WorkflowSnapshot>),
+      getSharedWritingConstitutionLines,
+    }
+  ) as FocusedPromptAssembly;
 }
 
 export function shouldUseFocusedWorkflowPrompt(snapshot: Partial<WorkflowSnapshot>): boolean {
@@ -6698,9 +6748,21 @@ export function formatWorkflowSnapshotForPrompt(params: {
   snapshot: WorkflowSnapshot;
   trigger?: string;
   detailLevel?: "full" | "focused";
+  promptConfigPath?: string | null;
+  promptConfig?: WorkflowPromptConfig | null;
 }): string {
+  const promptConfig =
+    params.promptConfig ??
+    loadWorkflowPromptConfig({ configPath: params.promptConfigPath ?? null });
   return formatWorkflowSnapshotForPromptImpl(
-    params as { snapshot: Record<string, unknown>; trigger?: string; detailLevel?: "full" | "focused" },
+    {
+      ...(params as {
+        snapshot: Record<string, unknown>;
+        trigger?: string;
+        detailLevel?: "full" | "focused";
+      }),
+      promptConfig,
+    },
     {
       buildNonOwnerRoutingAdvice: (snapshot) =>
         buildNonOwnerRoutingAdvice(snapshot as Partial<WorkflowSnapshot>),
@@ -8887,6 +8949,9 @@ export async function runBrainstormCycle(params: {
     brainstormCycle: patch,
     current,
   });
+  const requestedProviderStatus = normalizeStage(
+    patch.providerStatus ?? patch.provider_status
+  );
   const next = normalizeBrainstormCycleState({
     ...serializeBrainstormCycleState(current),
     ...patch,
@@ -8899,7 +8964,7 @@ export async function runBrainstormCycle(params: {
       current.providerMode ??
       "core",
     provider_status:
-      normalizeStage(patch.providerStatus ?? patch.provider_status) ??
+      (requestedProviderStatus === "completed" ? "ready" : requestedProviderStatus) ??
       (selection ? "ready" : current.providerStatus) ??
       (isBrainstormCycleReady(current) ? "ready" : "pending"),
     provider_last_run_at:
@@ -9480,6 +9545,8 @@ export async function materializeInnovationSynthesisState(params: {
 export async function materializeResultsStorylineState(params: {
   projectRoot: string;
   stage?: string | null;
+  promptConfigPath?: string | null;
+  promptConfig?: WorkflowPromptConfig | null;
 }): Promise<{
   state: ResultsStorylineState;
   generatedFiles: string[];
@@ -9518,11 +9585,31 @@ export async function materializeStorylinePlannerState(params: {
 export async function materializeTitleAbstractIntroWorkbenchState(params: {
   projectRoot: string;
   stage?: string | null;
+  promptConfigPath?: string | null;
+  promptConfig?: WorkflowPromptConfig | null;
 }): Promise<{
   state: TitleAbstractIntroWorkbenchState;
   generatedFiles: string[];
 }> {
   return materializeTitleAbstractIntroWorkbench(params);
+}
+
+export async function materializeFigurePromptContractState(params: {
+  projectRoot: string;
+  figurePromptContractMaterialization?: Record<string, unknown>;
+  trigger?: string | null;
+  agentId?: string | null;
+}): Promise<Awaited<ReturnType<typeof materializeFigurePromptContract>>> {
+  return materializeFigurePromptContract(params);
+}
+
+export async function materializeScientificEditingPassPlanState(params: {
+  projectRoot: string;
+  scientificEditingMaterialization?: Record<string, unknown>;
+  trigger?: string | null;
+  agentId?: string | null;
+}): Promise<Awaited<ReturnType<typeof materializeScientificEditingPassPlan>>> {
+  return materializeScientificEditingPassPlan(params);
 }
 
 export async function materializeLiteratureDiscoveryPacket(params: {

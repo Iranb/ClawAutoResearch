@@ -34,10 +34,12 @@ import {
   materializeIdeationContract,
   materializeExperimentMemoryPacket,
   materializeExperimentReviewState,
+  materializeFigurePromptContractState,
   materializeInnovationSynthesisState,
   materializeLiteratureDiscoveryPacket,
   materializePlanState,
   materializePaperStoryState,
+  materializeScientificEditingPassPlanState,
   materializeStorylinePlannerState,
   materializeResultsStorylineState,
   planCitationExpansionForWorkflow,
@@ -187,6 +189,7 @@ import {
   type PluginRegistrationContext,
   type ToolContext,
 } from "./plugin-registration-shared";
+import { buildQueryAnswerListMessage } from "./workflow-query-answer-list";
 import { executeChannelProjectBindingActionShell } from "./workflow-action-shell";
 import { createWorkflowExecutionRuntimeFromApi } from "./workflow-execution-runtime.js";
 import { createWorkflowBroadcastRuntimeFromApi } from "./workflow-execution-runtime.js";
@@ -1377,6 +1380,8 @@ const SERIALIZED_WORKFLOW_ACTIONS = new Set([
   "materialize_storyline_planner_state",
   "materialize_results_storyline_state",
   "materialize_title_abstract_intro_workbench_state",
+  "materialize_figure_prompt_contract",
+  "materialize_scientific_editing_pass_plan",
   "materialize_innovation_synthesis_state",
   "materialize_writing_support_artifacts",
   "materialize_writing_hook_policies",
@@ -1443,6 +1448,7 @@ const SERIALIZED_WORKFLOW_ACTIONS = new Set([
 ]);
 
 const WORKFLOW_ACTION_FUNCTIONS: Record<string, string> = {
+  build_query_answer_list: "buildQueryAnswerListMessage",
   get_snapshot: "buildWorkflowSnapshot",
   get_runtime_health: "buildWorkflowSnapshot",
   get_handoff_status: "buildHandoffDashboard",
@@ -1500,6 +1506,9 @@ const WORKFLOW_ACTION_FUNCTIONS: Record<string, string> = {
   materialize_results_storyline_state: "materializeResultsStorylineState",
   materialize_title_abstract_intro_workbench_state:
     "materializeTitleAbstractIntroWorkbenchState",
+  materialize_figure_prompt_contract: "materializeFigurePromptContractState",
+  materialize_scientific_editing_pass_plan:
+    "materializeScientificEditingPassPlanState",
   materialize_innovation_synthesis_state: "materializeInnovationSynthesisState",
   materialize_writing_support_artifacts: "materializeWritingSupportArtifacts",
   materialize_writing_hook_policies: "materializeWritingHookPolicies",
@@ -2411,8 +2420,141 @@ export async function maybeDispatchAutoIteratorTask(params: {
   if (!params.workflowPolicy.enforceWorkflowBoundaries) {
     return null;
   }
-  if (!requesterRole || !ownerAfter || requesterRole === ownerAfter) {
+  if (!requesterRole || !ownerAfter) {
     return null;
+  }
+
+  const primaryAction = selectDispatchableAutoStageAction({
+    autoIteratorResult: params.result,
+    owner: ownerAfter,
+  });
+  if (!primaryAction) {
+    return null;
+  }
+  if ((primaryAction.cooldownRemainingSeconds ?? 0) > 0 && !params.result.pendingHandoff) {
+    return {
+      dispatched: false,
+      blockedByCooldown: true,
+      cooldownRemainingSeconds: primaryAction.cooldownRemainingSeconds,
+      owner: ownerAfter,
+    };
+  }
+
+  if (requesterRole === ownerAfter) {
+    if (
+      primaryAction.dispatchDespiteMissingSignals !== true ||
+      !autoModeActive ||
+      !params.snapshot.projectRoot
+    ) {
+      return null;
+    }
+    const requesterSessionKey =
+      readString(params.agentCtx.sessionKey) ?? `agent:${requesterRole}:main`;
+    const preferredSessionKeys = deriveWorkflowDispatchSessionCandidates({
+      requesterSessionKey,
+      targetRole: ownerAfter,
+    });
+    const stage =
+      primaryAction.stage ?? params.result.stageAfter ?? params.snapshot.currentStage;
+    const command = primaryAction.command ?? params.result.nextAction;
+    const summary = primaryAction.summary;
+    const dispatch = params.forceQueueOnly
+      ? {
+          dispatched: false,
+          sessionKey: null,
+          runId: null,
+          waitStatus: null,
+          channel: null,
+          strategy: null,
+          attempts: [],
+          fallbackSpawned: false,
+          acknowledgedByMailbox: false,
+          error: "inbound_budget_exceeded",
+        }
+      : await dispatchWorkflowTaskToAgent({
+          workflowRuntime: createWorkflowToolRuntime({
+            plugin: params.plugin,
+            agentCtx: params.agentCtx,
+            projectRoot: params.snapshot.projectRoot,
+          }),
+          requesterSessionKey: params.agentCtx.sessionKey,
+          requesterChannel: params.agentCtx.messageChannel,
+          preferredSessionKeys,
+          fromRole: requesterRole,
+          toRole: ownerAfter,
+          projectRoot: params.snapshot.projectRoot,
+          projectId: params.snapshot.projectId,
+          stage,
+          summary,
+          command,
+          mailboxMessageId: primaryAction.mailboxMessageId ?? null,
+          requireMailboxAcknowledgement: false,
+          extraBody:
+            "Same-owner workflow repair dispatch. Execute the bounded repair pass, update durable state, then rerun research_workflow.auto_iterator_tick.",
+          waitTimeoutMs: params.waitTimeoutMs,
+          retryOnTimeout: params.retryOnTimeout,
+          enableSpawnFallback: params.enableSpawnFallback,
+        });
+    if (!dispatch.dispatched) {
+      const queued = await enqueueQueuedBackgroundWorkflowRun({
+        source: "workflow_auto_stage",
+        ownerAgent: ownerAfter,
+        requesterSessionKey,
+        messageChannel: readString(params.agentCtx.messageChannel),
+        preferredSessionKey: preferredSessionKeys[0] ?? null,
+        family: "research",
+        kind: "workflow_stage_dispatch",
+        projectId: params.snapshot.projectId,
+        projectRoot: params.snapshot.projectRoot,
+        projectsRoot: params.workflowPolicy.projectsRoot,
+        queueKey: buildAutoStageDispatchQueueKey({
+          projectRoot: params.snapshot.projectRoot,
+          stage,
+          owner: ownerAfter,
+          command,
+        }),
+        summary:
+          `Queued same-owner ${stage ?? "workflow"} repair dispatch for ${ownerAfter}.`,
+        dispatchPayload: {
+          requesterChannel: readString(params.agentCtx.messageChannel) ?? null,
+          requesterAccountId: null,
+          preferredSessionKeys,
+          fromRole: requesterRole,
+          toRole: ownerAfter,
+          projectRoot: params.snapshot.projectRoot,
+          projectId: params.snapshot.projectId,
+          stage,
+          summary,
+          command,
+          mailboxMessageId: primaryAction.mailboxMessageId ?? null,
+          requireMailboxAcknowledgement: false,
+          extraBody:
+            "Same-owner workflow repair dispatch. Execute the bounded repair pass, update durable state, then rerun research_workflow.auto_iterator_tick.",
+          waitTimeoutMs: params.waitTimeoutMs ?? 5000,
+          retryOnTimeout: params.retryOnTimeout ?? false,
+          enableSpawnFallback: params.enableSpawnFallback === false ? false : true,
+          useWorkflowHandoff: false,
+          autoModeActive: true,
+        },
+      });
+      return {
+        ...dispatch,
+        blockedByCooldown: false,
+        cooldownRemainingSeconds: null,
+        owner: ownerAfter,
+        sameOwnerRepairDispatch: true,
+        queuedFallback: true,
+        queueKey: queued.entry.queueKey,
+        queuePosition: queued.queuePosition,
+      };
+    }
+    return {
+      ...dispatch,
+      blockedByCooldown: false,
+      cooldownRemainingSeconds: null,
+      owner: ownerAfter,
+      sameOwnerRepairDispatch: true,
+    };
   }
 
   if (params.snapshot.projectRoot) {
@@ -2440,22 +2582,6 @@ export async function maybeDispatchAutoIteratorTask(params: {
         : "disabled",
       bindingPolicy: params.workflowPolicy,
     });
-  }
-
-  const primaryAction = selectDispatchableAutoStageAction({
-    autoIteratorResult: params.result,
-    owner: ownerAfter,
-  });
-  if (!primaryAction) {
-    return null;
-  }
-  if ((primaryAction.cooldownRemainingSeconds ?? 0) > 0 && !params.result.pendingHandoff) {
-    return {
-      dispatched: false,
-      blockedByCooldown: true,
-      cooldownRemainingSeconds: primaryAction.cooldownRemainingSeconds,
-      owner: ownerAfter,
-    };
   }
   if (!params.snapshot.projectRoot) {
     return null;
@@ -2748,6 +2874,7 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
           action: {
             type: "string",
             enum: [
+              "build_query_answer_list",
               "get_snapshot",
               "get_runtime_health",
               "get_handoff_status",
@@ -2793,6 +2920,8 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               "materialize_storyline_planner_state",
               "materialize_results_storyline_state",
               "materialize_title_abstract_intro_workbench_state",
+              "materialize_figure_prompt_contract",
+              "materialize_scientific_editing_pass_plan",
               "materialize_innovation_synthesis_state",
               "materialize_writing_support_artifacts",
               "materialize_writing_hook_policies",
@@ -2918,6 +3047,10 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
             type: "object",
             additionalProperties: true,
           },
+          queryAnswerList: {
+            type: "object",
+            additionalProperties: true,
+          },
           iterator: {
             type: "object",
             additionalProperties: true,
@@ -3022,6 +3155,14 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
             additionalProperties: true,
           },
           paperStoryMaterialization: {
+            type: "object",
+            additionalProperties: true,
+          },
+          figurePromptContractMaterialization: {
+            type: "object",
+            additionalProperties: true,
+          },
+          scientificEditingMaterialization: {
             type: "object",
             additionalProperties: true,
           },
@@ -3453,6 +3594,15 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               return channelProjectBindingResponse;
             }
             switch (action) {
+              case "build_query_answer_list": {
+                const payload = buildQueryAnswerListMessage({
+                  queryAnswerList: params.queryAnswerList,
+                  channel: ctx.messageChannel,
+                  requesterAgent: ctx.agentId,
+                  projectId: snapshot.projectId,
+                });
+                return textResponse(JSON.stringify(payload, null, 2));
+              }
               case "get_snapshot":
                 return textResponse(JSON.stringify(snapshot, null, 2));
             case "get_runtime_health": {
@@ -5693,6 +5843,7 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                   readString(payload.basisStage) ??
                   snapshot.currentStage ??
                   null,
+                promptConfigPath: workflowPolicy.promptConfigPath,
               });
               return textResponse(JSON.stringify(result, null, 2));
             }
@@ -5709,6 +5860,33 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                   readString(payload.basisStage) ??
                   snapshot.currentStage ??
                   null,
+                promptConfigPath: workflowPolicy.promptConfigPath,
+              });
+              return textResponse(JSON.stringify(result, null, 2));
+            }
+            case "materialize_figure_prompt_contract": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const result = await materializeFigurePromptContractState({
+                projectRoot: resolvedProjectRoot,
+                figurePromptContractMaterialization: requireObject(
+                  params.figurePromptContractMaterialization ?? {},
+                  "figurePromptContractMaterialization"
+                ),
+                trigger: "research_workflow",
+                agentId: ctx.agentId,
+              });
+              return textResponse(JSON.stringify(result, null, 2));
+            }
+            case "materialize_scientific_editing_pass_plan": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const result = await materializeScientificEditingPassPlanState({
+                projectRoot: resolvedProjectRoot,
+                scientificEditingMaterialization: requireObject(
+                  params.scientificEditingMaterialization ?? {},
+                  "scientificEditingMaterialization"
+                ),
+                trigger: "research_workflow",
+                agentId: ctx.agentId,
               });
               return textResponse(JSON.stringify(result, null, 2));
             }

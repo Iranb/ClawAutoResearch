@@ -33,6 +33,9 @@ allowed-tools:
 - 不要一边生成一边提前排序
 - 不要把不同 domain 的启发压扁成一句“借鉴 X”
 - 必须把 challenge-resolution 和 method realization 绑定起来
+- fragment 是 early-stage idea fragment，不是最终方案；要保留探索性，同时给出可验证的 realization 路径
+- 每个 fragment 必须显式连接：target-domain challenge、source-domain takeaway、integration rationale
+- concrete realization 应服务于解释这个跨域机制如何被检验，不应把 feasibility 过早变成唯一优化目标
 
 ## Durable 输出
 

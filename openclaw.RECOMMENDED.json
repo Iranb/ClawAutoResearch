@@ -52,6 +52,11 @@
           // 推荐保持 true。
           "injectWorkflowContext": true,
 
+          // 可选：外部 workflow prompt 配置文件路径。
+          // 留空时使用插件自带的 workflow-prompts.config.json。
+          // 适合按阶段/角色调整 Workflow Guard、论文写作工作台、后台 continuation、PaperNexus 队列 worker 的 prompt 文案。
+          "workflowPromptConfigPath": "",
+
           // 是否启用 workflow boundary enforcement。
           // 开启后会限制越权写目录、乱发消息、错误角色推进阶段等行为。
           "enforceWorkflowBoundaries": true,

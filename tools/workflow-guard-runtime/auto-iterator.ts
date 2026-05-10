@@ -200,6 +200,7 @@ type ProjectsStateLike = {
 
 const AUTO_ITERATOR_GRAPH_REFRESH_MIN_INTERVAL_MS = 15_000;
 const LITERATURE_DISCOVERY_REENTRY_WINDOW_MS = 10 * 60 * 1000;
+const LITERATURE_DISCOVERY_REENTRY_CLOCK_SKEW_MS = 60 * 1000;
 const TRANSITION_BOOTSTRAP_PREP_STAGES = new Set([
   "code",
   "experiment",
@@ -359,6 +360,32 @@ function isLiteratureDiscoveryReentryTrigger(value: string | null | undefined): 
   );
 }
 
+function inferLiteratureDiscoveryOriginStage(params: {
+  request: ReturnType<typeof normalizePaperIngestionState>["queuedRequests"][number];
+  currentStage: string | null;
+  validStages: Set<string>;
+}): string | null {
+  const haystack = [
+    params.request.triggerKind,
+    params.request.requestId,
+    params.request.manifestPath,
+  ]
+    .filter((entry): entry is string => Boolean(entry))
+    .join(" ")
+    .toLowerCase();
+  const stage =
+    haystack.includes("submit")
+      ? "submit"
+      : haystack.includes("write")
+        ? "write"
+        : haystack.includes("review")
+          ? "review"
+          : null;
+  return stage && stage !== params.currentStage && params.validStages.has(stage)
+    ? stage
+    : null;
+}
+
 function filterProjectedOrchestrationSignals(params: {
   signals: string[];
   stageBefore: string | null;
@@ -409,7 +436,7 @@ async function resolveCompletedLiteratureDiscoveryReentryStage(params: {
     .filter(
       (entry): entry is typeof entry & { finishedMs: number } =>
         entry.finishedMs !== null &&
-        params.nowMs - entry.finishedMs >= 0 &&
+        entry.finishedMs - params.nowMs <= LITERATURE_DISCOVERY_REENTRY_CLOCK_SKEW_MS &&
         params.nowMs - entry.finishedMs <= LITERATURE_DISCOVERY_REENTRY_WINDOW_MS
     )
     .sort((left, right) => right.finishedMs - left.finishedMs);
@@ -443,6 +470,14 @@ async function resolveCompletedLiteratureDiscoveryReentryStage(params: {
         ) ?? null;
     if (targetStage) {
       return targetStage;
+    }
+    const originStage = inferLiteratureDiscoveryOriginStage({
+      request,
+      currentStage: params.stage,
+      validStages: params.validStages,
+    });
+    if (originStage) {
+      return originStage;
     }
   }
   return null;
@@ -782,6 +817,13 @@ function canDispatchOwnerStageWithMissingSignals(params: {
   }
   if (params.stageRepairCommand != null) {
     return false;
+  }
+  if (
+    params.stage === "write" &&
+    params.owner === "academic_writer" &&
+    params.previousOwner === "academic_writer"
+  ) {
+    return true;
   }
   if (params.owner !== "researcher") {
     return false;
@@ -1275,12 +1317,19 @@ export async function runWorkflowAutoIteratorImpl(
   }
 
   let graphPresenceCheck: GraphPresenceCheckResult | null = null;
-  const shouldRefreshGraphPresenceNow = shouldRefreshWorkflowGraphPresence({
-    manifest,
-    stage: stageBefore,
-    nowIso: now,
-    minRefreshIntervalMs: AUTO_ITERATOR_GRAPH_REFRESH_MIN_INTERVAL_MS,
-  });
+  const graphPresenceAcceptedByPreflight = stagePreflight.materializedContracts.some(
+    (contract) =>
+      contract === "literature_discovery_requisition_degraded" ||
+      contract === "literature_discovery_requisition_verified_graph"
+  );
+  const shouldRefreshGraphPresenceNow =
+    !graphPresenceAcceptedByPreflight &&
+    shouldRefreshWorkflowGraphPresence({
+      manifest,
+      stage: stageBefore,
+      nowIso: now,
+      minRefreshIntervalMs: AUTO_ITERATOR_GRAPH_REFRESH_MIN_INTERVAL_MS,
+    });
   if (stageBefore === "graph_build" && shouldRefreshGraphPresenceNow) {
     graphPresenceCheck = await deps.checkGraphPresenceForWorkflow({
       projectRoot,

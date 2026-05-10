@@ -1,4 +1,10 @@
 import { asRecord, pickString } from "../workflow-guard-core/coercion";
+import {
+  getPromptLines,
+  getPromptText,
+  loadWorkflowPromptConfig,
+  type WorkflowPromptConfig,
+} from "../workflow-prompt-config";
 import { getIdeaCatalystPromptContract } from "./prompt-contracts";
 
 export type GeneratedCatalystQuestion = {
@@ -16,13 +22,34 @@ export function buildQuestionGenerationPrompt(params: {
   problemStatement: string | null;
   challengeClusters: string[];
   longTermGoal: string | null;
+  promptConfig?: WorkflowPromptConfig | null;
 }) {
   const challengeLines =
     params.challengeClusters.length > 0
       ? params.challengeClusters.map((entry) => `- ${entry}`).join("\n")
       : "- none";
   const contract = getIdeaCatalystPromptContract();
-  return `You are generating IDEA-CATALYST decomposition questions.
+  const config = params.promptConfig ?? loadWorkflowPromptConfig();
+  const configRoot = ["ideaCatalyst", "questionGeneration"];
+  const role = getPromptText(
+    config,
+    [...configRoot, "role"],
+    "You are generating IDEA-CATALYST decomposition questions."
+  );
+  const task = getPromptText(
+    config,
+    [...configRoot, "task"],
+    "Generate 1-3 additional non-incremental questions that are missing from the current graph decomposition."
+  );
+  const qualityRules = getPromptLines(config, [...configRoot, "qualityRules"], [
+    "Use metacognitive decomposition: identify what is known, what remains uncertain, and which gap is actionable.",
+    "Write each domain-specific question in target-domain vocabulary and each domain-agnostic question as a mechanism-level abstraction.",
+    "Prioritize partial or unexplored conceptual challenges over obvious extensions of occupied solution zones.",
+    "Do not propose source domains, methods, or final solutions in this stage.",
+    "Provide 3-5 target-domain search queries that can retrieve literature for progress assessment.",
+  ]);
+
+  return `${role}
 
 Target domain:
 ${params.targetDomain}
@@ -36,7 +63,21 @@ ${params.longTermGoal ?? "not provided"}
 Existing challenge clusters:
 ${challengeLines}
 
-Generate 1-3 additional non-incremental questions that are missing from the current graph decomposition.
+Stage goal:
+${contract.initial_decomposition.stage_goal}
+
+Task:
+${task}
+
+Paper-aligned guidance:
+${contract.initial_decomposition.guidance.map((entry) => `- ${entry}`).join("\n")}
+
+Quality rules:
+${qualityRules.map((entry) => `- ${entry}`).join("\n")}
+
+Quality checks:
+${contract.initial_decomposition.quality_checks.map((entry) => `- ${entry}`).join("\n")}
+
 Each question must support the public IDEA-CATALYST initial decomposition contract and help downstream target-domain analysis.
 
 Required fields for each proposed question:

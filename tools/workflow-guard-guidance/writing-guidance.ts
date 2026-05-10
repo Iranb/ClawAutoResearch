@@ -3,6 +3,7 @@ import type {
   BuildDynamicTasksParams,
   GuidanceContribution,
 } from "./types";
+import { buildPaperGuruWritingGuidance } from "./paperguru-writing-guidance";
 
 export function buildWritingGuidance(
   params: BuildDynamicTasksParams,
@@ -160,6 +161,10 @@ export function buildWritingGuidance(
       "Cross-review rule: act like an independent late-stage critic. When you return revise, make the packet precise enough that Writer can answer it in one bounded revision pass or in the rebuttal appendix."
     );
   }
+
+  const paperGuruGuidance = buildPaperGuruWritingGuidance(params, deps);
+  prepend.push(...paperGuruGuidance.prepend);
+  append.push(...paperGuruGuidance.append);
 
   return { prepend, append };
 }

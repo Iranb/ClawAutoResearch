@@ -55,6 +55,54 @@ function compactText(value: string | null | undefined, fallback: string): string
   return normalized || fallback;
 }
 
+function normalizeGapKind(value: unknown): string | null {
+  return normalizeStage(typeof value === "string" ? value : null);
+}
+
+function isExplicitLiteratureGapKind(value: string | null): boolean {
+  return [
+    "literature",
+    "related_work",
+    "citation",
+    "bibliography",
+    "source",
+    "source_span",
+    "graph_evidence",
+    "paper_evidence",
+    "mixed_literature",
+  ].includes(value ?? "");
+}
+
+function isExplicitNonLiteratureGapKind(value: string | null): boolean {
+  return [
+    "experiment",
+    "empirical",
+    "benchmark",
+    "metric",
+    "measurement",
+    "negative_result",
+    "writing_scope",
+    "claim_scope",
+    "scope",
+  ].includes(value ?? "");
+}
+
+function looksLikeExperimentEvidenceGap(value: string | null | undefined): boolean {
+  const text = String(value ?? "").toLowerCase();
+  if (!text) {
+    return false;
+  }
+  const hasEmpiricalSignal =
+    /\b(empirical|experiment|benchmark|ablation|metric|measurement|measured|run artifact|local run)\b/.test(
+      text
+    ) || /\bh[-\s]?score\b/.test(text);
+  const hasUnsupportedResultSignal =
+    /\b(no positive|no improvement|negative result|delta|benchmark claim|improvement claim|sota claim|unsupported)\b/.test(
+      text
+    );
+  return hasEmpiricalSignal && hasUnsupportedResultSignal;
+}
+
 export function needsStoryGapLiteratureDiscovery(params: {
   manifest: ManifestLike | null | undefined;
   stage: string | null;
@@ -69,14 +117,30 @@ export function needsStoryGapLiteratureDiscovery(params: {
   if (paperStory.status !== "ready" || reviewPressure.status !== "ready") {
     return false;
   }
-  if (
-    ["unsupported", "partial"].includes(
-      normalizeStage(paperStory.claimSupportStatus) ?? ""
-    )
-  ) {
+  const paperStoryRecord = asRecord(manifest.paper_story_state) ?? {};
+  const explicitGapKind = normalizeGapKind(
+    paperStoryRecord.claim_support_gap_kind ??
+      paperStoryRecord.claimSupportGapKind ??
+      paperStoryRecord.support_gap_kind ??
+      paperStoryRecord.supportGapKind
+  );
+  if (isExplicitLiteratureGapKind(explicitGapKind)) {
     return true;
   }
-  return paperStory.unsupportedClaimCount > 0 || paperStory.partialClaimCount > 0;
+  if (isExplicitNonLiteratureGapKind(explicitGapKind)) {
+    return false;
+  }
+  if (looksLikeExperimentEvidenceGap(paperStory.pendingReason)) {
+    return false;
+  }
+  const claimSupportStatus = normalizeStage(paperStory.claimSupportStatus) ?? "";
+  if (claimSupportStatus === "unsupported") {
+    return true;
+  }
+  if (paperStory.unsupportedClaimCount > 0) {
+    return true;
+  }
+  return false;
 }
 
 function collectActiveTrackRecords(trackRegistry: Record<string, unknown> | null): Array<Record<string, unknown>> {

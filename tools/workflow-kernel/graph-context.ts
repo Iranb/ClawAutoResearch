@@ -164,9 +164,13 @@ export function deriveWorkflowGraphContext(params: {
     checkedAtMs,
     recentlyChecked,
     refreshRequired,
-    repairRequired: paperIngestionState.repairRequired,
-    repairReason: paperIngestionState.repairReason,
-    repairTargetCorpus: paperIngestionState.repairTargetCorpus,
+    repairRequired:
+      params.graphPresenceCheck?.repairRequired ?? paperIngestionState.repairRequired,
+    repairReason:
+      params.graphPresenceCheck?.repairReason ?? paperIngestionState.repairReason,
+    repairTargetCorpus:
+      params.graphPresenceCheck?.repairTargetCorpus ??
+      paperIngestionState.repairTargetCorpus,
     runtimeStatus: paperIngestionState.runtimeStatus,
     waitingReason: paperIngestionState.waitingReason,
     paperIngestionState,

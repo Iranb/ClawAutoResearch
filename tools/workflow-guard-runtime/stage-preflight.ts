@@ -8,6 +8,7 @@ import {
   serializeBrainstormCycleState,
 } from "../workflow-guard-state/research-loop-state";
 import {
+  isInvalidCompletedWorkflowOwnedLiteratureRequisitionRequest,
   isPaperIngestionExecutableUploadRequest,
   normalizePaperIngestionState,
   serializePaperIngestionState,
@@ -73,6 +74,7 @@ import {
 import {
   normalizeOrchestrationState,
   normalizeReviewIssueTrackerState,
+  serializeOrchestrationState,
   normalizeWritePackageState,
 } from "../workflow-guard-state/execution-state";
 import {
@@ -98,6 +100,9 @@ import {
 import { resolveProjectArtifactPath } from "../workflow-guard-core/paths";
 import { loadTrackInnovationEvidence } from "../workflow-guard-track-evidence.js";
 import { resolveStageReadiness } from "../workflow-derived-state/stage-readiness.js";
+import { appendWorkflowDiagnosticEvent } from "../workflow-diagnostics.js";
+import { readWorkflowHandoffIntentStore } from "../workflow-handoff/handoff-store";
+import { isWorkflowHandoffTerminalStatus } from "../workflow-handoff/handoff-types";
 import type {
   WorkflowHookEvent,
   WorkflowMaterializedArtifact,
@@ -512,9 +517,17 @@ async function reconcileBrainstormCycleJsonManifestPaths(params: {
         artifactPath: state.workingMemoryPath,
       }),
   };
+  const providerStatusRepair =
+    ["ready", "reconciled"].includes(state.status) &&
+    state.providerStatus === "completed"
+      ? "ready"
+      : null;
   const repairedFields = Object.entries(repairs)
     .filter(([, value]) => Boolean(value))
     .map(([field]) => field);
+  if (providerStatusRepair) {
+    repairedFields.push("providerStatus");
+  }
   if (repairedFields.length === 0) {
     return { manifest: params.manifest, updated: false, repairedFields };
   }
@@ -525,6 +538,7 @@ async function reconcileBrainstormCycleJsonManifestPaths(params: {
     researchBriefPath: repairs.researchBriefPath ?? state.researchBriefPath,
     brainstormBriefPath: repairs.brainstormBriefPath ?? state.brainstormBriefPath,
     workingMemoryPath: repairs.workingMemoryPath ?? state.workingMemoryPath,
+    providerStatus: providerStatusRepair ?? state.providerStatus,
   });
   const manifest = {
     ...params.manifest,
@@ -534,6 +548,7 @@ async function reconcileBrainstormCycleJsonManifestPaths(params: {
       research_brief_path: next.research_brief_path,
       brainstorm_brief_path: next.brainstorm_brief_path,
       working_memory_path: next.working_memory_path,
+      provider_status: next.provider_status,
     },
   };
   await writeJsonEnsured(
@@ -1608,6 +1623,49 @@ function isStaleUnresolvedLiteratureDiscoveryRequisition(
   );
 }
 
+function isEmptyDormantReviewLiteratureDiscoveryRequisition(params: {
+  request: ReturnType<typeof normalizePaperIngestionState>["queuedRequests"][number];
+  selectedPaperCount: number;
+  candidatePaperCount: number;
+}): boolean {
+  const request = params.request;
+  if (!isLiteratureDiscoveryTriggerKind(request.triggerKind)) {
+    return false;
+  }
+  if (request.requestKind !== "requisition") {
+    return false;
+  }
+  if (request.status !== "queued") {
+    return false;
+  }
+  if (
+    request.startedAt ||
+    request.lastRunId ||
+    request.lastSessionKey ||
+    request.progress ||
+    request.queueProgress ||
+    request.attemptCount > 0
+  ) {
+    return false;
+  }
+  const triggerKind = String(request.triggerKind ?? "").trim().toLowerCase();
+  const reviewScoped =
+    triggerKind === "review_literature_discovery" ||
+    triggerKind === "write_literature_discovery" ||
+    triggerKind === "submit_literature_discovery" ||
+    request.requestId.includes("review-story-support-gap") ||
+    request.requestId.includes("write-story-support-gap") ||
+    request.requestId.includes("submit-story-support-gap");
+  const hasQueuedPaperCount =
+    typeof request.paperCount === "number" && request.paperCount > 0;
+  return (
+    reviewScoped &&
+    !hasQueuedPaperCount &&
+    params.selectedPaperCount === 0 &&
+    params.candidatePaperCount === 0
+  );
+}
+
 function deriveLiteratureDiscoverySatisfactionReportPath(request: {
   requestId: string;
   manifestPath: string | null;
@@ -1630,13 +1688,6 @@ async function reconcileStaleLiteratureDiscoveryRequisition(params: {
   const state = normalizePaperIngestionState(params.manifest.paper_ingestion);
   const now = new Date().toISOString();
   const nowMs = Date.parse(now);
-  const staleRequests = state.queuedRequests.filter((request) =>
-    isStaleUnresolvedLiteratureDiscoveryRequisition(request, nowMs)
-  );
-  if (staleRequests.length === 0) {
-    return { manifest: params.manifest, updated: false };
-  }
-
   const packetPath = resolveProjectArtifactPath(
     params.projectRoot,
     DEFAULT_LITERATURE_DISCOVERY_PACKET_PATH
@@ -1649,14 +1700,35 @@ async function reconcileStaleLiteratureDiscoveryRequisition(params: {
   const candidatePapers = Array.isArray(packet.candidate_papers)
     ? packet.candidate_papers
     : [];
+  const staleRequests = state.queuedRequests.filter((request) =>
+    isStaleUnresolvedLiteratureDiscoveryRequisition(request, nowMs)
+  );
+  const emptyDormantReviewRequests = state.queuedRequests.filter((request) =>
+    isEmptyDormantReviewLiteratureDiscoveryRequisition({
+      request,
+      selectedPaperCount: selectedPapers.length,
+      candidatePaperCount: candidatePapers.length,
+    })
+  );
+  const requestsToDegrade = [
+    ...staleRequests,
+    ...emptyDormantReviewRequests.filter(
+      (request) =>
+        !staleRequests.some((staleRequest) => staleRequest.requestId === request.requestId)
+    ),
+  ];
+  if (requestsToDegrade.length === 0) {
+    return { manifest: params.manifest, updated: false };
+  }
+
   const graphPresencePath =
     readManifestString(params.manifest.paper_ingestion, [
       "graph_presence_report_path",
       "graphPresenceReportPath",
     ]) ?? "graph/GRAPH_PRESENCE_CHECK.json";
 
-  const updatedRequestIds = new Set(staleRequests.map((request) => request.requestId));
-  for (const request of staleRequests) {
+  const updatedRequestIds = new Set(requestsToDegrade.map((request) => request.requestId));
+  for (const request of requestsToDegrade) {
     const reportPath = deriveLiteratureDiscoverySatisfactionReportPath(request);
     const resolvedReportPath = resolveProjectArtifactPath(params.projectRoot, reportPath);
     if (resolvedReportPath) {
@@ -1732,6 +1804,171 @@ async function reconcileStaleLiteratureDiscoveryRequisition(params: {
   return { manifest, updated: true };
 }
 
+async function reconcileUnverifiedCompletedLiteratureDiscoveryRequisition(params: {
+  projectRoot: string;
+  manifest: ManifestLike;
+  stage: string | null;
+}): Promise<{ manifest: ManifestLike; updated: boolean }> {
+  if (params.stage !== "graph_build" || !isGraphPresenceReady(params.manifest)) {
+    return { manifest: params.manifest, updated: false };
+  }
+  if (!(await hasSourceBackedGraphCertification(params))) {
+    return { manifest: params.manifest, updated: false };
+  }
+
+  const state = normalizePaperIngestionState(params.manifest.paper_ingestion);
+  const invalidRequests = state.queuedRequests.filter((request) =>
+    isInvalidCompletedWorkflowOwnedLiteratureRequisitionRequest({
+      state,
+      request,
+    })
+  );
+  if (invalidRequests.length === 0) {
+    return { manifest: params.manifest, updated: false };
+  }
+
+  const packetPath = resolveProjectArtifactPath(
+    params.projectRoot,
+    DEFAULT_LITERATURE_DISCOVERY_PACKET_PATH
+  );
+  const packet =
+    (await readJsonIfExists<Record<string, unknown>>(packetPath ?? "")) ?? {};
+  const selectedPapers = Array.isArray(packet.selected_papers)
+    ? packet.selected_papers
+    : [];
+  const candidatePapers = Array.isArray(packet.candidate_papers)
+    ? packet.candidate_papers
+    : [];
+  const graphPresencePath =
+    readManifestString(params.manifest.paper_ingestion, [
+      "graph_presence_report_path",
+      "graphPresenceReportPath",
+    ]) ?? "graph/GRAPH_PRESENCE_CHECK.json";
+  const now = new Date().toISOString();
+  const updatedRequestIds = new Set(
+    invalidRequests.map((request) => request.requestId)
+  );
+
+  for (const request of invalidRequests) {
+    const reportPath = deriveLiteratureDiscoverySatisfactionReportPath(request);
+    const resolvedReportPath = resolveProjectArtifactPath(params.projectRoot, reportPath);
+    if (!resolvedReportPath) {
+      continue;
+    }
+    await writeJsonEnsured(resolvedReportPath, {
+      schema_version: 1,
+      status: "warning",
+      decision: "satisfied_by_verified_graph_import",
+      request_id: request.requestId,
+      trigger_kind: request.triggerKind,
+      previous_status: request.status,
+      previous_validation_status: request.validationStatus,
+      graph_presence_status: "ready",
+      graph_presence_report_path: graphPresencePath,
+      selected_paper_count: selectedPapers.length,
+      candidate_paper_count: candidatePapers.length,
+      reason:
+        "Graph presence is ready with source-backed PaperNexus evidence, so this completed literature requisition is credited with a durable satisfaction report before frontier mapping.",
+      limitations: [
+        "The queued request did not preserve per-task import ids before it was marked completed.",
+        "The graph presence report is the authoritative evidence used to satisfy this requisition.",
+      ],
+      created_at: now,
+      updated_at: now,
+    });
+  }
+
+  const queuedRequests = state.queuedRequests.map((request) => {
+    if (!updatedRequestIds.has(request.requestId)) {
+      return request;
+    }
+    const reportPath = deriveLiteratureDiscoverySatisfactionReportPath(request);
+    return {
+      ...request,
+      updatedAt: now,
+      finishedAt: request.finishedAt ?? now,
+      lastError: null,
+      validationStatus: "warning" as const,
+      validationSummary:
+        "Completed literature requisition was satisfied by the current source-backed graph presence report.",
+      validationReportPath: reportPath,
+      detail:
+        request.detail ??
+        "Completed literature discovery request was reconciled against source-backed graph evidence.",
+      deadLetterAt: null,
+      deadLetterReason: null,
+    };
+  });
+
+  const paperIngestionRecord =
+    params.manifest.paper_ingestion &&
+    typeof params.manifest.paper_ingestion === "object" &&
+    !Array.isArray(params.manifest.paper_ingestion)
+      ? (params.manifest.paper_ingestion as Record<string, unknown>)
+      : {};
+  const manifest = {
+    ...params.manifest,
+    paper_ingestion: {
+      ...paperIngestionRecord,
+      ...serializePaperIngestionState({
+        ...state,
+        runtimeStatus: "ready",
+        waitingReason: null,
+        queuedRequests,
+        lastUpdatedAt: now,
+      }),
+    },
+  };
+  await writeJsonEnsured(
+    resolveProjectArtifactPath(params.projectRoot, "PROJECT_MANIFEST.json") ??
+      `${params.projectRoot}/PROJECT_MANIFEST.json`,
+    manifest
+  );
+  return { manifest, updated: true };
+}
+
+function isSourceBackedGraphCertificationRecord(record: Record<string, unknown>): boolean {
+  const status = readManifestStatus(record, [
+    "papernexus_certification_status",
+    "status",
+  ]);
+  const claimLevel = readManifestStatus(record, [
+    "papernexus_claim_level",
+    "claim_level",
+    "claimLevel",
+  ]);
+  const sourceBacked =
+    readBoolean(
+      record.papernexus_source_backed_graph_claim ??
+        record.source_backed_graph_claim ??
+        record.sourceBackedGraphClaim
+    ) === true;
+  return (status === null || status === "ready") && (sourceBacked || claimLevel === "source_backed_graph");
+}
+
+async function hasSourceBackedGraphCertification(params: {
+  projectRoot: string;
+  manifest: ManifestLike;
+}): Promise<boolean> {
+  const paperIngestion =
+    params.manifest.paper_ingestion &&
+    typeof params.manifest.paper_ingestion === "object" &&
+    !Array.isArray(params.manifest.paper_ingestion)
+      ? (params.manifest.paper_ingestion as Record<string, unknown>)
+      : {};
+  if (isSourceBackedGraphCertificationRecord(paperIngestion)) {
+    return true;
+  }
+  const certification =
+    (await readJsonIfExists<Record<string, unknown>>(
+      resolveProjectArtifactPath(
+        params.projectRoot,
+        "graph/PAPERNEXUS_TASK_CERTIFICATION.json"
+      ) ?? ""
+    )) ?? {};
+  return isSourceBackedGraphCertificationRecord(certification);
+}
+
 function sanitizeArtifactPathFragment(value: string): string {
   return (
     value
@@ -1793,6 +2030,248 @@ function readGraphPresenceSnapshot(manifest: ManifestLike): Record<string, unkno
       "graphPresenceMissingCount",
     ]),
   };
+}
+
+function readBoolean(value: unknown): boolean | null {
+  return typeof value === "boolean" ? value : null;
+}
+
+function readArray(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : [];
+}
+
+function hasReadyGraphPresenceManifest(manifest: ManifestLike, checkedAt: string): boolean {
+  const currentStatus = readManifestStatus(manifest.paper_ingestion, [
+    "graph_presence_status",
+    "graphPresenceStatus",
+  ]);
+  const currentCheckedAt = readManifestString(manifest.paper_ingestion, [
+    "graph_presence_checked_at",
+    "graphPresenceCheckedAt",
+  ]);
+  return currentStatus === "ready" && currentCheckedAt === checkedAt;
+}
+
+async function reconcileTerminalPendingHandoffManifest(params: {
+  projectRoot: string;
+  manifest: ManifestLike;
+}): Promise<{ manifest: ManifestLike; updated: boolean }> {
+  const orchestration = normalizeOrchestrationState(params.manifest.orchestration_state);
+  const pendingHandoffId = orchestration.pendingHandoffId;
+  if (!pendingHandoffId) {
+    return { manifest: params.manifest, updated: false };
+  }
+
+  const store = await readWorkflowHandoffIntentStore(params.projectRoot);
+  const pendingIntent =
+    store.intents.find((intent) => intent.intentId === pendingHandoffId) ?? null;
+  if (pendingIntent && !isWorkflowHandoffTerminalStatus(pendingIntent.status)) {
+    return { manifest: params.manifest, updated: false };
+  }
+
+  const reason = pendingIntent
+    ? `terminal_pending_handoff_${pendingIntent.status}`
+    : "missing_pending_handoff";
+  const manifest = {
+    ...params.manifest,
+    orchestration_state: serializeOrchestrationState({
+      ...orchestration,
+      pendingHandoffId: null,
+      pendingOwnerCandidate: null,
+      pendingStageCandidate: null,
+      handoffPhase: "idle",
+      ownerClaimedAt: null,
+      ownerActivationDeadline: null,
+      lastHandoffError: null,
+    }),
+  };
+  await writeJsonEnsured(
+    resolveProjectArtifactPath(params.projectRoot, "PROJECT_MANIFEST.json") ??
+      `${params.projectRoot}/PROJECT_MANIFEST.json`,
+    manifest
+  );
+  await appendWorkflowDiagnosticEvent({
+    projectRoot: params.projectRoot,
+    projectId: readManifestString(params.manifest, ["project_id", "projectId"]),
+    component: "stage_preflight",
+    action: "terminal_pending_handoff_manifest_reconciled",
+    status: "completed",
+    stage: readManifestString(params.manifest, ["current_stage", "currentStage"]),
+    owner: readManifestString(params.manifest, ["owner_agent", "ownerAgent"]),
+    summary:
+      "Cleared manifest pending handoff because the referenced handoff intent is terminal or missing.",
+    details: {
+      pendingHandoffId,
+      reason,
+      intentStatus: pendingIntent?.status ?? null,
+      intentStageAfter: pendingIntent?.stageAfter ?? pendingIntent?.stage ?? null,
+      intentToRole: pendingIntent?.toRole ?? null,
+    },
+  });
+  return { manifest, updated: true };
+}
+
+async function reconcileGraphPresenceManifestFromArtifacts(params: {
+  projectRoot: string;
+  manifest: ManifestLike;
+}): Promise<{ manifest: ManifestLike; updated: boolean }> {
+  const reportPath =
+    resolveProjectArtifactPath(params.projectRoot, "graph/GRAPH_PRESENCE_CHECK.json") ??
+    "";
+  const report = await readJsonIfExists<Record<string, unknown>>(reportPath);
+  if (!report || readManifestStatus(report, ["status"]) !== "ready") {
+    return { manifest: params.manifest, updated: false };
+  }
+  if (readBoolean(report.refresh_required ?? report.refreshRequired) === true) {
+    return { manifest: params.manifest, updated: false };
+  }
+  if (readBoolean(report.repair_required ?? report.repairRequired) === true) {
+    return { manifest: params.manifest, updated: false };
+  }
+
+  const checkedAt = readManifestString(report, ["checked_at", "checkedAt"]);
+  if (!checkedAt || parseTimestampMs(checkedAt) === null) {
+    return { manifest: params.manifest, updated: false };
+  }
+  const manifestProjectId = readManifestString(params.manifest, [
+    "project_id",
+    "projectId",
+  ]);
+  const reportProjectId = readManifestString(report, ["project_id", "projectId"]);
+  if (manifestProjectId && reportProjectId && manifestProjectId !== reportProjectId) {
+    return { manifest: params.manifest, updated: false };
+  }
+
+  const expectedPaperCount = readManifestNumber(report, [
+    "expected_paper_count",
+    "expectedPaperCount",
+    "expected_papers_count",
+    "expectedPapersCount",
+  ]);
+  const presentPaperCount = readManifestNumber(report, [
+    "present_paper_count",
+    "presentPaperCount",
+    "present_papers_count",
+    "presentPapersCount",
+  ]);
+  const missingPapers = readArray(report.missing_papers ?? report.missingPapers);
+  const missingPaperCount =
+    readManifestNumber(report, [
+      "missing_paper_count",
+      "missingPaperCount",
+      "missing_papers_count",
+      "missingPapersCount",
+    ]) ?? missingPapers.length;
+  if (
+    missingPaperCount > 0 ||
+    (expectedPaperCount !== null &&
+      presentPaperCount !== null &&
+      presentPaperCount < expectedPaperCount)
+  ) {
+    return { manifest: params.manifest, updated: false };
+  }
+
+  const sourceIndexPath =
+    readManifestString(report, [
+      "paper_source_index_path",
+      "paperSourceIndexPath",
+    ]);
+  const sourceIndexMtimeMs = await readPathMtimeMsIfExists(
+    resolveProjectArtifactPath(params.projectRoot, sourceIndexPath)
+  );
+  const checkedAtMs = parseTimestampMs(checkedAt);
+  if (
+    checkedAtMs !== null &&
+    sourceIndexMtimeMs !== null &&
+    sourceIndexMtimeMs > checkedAtMs
+  ) {
+    return { manifest: params.manifest, updated: false };
+  }
+
+  if (hasReadyGraphPresenceManifest(params.manifest, checkedAt)) {
+    return { manifest: params.manifest, updated: false };
+  }
+
+  const certification =
+    (await readJsonIfExists<Record<string, unknown>>(
+      resolveProjectArtifactPath(
+        params.projectRoot,
+        "graph/PAPERNEXUS_TASK_CERTIFICATION.json"
+      ) ?? ""
+    )) ?? {};
+  const certificationStatus = readManifestStatus(certification, ["status"]);
+  const claimLevel = readManifestStatus(certification, [
+    "claim_level",
+    "claimLevel",
+  ]);
+  const certificationReportPath =
+    readManifestString(certification, ["report_path", "reportPath"]) ??
+    "graph/PAPERNEXUS_TASK_CERTIFICATION.json";
+  const limitations = Array.isArray(certification.limitations)
+    ? certification.limitations
+    : [];
+  const paperIngestionRecord =
+    params.manifest.paper_ingestion &&
+    typeof params.manifest.paper_ingestion === "object" &&
+    !Array.isArray(params.manifest.paper_ingestion)
+      ? (params.manifest.paper_ingestion as Record<string, unknown>)
+      : {};
+  const manifest = {
+    ...params.manifest,
+    paper_ingestion: {
+      ...paperIngestionRecord,
+      runtime_status: "ready",
+      waiting_reason: null,
+      graph_presence_checked_at: checkedAt,
+      graph_presence_status: "ready",
+      graph_presence_report_path: "graph/GRAPH_PRESENCE_CHECK.json",
+      graph_presence_expected_papers: expectedPaperCount,
+      graph_presence_present_papers: presentPaperCount,
+      graph_presence_missing_papers: missingPapers,
+      refresh_required: false,
+      refresh_reason: null,
+      repair_required: false,
+      repair_reason: null,
+      repair_target_corpus: null,
+      graph_build_workflow_status:
+        readManifestStatus(report, [
+          "graph_build_workflow_status",
+          "graphBuildWorkflowStatus",
+        ]) ?? "ready",
+      graph_build_can_continue:
+        readBoolean(
+          report.graph_build_can_continue ?? report.graphBuildCanContinue
+        ) ?? true,
+      graph_build_requires_import:
+        readBoolean(
+          report.graph_build_requires_import ?? report.graphBuildRequiresImport
+        ) ?? false,
+      graph_build_requires_source_repair:
+        readBoolean(
+          report.graph_build_requires_source_repair ??
+            report.graphBuildRequiresSourceRepair
+        ) ?? false,
+      graph_build_status_reason:
+        readManifestString(report, [
+          "graph_build_status_reason",
+          "graphBuildStatusReason",
+        ]) ?? null,
+      papernexus_certification_status: certificationStatus,
+      papernexus_claim_level: claimLevel,
+      papernexus_source_backed_graph_claim:
+        certification.source_backed_graph_claim === true ||
+        certification.sourceBackedGraphClaim === true,
+      papernexus_certification_path: certificationReportPath,
+      papernexus_certification_limitations: limitations,
+      last_updated_at: new Date().toISOString(),
+    },
+  };
+  await writeJsonEnsured(
+    resolveProjectArtifactPath(params.projectRoot, "PROJECT_MANIFEST.json") ??
+      `${params.projectRoot}/PROJECT_MANIFEST.json`,
+    manifest
+  );
+  return { manifest, updated: true };
 }
 
 function isTerminalBatchStatus(value: unknown): boolean {
@@ -2478,6 +2957,48 @@ export async function maybePrepareWorkflowStageContracts(params: {
   const materializedArtifacts: WorkflowMaterializedArtifact[] = [];
   const emittedHookEvents: WorkflowHookEvent[] = [];
 
+  const terminalPendingHandoffReconciliation =
+    await reconcileTerminalPendingHandoffManifest({
+      projectRoot,
+      manifest,
+    });
+  if (terminalPendingHandoffReconciliation.updated) {
+    manifest = terminalPendingHandoffReconciliation.manifest;
+    materializedContracts.push("terminal_pending_handoff_manifest_reconciled");
+    materializedArtifacts.push({
+      contract: "terminal_pending_handoff_manifest_reconciled",
+      artifactPath: "PROJECT_MANIFEST.json",
+      fingerprint: null,
+      action: "reconciled",
+    });
+    emittedHookEvents.push({
+      hookPoint: "artifact_materialized",
+      contract: "terminal_pending_handoff_manifest_reconciled",
+      artifactPath: "PROJECT_MANIFEST.json",
+    });
+  }
+
+  const graphPresenceManifestReconciliation =
+    await reconcileGraphPresenceManifestFromArtifacts({
+      projectRoot,
+      manifest,
+    });
+  if (graphPresenceManifestReconciliation.updated) {
+    manifest = graphPresenceManifestReconciliation.manifest;
+    materializedContracts.push("graph_presence_manifest_reconciled");
+    materializedArtifacts.push({
+      contract: "graph_presence_manifest_reconciled",
+      artifactPath: "PROJECT_MANIFEST.json",
+      fingerprint: null,
+      action: "reconciled",
+    });
+    emittedHookEvents.push({
+      hookPoint: "artifact_materialized",
+      contract: "graph_presence_manifest_reconciled",
+      artifactPath: "PROJECT_MANIFEST.json",
+    });
+  }
+
   const ideaCatalystReconciliation = await reconcileSatisfiedIdeaCatalystRequisition({
     projectRoot,
     manifest,
@@ -2536,6 +3057,27 @@ export async function maybePrepareWorkflowStageContracts(params: {
     emittedHookEvents.push({
       hookPoint: "artifact_materialized",
       contract: "literature_discovery_requisition_degraded",
+      artifactPath: null,
+    });
+  }
+  const unverifiedLiteratureDiscoveryReconciliation =
+    await reconcileUnverifiedCompletedLiteratureDiscoveryRequisition({
+      projectRoot,
+      manifest,
+      stage: params.stage,
+    });
+  if (unverifiedLiteratureDiscoveryReconciliation.updated) {
+    manifest = unverifiedLiteratureDiscoveryReconciliation.manifest;
+    materializedContracts.push("literature_discovery_requisition_verified_graph");
+    materializedArtifacts.push({
+      contract: "literature_discovery_requisition_verified_graph",
+      artifactPath: null,
+      fingerprint: null,
+      action: "reconciled",
+    });
+    emittedHookEvents.push({
+      hookPoint: "artifact_materialized",
+      contract: "literature_discovery_requisition_verified_graph",
       artifactPath: null,
     });
   }

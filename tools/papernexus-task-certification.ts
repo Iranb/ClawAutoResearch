@@ -182,6 +182,31 @@ function pickNumber(source: UnknownRecord | null, keys: string[]): number | null
   return null;
 }
 
+function pickBoolean(source: UnknownRecord | null, keys: string[]): boolean | null {
+  if (!source) {
+    return null;
+  }
+  for (const key of keys) {
+    if (typeof source[key] === "boolean") {
+      return Boolean(source[key]);
+    }
+  }
+  return null;
+}
+
+function pickRecord(source: UnknownRecord | null, keys: string[]): UnknownRecord | null {
+  if (!source) {
+    return null;
+  }
+  for (const key of keys) {
+    const record = asRecord(source[key]);
+    if (record) {
+      return record;
+    }
+  }
+  return null;
+}
+
 function firstArray(...values: unknown[]): unknown[] {
   for (const value of values) {
     if (Array.isArray(value)) {
@@ -250,6 +275,56 @@ function normalizePresentPaperEvidence(value: unknown): PresentPaperEvidence | n
     "paperId",
     "paper_id",
   ]);
+  const graphIndexEvidence = pickRecord(record, [
+    "graphIndexEvidence",
+    "graph_index_evidence",
+    "graphIndex",
+    "graph_index",
+  ]);
+  const sourceSpanEvidence =
+    pickRecord(record, [
+      "sourceSpanEvidence",
+      "source_span_evidence",
+      "sourceSpans",
+      "source_spans",
+    ]) ??
+    (() => {
+      const spans = firstArray(record.sourceSpans, record.source_spans);
+      return spans.length > 0 ? { spans } : null;
+    })();
+  const sourceSpanEvidenceRecord = asRecord(sourceSpanEvidence);
+  const sourceSpanCount =
+    pickNumber(sourceSpanEvidenceRecord, ["count", "sourceSpanCount", "source_span_count"]) ??
+    firstArray(
+      sourceSpanEvidenceRecord?.spans,
+      sourceSpanEvidenceRecord?.source_spans
+    ).length;
+  const graphIndexAvailable = pickBoolean(graphIndexEvidence, [
+    "available",
+    "active_in_graph",
+    "activeInGraph",
+  ]);
+  const sourceSpanAvailable = pickBoolean(sourceSpanEvidenceRecord, [
+    "available",
+    "source_span_available",
+    "sourceSpanAvailable",
+  ]);
+  const hasExplicitGraphIndexEvidence =
+    graphIndexAvailable === false
+      ? false
+      : graphIndexAvailable === true ||
+        Boolean(
+          pickString(graphIndexEvidence, [
+            "paperNodeId",
+            "paper_node_id",
+            "paperId",
+            "paper_id",
+            "sourceKey",
+            "source_key",
+          ])
+        );
+  const hasExplicitSourceSpanEvidence =
+    sourceSpanAvailable !== false && sourceSpanCount > 0;
   const matchedBy = pickString(record, ["matchedBy", "matched_by"]);
   return {
     canonicalId: pickString(record, ["canonicalId", "canonical_id"]),
@@ -257,8 +332,8 @@ function normalizePresentPaperEvidence(value: unknown): PresentPaperEvidence | n
     matchedBy,
     corpusPaperId,
     corpusSourceKey,
-    hasPaperIndexEvidence: Boolean(corpusPaperId || corpusSourceKey),
-    hasSourceSpanEvidence: Boolean(corpusSourceKey),
+    hasPaperIndexEvidence: hasExplicitGraphIndexEvidence,
+    hasSourceSpanEvidence: hasExplicitSourceSpanEvidence,
   };
 }
 
@@ -729,6 +804,7 @@ async function readSourceIndexSummary(
   projectRoot: string
 ): Promise<SourceIndexSummary> {
   const candidates = [
+    path.join(projectRoot, "researcher", "paper_source", "PAPER_SOURCE_INDEX.json"),
     path.join(projectRoot, "researcher", "PAPER_SOURCE_INDEX.json"),
     path.join(projectRoot, "researcher", "paper-staging", "PAPER_SOURCE_INDEX.json"),
     path.join(projectRoot, "graph", "PAPER_SOURCE_INDEX.json"),
@@ -799,7 +875,10 @@ function buildLimitations(params: {
   if (params.graphStatus !== "ready") {
     limitations.push("graph_presence_not_ready");
   }
-  if (params.verificationMode === "remote_corpus_summary") {
+  if (
+    params.verificationMode === "remote_corpus_summary" &&
+    params.sourceBackedPresentCount < expected
+  ) {
     limitations.push("remote_corpus_summary_without_per_paper_source_spans");
   }
   if (params.sourceIndex.summaryOnly) {
@@ -860,7 +939,7 @@ function chooseClaimLevel(params: {
   if (params.verificationMode === "remote_corpus_summary") {
     return "remote_corpus_summary";
   }
-  if (params.paperIndexPresentCount > 0 || (params.expectedPaperCount ?? 0) > 0) {
+  if (params.paperIndexPresentCount > 0) {
     return "paper_index_confirmed";
   }
   return params.evidenceMode ? "connectivity_only" : "none";
@@ -947,8 +1026,8 @@ export async function certifyPapernexusTaskForProject(params: {
   const expectedForClaim = expectedPaperCount ?? 0;
   const sourceBackedGraphClaim =
     graphStatus === "ready" &&
-    verificationMode !== "remote_corpus_summary" &&
     expectedForClaim > 0 &&
+    paperIndexPresentCount >= expectedForClaim &&
     sourceBackedPresentCount >= expectedForClaim;
 
   const evidenceMode = pickString(statusRecord, ["mode"]);

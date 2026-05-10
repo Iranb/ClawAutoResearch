@@ -39,6 +39,8 @@ allowed-tools:
    - `relevance_to_challenge`
    - `supporting_papers`
 6. 对跨域文献检索，优先使用 workflow-owned `research30` 集成，而不是只停留在 query 草案。
+7. source-domain 选择要基于 analogy / shared mechanism / transferable principle，而不是只选 target-domain 近邻。
+8. 如果一个 source-domain 的多数检索结果和概念挑战无关，应标记为 insufficient，不要勉强提炼 takeaway。
 
 ## 与 research30 的关系
 
@@ -78,3 +80,4 @@ allowed-tools:
 
 - 不允许退化成“列 3 个看起来相关的学科”
 - 不允许只按 target-domain 邻近领域做保守扩展
+- 不允许把宽泛概念（如 Theory of Mind、feedback、adaptation）当成 takeaway，除非能说明具体机制如何回应当前 challenge

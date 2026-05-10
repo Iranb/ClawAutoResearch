@@ -16,6 +16,7 @@ export type WorkflowPaperArtifactTerminalResult = {
     writeReady: boolean;
     paperQcReady: boolean;
     experimentReady: boolean;
+    stageAllowsTerminal: boolean;
     blockingReason: string | null;
   };
 };
@@ -36,6 +37,13 @@ const READY_STATUSES = new Set([
 const EXPERIMENT_READY_STATUSES = new Set([
   ...READY_STATUSES,
   "ready_for_analysis",
+]);
+
+const PAPER_ARTIFACT_TERMINAL_STAGES = new Set([
+  "write",
+  "review",
+  "submit",
+  "done",
 ]);
 
 function readString(value: unknown): string | null {
@@ -68,6 +76,11 @@ function statusIsOneOf(value: unknown, allowed: Set<string>): boolean {
   return Boolean(normalized && allowed.has(normalized));
 }
 
+function stageAllowsPaperArtifactTerminal(value: unknown): boolean {
+  const stage = normalizedStatus(value);
+  return Boolean(stage && PAPER_ARTIFACT_TERMINAL_STAGES.has(stage));
+}
+
 async function pathExists(filePath: string): Promise<boolean> {
   try {
     await fs.access(filePath);
@@ -84,6 +97,7 @@ export async function detectWorkflowPaperArtifactTerminal(params: {
 }): Promise<WorkflowPaperArtifactTerminalResult> {
   const manifest = readRecord(params.manifest) ?? {};
   const lane = readString(params.lane) ?? "experiment";
+  const stage = readString(manifest.current_stage) ?? null;
   const paperPdfPath = path.join(params.projectRoot, "academic_writer", "paper", "main.pdf");
   const paperTexPath = path.join(params.projectRoot, "academic_writer", "paper", "main.tex");
   const [pdfExists, texExists] = await Promise.all([
@@ -102,11 +116,13 @@ export async function detectWorkflowPaperArtifactTerminal(params: {
   const experimentReady =
     lane !== "experiment" ||
     statusIsOneOf(experimentStatus, EXPERIMENT_READY_STATUSES);
+  const stageAllowsTerminal = stageAllowsPaperArtifactTerminal(stage);
   const blockingReason =
     readString(manifest.blocking_reason) ??
     readString(readRecord(manifest.orchestration_state)?.blocking_reason) ??
     null;
   const terminal =
+    stageAllowsTerminal &&
     pdfExists &&
     texExists &&
     writeReady &&
@@ -118,7 +134,7 @@ export async function detectWorkflowPaperArtifactTerminal(params: {
     terminal,
     reason: terminal ? "live_paper_artifact_ready" : null,
     details: {
-      stage: readString(manifest.current_stage) ?? null,
+      stage,
       owner: readString(manifest.owner_agent) ?? null,
       lane,
       pdfExists,
@@ -129,6 +145,7 @@ export async function detectWorkflowPaperArtifactTerminal(params: {
       writeReady,
       paperQcReady,
       experimentReady,
+      stageAllowsTerminal,
       blockingReason,
     },
   };

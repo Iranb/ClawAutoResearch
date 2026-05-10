@@ -800,6 +800,9 @@ export async function setBrainstormCycleState(params: {
   const trackId = requestedTrackId?.trim().replace(/[\\/]/g, "_") ?? null;
   const defaultPaths = getBrainstormCycleDefaultPaths(trackId);
   const preferScopedDefaults = Boolean(trackId && trackId !== current.trackId);
+  const requestedProviderStatus = normalizeStage(
+    patch.providerStatus ?? patch.provider_status
+  );
   const next = normalizeBrainstormCycleState({
     ...serializeBrainstormCycleState(current),
     ...patch,
@@ -812,7 +815,7 @@ export async function setBrainstormCycleState(params: {
       current.providerMode ??
       "core",
     provider_status:
-      normalizeStage(patch.providerStatus ?? patch.provider_status) ??
+      (requestedProviderStatus === "completed" ? "ready" : requestedProviderStatus) ??
       current.providerStatus ??
       (isBrainstormCycleReady(current) ? "ready" : "pending"),
     provider_last_run_at:

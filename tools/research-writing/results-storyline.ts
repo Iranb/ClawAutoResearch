@@ -16,6 +16,12 @@ import {
   type ResultsStorylineState,
 } from "../workflow-guard-state/results-storyline";
 import { normalizeWritingContractState } from "../workflow-guard-state/writing-contract";
+import {
+  getPromptText,
+  loadWorkflowPromptConfig,
+  renderPromptTemplate,
+  type WorkflowPromptConfig,
+} from "../workflow-prompt-config";
 import { normalizeSurveyStorylinePacket } from "./survey-storyline";
 
 function nowIso(): string {
@@ -74,6 +80,15 @@ function buildFingerprint(value: unknown): string {
   return `sha1:${createHash("sha1").update(JSON.stringify(value)).digest("hex")}`;
 }
 
+function configuredPromptText(
+  config: WorkflowPromptConfig | null | undefined,
+  pathParts: string[],
+  fallback: string,
+  values: Record<string, unknown> = {}
+): string {
+  return renderPromptTemplate(getPromptText(config, pathParts, fallback), values);
+}
+
 function makeExperimentQuestions(params: {
   primaryMetric: string | null;
   baselineReference: string | null;
@@ -81,9 +96,15 @@ function makeExperimentQuestions(params: {
   figureTableIds: string[];
   unsupportedClaimsText: string | null;
   trackVerdictsText: string | null;
+  promptConfig?: WorkflowPromptConfig | null;
 }): ResultsStorylineQuestion[] {
   const primaryMetric = params.primaryMetric ?? "the primary metric";
   const baselineReference = params.baselineReference ?? "the strongest named baseline";
+  const promptValues = {
+    primaryMetric,
+    baselineReference,
+  };
+  const configRoot = ["paperWriting", "resultsStoryline", "experimentQuestions"];
   const failureKnown = /fail|boundary|limitation|unsupported/i.test(
     `${params.unsupportedClaimsText ?? ""}\n${params.trackVerdictsText ?? ""}`
   );
@@ -93,9 +114,18 @@ function makeExperimentQuestions(params: {
     {
       questionId: "effectiveness",
       sectionId: null,
-      prompt: `Does the method improve ${primaryMetric} over ${baselineReference}?`,
-      objective:
+      prompt: configuredPromptText(
+        params.promptConfig,
+        [...configRoot, "effectiveness", "prompt"],
+        "Does the method improve {{primaryMetric}} over {{baselineReference}}?",
+        promptValues
+      ),
+      objective: configuredPromptText(
+        params.promptConfig,
+        [...configRoot, "effectiveness", "objective"],
         "Open Results with the cleanest effectiveness question before diving into mechanism or nuance.",
+        promptValues
+      ),
       evidenceIds: ids.slice(0, 2),
       figureTableIds: visuals.slice(0, 2),
       tensionIds: [],
@@ -105,9 +135,18 @@ function makeExperimentQuestions(params: {
     {
       questionId: "mechanism",
       sectionId: null,
-      prompt: "What mechanism explains the observed gain?",
-      objective:
+      prompt: configuredPromptText(
+        params.promptConfig,
+        [...configRoot, "mechanism", "prompt"],
+        "What mechanism explains the observed gain?",
+        promptValues
+      ),
+      objective: configuredPromptText(
+        params.promptConfig,
+        [...configRoot, "mechanism", "objective"],
         "Make the causal or structural mechanism explicit instead of leaving the gain as a black-box empirical win.",
+        promptValues
+      ),
       evidenceIds: ids.slice(0, 3),
       figureTableIds: visuals.slice(1, 3),
       tensionIds: [],
@@ -117,8 +156,18 @@ function makeExperimentQuestions(params: {
     {
       questionId: "baseline",
       sectionId: null,
-      prompt: `How does the method compare against ${baselineReference} under the fairest shared protocol?`,
-      objective: "Prevent the strongest-baseline comparison from being buried or deferred.",
+      prompt: configuredPromptText(
+        params.promptConfig,
+        [...configRoot, "baseline", "prompt"],
+        "How does the method compare against {{baselineReference}} under the fairest shared protocol?",
+        promptValues
+      ),
+      objective: configuredPromptText(
+        params.promptConfig,
+        [...configRoot, "baseline", "objective"],
+        "Prevent the strongest-baseline comparison from being buried or deferred.",
+        promptValues
+      ),
       evidenceIds: ids.slice(0, 2),
       figureTableIds: visuals
         .filter((entry) => /^table/i.test(entry) || /^tab:/i.test(entry))
@@ -130,9 +179,18 @@ function makeExperimentQuestions(params: {
     {
       questionId: "boundary",
       sectionId: null,
-      prompt: "Where does the method fail, require qualification, or become brittle?",
-      objective:
+      prompt: configuredPromptText(
+        params.promptConfig,
+        [...configRoot, "boundary", "prompt"],
+        "Where does the method fail, require qualification, or become brittle?",
+        promptValues
+      ),
+      objective: configuredPromptText(
+        params.promptConfig,
+        [...configRoot, "boundary", "objective"],
         "Force boundary conditions into the main Results arc instead of leaving them to reviewer pressure or limitations alone.",
+        promptValues
+      ),
       evidenceIds: ids.slice(-2),
       figureTableIds: visuals.slice(2, 4),
       tensionIds: [],
@@ -142,9 +200,18 @@ function makeExperimentQuestions(params: {
     {
       questionId: "robustness_cost",
       sectionId: null,
-      prompt: "What is the robustness, cost, or scalability trade-off once the main effect is established?",
-      objective:
+      prompt: configuredPromptText(
+        params.promptConfig,
+        [...configRoot, "robustnessCost", "prompt"],
+        "What is the robustness, cost, or scalability trade-off once the main effect is established?",
+        promptValues
+      ),
+      objective: configuredPromptText(
+        params.promptConfig,
+        [...configRoot, "robustnessCost", "objective"],
         "Close the Results arc with practical trade-offs instead of an isolated final benchmark dump.",
+        promptValues
+      ),
       evidenceIds: ids.slice(-2),
       figureTableIds: visuals.slice(3, 5),
       tensionIds: [],
@@ -158,16 +225,29 @@ function makeSurveyQuestions(params: {
   topic: string | null;
   figureTableIds: string[];
   supportPacket: ReturnType<typeof normalizeSurveyStorylinePacket>;
+  promptConfig?: WorkflowPromptConfig | null;
 }): ResultsStorylineQuestion[] {
   const topic = params.topic ?? "the survey topic";
   const packet = params.supportPacket;
+  const promptValues = { topic };
+  const configRoot = ["paperWriting", "resultsStoryline", "surveyFallbackQuestions"];
   if (!packet || packet.sectionPlans.length === 0) {
     return [
       {
         questionId: "scope_protocol",
         sectionId: "scope_and_protocol",
-        prompt: `What is the survey scope and protocol for ${topic}?`,
-        objective: "Start with inclusion, exclusion, and retrieval discipline before synthesis claims.",
+        prompt: configuredPromptText(
+          params.promptConfig,
+          [...configRoot, "scopeProtocol", "prompt"],
+          "What is the survey scope and protocol for {{topic}}?",
+          promptValues
+        ),
+        objective: configuredPromptText(
+          params.promptConfig,
+          [...configRoot, "scopeProtocol", "objective"],
+          "Start with inclusion, exclusion, and retrieval discipline before synthesis claims.",
+          promptValues
+        ),
         evidenceIds: ["survey:scope", "survey:protocol"],
         figureTableIds: params.figureTableIds.slice(0, 1),
         tensionIds: [],
@@ -177,8 +257,18 @@ function makeSurveyQuestions(params: {
       {
         questionId: "taxonomy",
         sectionId: "taxonomy",
-        prompt: `How should the field around ${topic} be organized into stable families or themes?`,
-        objective: "Turn the literature into a durable structure instead of a paper list.",
+        prompt: configuredPromptText(
+          params.promptConfig,
+          [...configRoot, "taxonomy", "prompt"],
+          "How should the field around {{topic}} be organized into stable families or themes?",
+          promptValues
+        ),
+        objective: configuredPromptText(
+          params.promptConfig,
+          [...configRoot, "taxonomy", "objective"],
+          "Turn the literature into a durable structure instead of a paper list.",
+          promptValues
+        ),
         evidenceIds: ["survey:taxonomy"],
         figureTableIds: params.figureTableIds.slice(0, 2),
         tensionIds: [],
@@ -188,8 +278,18 @@ function makeSurveyQuestions(params: {
       {
         questionId: "evidence_synthesis",
         sectionId: "evidence_synthesis",
-        prompt: "What does the comparative evidence actually support across those families?",
-        objective: "Synthesize comparable findings before moving to benchmark landscape or open problems.",
+        prompt: configuredPromptText(
+          params.promptConfig,
+          [...configRoot, "evidenceSynthesis", "prompt"],
+          "What does the comparative evidence actually support across those families?",
+          promptValues
+        ),
+        objective: configuredPromptText(
+          params.promptConfig,
+          [...configRoot, "evidenceSynthesis", "objective"],
+          "Synthesize comparable findings before moving to benchmark landscape or open problems.",
+          promptValues
+        ),
         evidenceIds: ["survey:evidence_synthesis"],
         figureTableIds: params.figureTableIds.slice(1, 3),
         tensionIds: [],
@@ -199,8 +299,18 @@ function makeSurveyQuestions(params: {
       {
         questionId: "benchmark_landscape",
         sectionId: "benchmark_landscape",
-        prompt: "Which benchmark and evaluation patterns are genuinely comparable, and where are they not?",
-        objective: "Keep benchmark landscape honest about incompatibilities and evaluation drift.",
+        prompt: configuredPromptText(
+          params.promptConfig,
+          [...configRoot, "benchmarkLandscape", "prompt"],
+          "Which benchmark and evaluation patterns are genuinely comparable, and where are they not?",
+          promptValues
+        ),
+        objective: configuredPromptText(
+          params.promptConfig,
+          [...configRoot, "benchmarkLandscape", "objective"],
+          "Keep benchmark landscape honest about incompatibilities and evaluation drift.",
+          promptValues
+        ),
         evidenceIds: ["survey:benchmark_landscape"],
         figureTableIds: params.figureTableIds.slice(2, 4),
         tensionIds: [],
@@ -210,8 +320,18 @@ function makeSurveyQuestions(params: {
       {
         questionId: "open_problems",
         sectionId: "open_problems",
-        prompt: "What open problems and disagreement zones remain once the comparative landscape is mapped?",
-        objective: "End with explicit unresolved gaps instead of vague future-work filler.",
+        prompt: configuredPromptText(
+          params.promptConfig,
+          [...configRoot, "openProblems", "prompt"],
+          "What open problems and disagreement zones remain once the comparative landscape is mapped?",
+          promptValues
+        ),
+        objective: configuredPromptText(
+          params.promptConfig,
+          [...configRoot, "openProblems", "objective"],
+          "End with explicit unresolved gaps instead of vague future-work filler.",
+          promptValues
+        ),
         evidenceIds: ["survey:open_problems"],
         figureTableIds: params.figureTableIds.slice(3, 5),
         tensionIds: [],
@@ -252,11 +372,20 @@ function renderMarkdown(params: {
     ResultsStorylineState,
     "storyStrategy" | "storyStrategyRationale" | "storyThesis" | "intellectualCenterSection"
   >;
+  promptConfig?: WorkflowPromptConfig | null;
 }): string {
   const intro =
     params.workflowLine === "survey"
-      ? "Use this file as the survey synthesis order: the section sequence should answer field-structure questions in reviewer-readable order."
-      : "Use this file as the Results argument order: the section sequence should answer reviewer questions, not mirror experiment execution order.";
+      ? getPromptText(
+          params.promptConfig,
+          ["paperWriting", "resultsStoryline", "markdownIntro", "survey"],
+          "Use this file as the survey synthesis order: the section sequence should answer field-structure questions in reviewer-readable order."
+        )
+      : getPromptText(
+          params.promptConfig,
+          ["paperWriting", "resultsStoryline", "markdownIntro", "experiment"],
+          "Use this file as the Results argument order: the section sequence should answer reviewer questions, not mirror experiment execution order."
+        );
   const surveyHeader =
     params.workflowLine === "survey"
       ? [
@@ -275,7 +404,11 @@ function renderMarkdown(params: {
         ].filter((entry): entry is string => Boolean(entry))
       : [];
   return [
-    "# Results Question Order",
+    getPromptText(
+      params.promptConfig,
+      ["paperWriting", "resultsStoryline", "markdownHeading"],
+      "# Results Question Order"
+    ),
     "",
     intro,
     ...(surveyHeader.length > 0 ? ["", ...surveyHeader] : []),
@@ -297,10 +430,15 @@ function renderMarkdown(params: {
 export async function materializeResultsStoryline(params: {
   projectRoot: string;
   stage?: string | null;
+  promptConfigPath?: string | null;
+  promptConfig?: WorkflowPromptConfig | null;
 }): Promise<{
   state: ResultsStorylineState;
   generatedFiles: string[];
 }> {
+  const promptConfig =
+    params.promptConfig ??
+    loadWorkflowPromptConfig({ configPath: params.promptConfigPath ?? null });
   const projectRoot = path.resolve(params.projectRoot);
   const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
   const manifest = (await readJsonIfExists<Record<string, unknown>>(manifestPath)) ?? {};
@@ -358,6 +496,7 @@ export async function materializeResultsStoryline(params: {
             researchProgram.goal,
           figureTableIds,
           supportPacket,
+          promptConfig,
         })
       : makeExperimentQuestions({
           primaryMetric: researchProgram.primaryMetric,
@@ -366,6 +505,7 @@ export async function materializeResultsStoryline(params: {
           figureTableIds,
           unsupportedClaimsText,
           trackVerdictsText,
+          promptConfig,
         });
 
   const evidenceModules = uniqueStrings(questions.flatMap((entry) => entry.evidenceIds));
@@ -443,6 +583,7 @@ export async function materializeResultsStoryline(params: {
         workflowLine,
         questions,
         state,
+        promptConfig,
       })}\n`
     );
     generatedFiles.push(state.resultsQuestionOrderPath ?? "");

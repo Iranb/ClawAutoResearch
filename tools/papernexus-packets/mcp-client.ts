@@ -10,6 +10,7 @@ export type PapernexusMcpToolName =
   | "research_lookup"
   | "research_briefing"
   | "idea_catalyst"
+  | "literature_discovery"
   | "import_workflow"
   | "refresh_paper_graph"
   | "paper_index"

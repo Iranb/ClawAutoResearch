@@ -362,6 +362,183 @@ function citationBibliographyEntries() {
   primaryClass={cs.LG},
   url={https://arxiv.org/abs/2410.11206}
 }`,
+    `@inproceedings{laine2017temporal,
+  title={Temporal Ensembling for Semi-Supervised Learning},
+  author={Laine, Samuli and Aila, Timo},
+  booktitle={International Conference on Learning Representations},
+  year={2017},
+  url={https://arxiv.org/abs/1610.02242}
+}`,
+    `@inproceedings{tarvainen2017meanteacher,
+  title={Mean Teachers are Better Role Models: Weight-Averaged Consistency Targets Improve Semi-Supervised Deep Learning Results},
+  author={Tarvainen, Antti and Valpola, Harri},
+  booktitle={Advances in Neural Information Processing Systems},
+  year={2017},
+  url={https://arxiv.org/abs/1703.01780}
+}`,
+    `@inproceedings{grandvalet2005entropy,
+  title={Semi-Supervised Learning by Entropy Minimization},
+  author={Grandvalet, Yves and Bengio, Yoshua},
+  booktitle={Advances in Neural Information Processing Systems},
+  year={2005},
+  url={https://proceedings.neurips.cc/paper/2004/hash/96f2b50b5d3613adf9c27049b2a888c7-Abstract.html}
+}`,
+    `@inproceedings{lee2013pseudolabel,
+  title={Pseudo-Label: The Simple and Efficient Semi-Supervised Learning Method for Deep Neural Networks},
+  author={Lee, Dong-Hyun},
+  booktitle={ICML Workshop on Challenges in Representation Learning},
+  year={2013},
+  url={http://deeplearning.net/wp-content/uploads/2013/03/pseudo_label_final.pdf}
+}`,
+    `@inproceedings{oliver2018realistic,
+  title={Realistic Evaluation of Deep Semi-Supervised Learning Algorithms},
+  author={Oliver, Avital and Odena, Augustus and Raffel, Colin A. and Cubuk, Ekin Dogus and Goodfellow, Ian},
+  booktitle={Advances in Neural Information Processing Systems},
+  year={2018},
+  url={https://arxiv.org/abs/1804.09170}
+}`,
+    `@inproceedings{berthelot2020remixmatch,
+  title={ReMixMatch: Semi-Supervised Learning with Distribution Alignment and Augmentation Anchoring},
+  author={Berthelot, David and Carlini, Nicholas and Cubuk, Ekin Dogus and Kurakin, Alexey and Sohn, Kihyuk and Zhang, Han and Raffel, Colin},
+  booktitle={International Conference on Learning Representations},
+  year={2020},
+  url={https://arxiv.org/abs/1911.09785}
+}`,
+    `@article{miyato2018vat,
+  title={Virtual Adversarial Training: A Regularization Method for Supervised and Semi-Supervised Learning},
+  author={Miyato, Takeru and Maeda, Shin-ichi and Koyama, Masanori and Ishii, Shin},
+  journal={IEEE Transactions on Pattern Analysis and Machine Intelligence},
+  year={2018},
+  url={https://arxiv.org/abs/1704.03976}
+}`,
+    `@inproceedings{sajjadi2016regularization,
+  title={Regularization With Stochastic Transformations and Perturbations for Deep Semi-Supervised Learning},
+  author={Sajjadi, Mehdi and Javanmardi, Mehran and Tasdizen, Tolga},
+  booktitle={Advances in Neural Information Processing Systems},
+  year={2016},
+  url={https://proceedings.neurips.cc/paper/2016/hash/30ef30b64204a3088a26bc2e6ecf7602-Abstract.html}
+}`,
+    `@inproceedings{han2020autonovel,
+  title={Automatically Discovering and Learning New Visual Categories with Ranking Statistics},
+  author={Han, Kai and Rebuffi, Sylvestre-Alvise and Ehrhardt, Sebastien and Vedaldi, Andrea and Zisserman, Andrew},
+  booktitle={International Conference on Learning Representations},
+  year={2020},
+  url={https://arxiv.org/abs/2002.05714}
+}`,
+    `@inproceedings{zhong2021ncl,
+  title={Neighborhood Contrastive Learning for Novel Class Discovery},
+  author={Zhong, Zhun and Fini, Enrico and Roy, Subhankar and Luo, Zhiming and Ricci, Elisa and Sebe, Nicu},
+  booktitle={IEEE/CVF Conference on Computer Vision and Pattern Recognition},
+  year={2021},
+  url={https://openaccess.thecvf.com/content/CVPR2021/html/Zhong_Neighborhood_Contrastive_Learning_for_Novel_Class_Discovery_CVPR_2021_paper.html}
+}`,
+    `@inproceedings{fini2021uno,
+  title={A Unified Objective for Novel Class Discovery},
+  author={Fini, Enrico and Sangineto, Enver and Lathuiliere, Stephane and Zhong, Zhun and Nabi, Moin and Ricci, Elisa},
+  booktitle={IEEE/CVF International Conference on Computer Vision},
+  year={2021},
+  url={https://arxiv.org/abs/2108.08536}
+}`,
+    `@inproceedings{zhong2021openmix,
+  title={OpenMix: Reviving Known Knowledge for Discovering Novel Visual Categories in An Open World},
+  author={Zhong, Zhun and Zhu, Linchao and Luo, Zhiming and Li, Shaozi and Yang, Yi and Sebe, Nicu},
+  booktitle={IEEE/CVF Conference on Computer Vision and Pattern Recognition},
+  year={2021},
+  url={https://arxiv.org/abs/2004.05551}
+}`,
+    `@inproceedings{wen2023simgcd,
+  title={Parametric Classification for Generalized Category Discovery: A Baseline Study},
+  author={Wen, Xin and Zhao, Bingchen and Qi, Xiaojuan},
+  booktitle={IEEE/CVF International Conference on Computer Vision},
+  year={2023},
+  url={https://openaccess.thecvf.com/content/ICCV2023/html/Wen_Parametric_Classification_for_Generalized_Category_Discovery_A_Baseline_Study_ICCV_2023_paper.html}
+}`,
+    `@inproceedings{pu2023dccl,
+  title={Dynamic Conceptional Contrastive Learning for Generalized Category Discovery},
+  author={Pu, Nan and Zhong, Zhun and Sebe, Nicu},
+  booktitle={IEEE/CVF Conference on Computer Vision and Pattern Recognition},
+  year={2023},
+  url={https://openaccess.thecvf.com/content/CVPR2023/html/Pu_Dynamic_Conceptional_Contrastive_Learning_for_Generalized_Category_Discovery_CVPR_2023_paper.html}
+}`,
+    `@misc{chiaroni2022pim,
+  title={Parametric Information Maximization for Generalized Category Discovery},
+  author={Chiaroni, Florent and Dolz, Jose and Masud, Ziko Imtiaz and Mitiche, Amar and Ben Ayed, Ismail},
+  year={2022},
+  eprint={2212.00334},
+  archivePrefix={arXiv},
+  url={https://arxiv.org/abs/2212.00334}
+}`,
+    `@inproceedings{snell2017prototypical,
+  title={Prototypical Networks for Few-shot Learning},
+  author={Snell, Jake and Swersky, Kevin and Zemel, Richard S.},
+  booktitle={Advances in Neural Information Processing Systems},
+  year={2017},
+  url={https://arxiv.org/abs/1703.05175}
+}`,
+    `@inproceedings{caron2018deepcluster,
+  title={Deep Clustering for Unsupervised Learning of Visual Features},
+  author={Caron, Mathilde and Bojanowski, Piotr and Joulin, Armand and Douze, Matthijs},
+  booktitle={European Conference on Computer Vision},
+  year={2018},
+  url={https://arxiv.org/abs/1807.05520}
+}`,
+    `@inproceedings{vangansbeke2020scan,
+  title={SCAN: Learning to Classify Images Without Labels},
+  author={Van Gansbeke, Wouter and Vandenhende, Simon and Georgoulis, Stamatios and Proesmans, Marc and Van Gool, Luc},
+  booktitle={European Conference on Computer Vision},
+  year={2020},
+  url={https://arxiv.org/abs/2005.12320}
+}`,
+    `@inproceedings{asano2020selflabelling,
+  title={Self-labelling via Simultaneous Clustering and Representation Learning},
+  author={Asano, Yuki Markus and Rupprecht, Christian and Vedaldi, Andrea},
+  booktitle={International Conference on Learning Representations},
+  year={2020},
+  url={https://arxiv.org/abs/1911.05371}
+}`,
+    `@inproceedings{chen2020simclr,
+  title={A Simple Framework for Contrastive Learning of Visual Representations},
+  author={Chen, Ting and Kornblith, Simon and Norouzi, Mohammad and Hinton, Geoffrey},
+  booktitle={International Conference on Machine Learning},
+  year={2020},
+  url={https://arxiv.org/abs/2002.05709}
+}`,
+    `@inproceedings{he2020moco,
+  title={Momentum Contrast for Unsupervised Visual Representation Learning},
+  author={He, Kaiming and Fan, Haoqi and Wu, Yuxin and Xie, Saining and Girshick, Ross},
+  booktitle={IEEE/CVF Conference on Computer Vision and Pattern Recognition},
+  year={2020},
+  url={https://arxiv.org/abs/1911.05722}
+}`,
+    `@inproceedings{khosla2020supcon,
+  title={Supervised Contrastive Learning},
+  author={Khosla, Prannay and Teterwak, Piotr and Wang, Chen and Sarna, Aaron and Tian, Yonglong and Isola, Phillip and Maschinot, Aaron and Liu, Ce and Krishnan, Dilip},
+  booktitle={Advances in Neural Information Processing Systems},
+  year={2020},
+  url={https://arxiv.org/abs/2004.11362}
+}`,
+    `@inproceedings{grill2020byol,
+  title={Bootstrap Your Own Latent: A New Approach to Self-Supervised Learning},
+  author={Grill, Jean-Bastien and Strub, Florian and Altche, Florent and Tallec, Corentin and Richemond, Pierre H. and Buchatskaya, Elena and Doersch, Carl and Pires, Bernardo Avila and Guo, Zhaohan Daniel and Azar, Mohammad Gheshlaghi and Piot, Bilal and Kavukcuoglu, Koray and Munos, Remi and Valko, Michal},
+  booktitle={Advances in Neural Information Processing Systems},
+  year={2020},
+  url={https://arxiv.org/abs/2006.07733}
+}`,
+    `@misc{oord2018cpc,
+  title={Representation Learning with Contrastive Predictive Coding},
+  author={Oord, Aaron van den and Li, Yazhe and Vinyals, Oriol},
+  year={2018},
+  eprint={1807.03748},
+  archivePrefix={arXiv},
+  url={https://arxiv.org/abs/1807.03748}
+}`,
+    `@inproceedings{wu2018instance,
+  title={Unsupervised Feature Learning via Non-parametric Instance Discrimination},
+  author={Wu, Zhirong and Xiong, Yuanjun and Yu, Stella X. and Lin, Dahua},
+  booktitle={IEEE/CVF Conference on Computer Vision and Pattern Recognition},
+  year={2018},
+  url={https://arxiv.org/abs/1805.01978}
+}`,
   ];
 }
 
@@ -470,19 +647,22 @@ async function readPaperSourceIndex(projectRoot: string): Promise<SourceIndexPap
 function sourceIndexBibtexEntries(papers: SourceIndexPaper[], existingKeys: Set<string>) {
   const entries: string[] = [];
   const keys: string[] = [];
-  const existingTitles = new Set<string>();
+  const existingTitleKeys = new Map<string, string>();
   for (const entry of citationBibliographyEntries()) {
+    const [key] = parseBibKeys(entry);
     const title = bibEntryField(entry, "title");
-    if (title) {
-      existingTitles.add(title.toLowerCase());
+    if (key && title) {
+      existingTitleKeys.set(title.toLowerCase(), key);
     }
   }
   for (const paper of papers) {
     const titleKey = paper.title.toLowerCase();
     const fixedKey = paper.key;
-    if (existingKeys.has(fixedKey) || existingTitles.has(titleKey)) {
-      if (paper.year !== null) {
-        keys.push(fixedKey);
+    const existingTitleKey = existingTitleKeys.get(titleKey);
+    if (existingKeys.has(fixedKey) || existingTitleKey) {
+      const reusableKey = existingKeys.has(fixedKey) ? fixedKey : existingTitleKey;
+      if (paper.year !== null && reusableKey) {
+        keys.push(reusableKey);
       }
       continue;
     }

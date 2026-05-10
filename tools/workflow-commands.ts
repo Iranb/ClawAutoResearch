@@ -112,6 +112,7 @@ import {
   compactStatusText,
   joinStatusList,
 } from "./workflow-commands/formatters.js";
+import { buildWorkflowStatusPresentation } from "./workflow-commands/presentation.js";
 import { defaultResearchProgramZoteroProjectPath } from "./workflow-guard-project-state";
 import { sanitizeProjectIdFragment } from "./workflow-guard-project/project-context";
 
@@ -2098,6 +2099,11 @@ function createWorkflowStatusCommandHandler(
           discussionStore: statusState.discussionStore,
           gateReviewStore: statusState.gateReviewStore,
           codeReviewStore: statusState.codeReviewStore,
+        }),
+        presentation: buildWorkflowStatusPresentation({
+          channel: ctx.channel,
+          snapshot: statusState.snapshot,
+          autoIteratorResult: statusState.autoIteratorResult,
         }),
       };
     } catch (error) {
