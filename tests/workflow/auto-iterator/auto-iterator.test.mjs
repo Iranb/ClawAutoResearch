@@ -4298,6 +4298,24 @@ test("graph presence check refreshes remote status metadata through remote_mcp",
       ),
     },
   ]);
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  await writeJson(manifestPath, {
+    ...manifest,
+    paper_ingestion: {
+      ...(manifest.paper_ingestion ?? {}),
+      batch_items: [
+        {
+          import_task_id: "failed-import-task",
+          canonical_id: "arxiv:9999.00001",
+          title: "Failed optional import",
+          status: "failed",
+          stage: "failed",
+          error: "optional source rejected by remote import",
+        },
+      ],
+    },
+  });
   await fs.rm(path.join(projectRoot, "graph", "PAPERNEXUS_STATUS.json"), { force: true });
 
   const result = await checkGraphPresenceForWorkflow({
@@ -4340,6 +4358,8 @@ test("graph presence check refreshes remote status metadata through remote_mcp",
   assert.equal(certification.graph.source_backed_present_count, 1);
   assert.equal(certification.mcp_contract.remote_mcp_evidence, true);
   assert.equal(certification.mcp_contract.skill_aligned_graph_claim, true);
+  assert.equal(certification.upload.import_tasks.failed_task_count, 1);
+  assert.ok(certification.limitations.includes("failed_import_tasks"));
 
   const receipt = JSON.parse(
     await fs.readFile(
@@ -4350,6 +4370,7 @@ test("graph presence check refreshes remote status metadata through remote_mcp",
   assert.equal(receipt.status, "graph_ready");
   assert.equal(receipt.graph_visibility, "verified");
   assert.equal(receipt.source_backed_graph_claim, true);
+  assert.equal(receipt.task_summary.failed, 1);
   assert.equal(receipt.coverage.min_required_satisfied, true);
 });
 

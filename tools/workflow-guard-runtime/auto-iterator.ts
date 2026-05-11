@@ -234,10 +234,8 @@ function isVerifiedSourceBackedGraphBuildReceipt(
     receipt.graph_visibility ?? receipt.graphVisibility
   );
   const coverage = asRecord(receipt.coverage);
-  const taskSummary = asRecord(receipt.task_summary ?? receipt.taskSummary);
   const sourceBackedCount =
     pickNumber(receipt, ["source_backed_count", "sourceBackedCount"]) ?? 0;
-  const failedTaskCount = pickNumber(taskSummary ?? {}, ["failed"]) ?? 0;
   return (
     (receiptStatus === "graph_ready" || receiptStatus === "evidence_ready") &&
     graphVisibility === "verified" &&
@@ -245,8 +243,7 @@ function isVerifiedSourceBackedGraphBuildReceipt(
       receipt.sourceBackedGraphClaim === true) &&
     (coverage?.min_required_satisfied === true ||
       coverage?.minRequiredSatisfied === true) &&
-    sourceBackedCount > 0 &&
-    failedTaskCount === 0
+    sourceBackedCount > 0
   );
 }
 

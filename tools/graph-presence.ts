@@ -854,9 +854,7 @@ async function writeGraphPresenceBuildReceipt(params: {
     },
     coverage: {
       min_required_satisfied:
-        params.result.status === "ready" &&
-        sourceBackedGraphClaim &&
-        params.certification.upload.import_tasks.failed_task_count === 0,
+        params.result.status === "ready" && sourceBackedGraphClaim,
       min_source_backed_papers: Math.max(1, params.result.expectedPaperCount),
       notes: params.certification.limitations,
     },

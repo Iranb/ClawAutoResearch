@@ -2075,12 +2075,6 @@ async function readVerifiedSourceBackedGraphBuildReceipt(
     receipt.coverage && typeof receipt.coverage === "object" && !Array.isArray(receipt.coverage)
       ? (receipt.coverage as Record<string, unknown>)
       : {};
-  const taskSummary =
-    receipt.task_summary &&
-    typeof receipt.task_summary === "object" &&
-    !Array.isArray(receipt.task_summary)
-      ? (receipt.task_summary as Record<string, unknown>)
-      : {};
   const sourceBackedCount =
     typeof receipt.source_backed_count === "number" &&
     Number.isFinite(receipt.source_backed_count)
@@ -2089,10 +2083,6 @@ async function readVerifiedSourceBackedGraphBuildReceipt(
           Number.isFinite(receipt.sourceBackedCount)
         ? receipt.sourceBackedCount
         : 0;
-  const failedTaskCount =
-    typeof taskSummary.failed === "number" && Number.isFinite(taskSummary.failed)
-      ? taskSummary.failed
-      : 0;
   const verified =
     (receiptStatus === "graph_ready" || receiptStatus === "evidence_ready") &&
     graphVisibility === "verified" &&
@@ -2100,8 +2090,7 @@ async function readVerifiedSourceBackedGraphBuildReceipt(
       receipt.sourceBackedGraphClaim === true) &&
     (coverage.min_required_satisfied === true ||
       coverage.minRequiredSatisfied === true) &&
-    sourceBackedCount > 0 &&
-    failedTaskCount === 0;
+    sourceBackedCount > 0;
   return verified ? receipt : null;
 }
 
@@ -2425,9 +2414,7 @@ async function reconcileGraphPresenceManifestFromArtifacts(params: {
         readManifestNumber(certificationUpload, ["queue_remaining"]) ?? 0,
     },
     coverage: {
-      min_required_satisfied:
-        sourceBackedGraphClaim &&
-        (readManifestNumber(certificationImportTasks, ["failed_task_count"]) ?? 0) === 0,
+      min_required_satisfied: sourceBackedGraphClaim,
       min_source_backed_papers: Math.max(1, expectedPaperCount),
       notes: limitations.filter((entry): entry is string => typeof entry === "string"),
     },

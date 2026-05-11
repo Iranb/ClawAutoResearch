@@ -261,6 +261,15 @@ At minimum, the brainstorming flow must use the workflow-declared PaperNexus gra
 - if `papernexusAccessMode = local_mcp`, use the local PaperNexus MCP tools for graph reads and writes
 - `research_workflow.run_brainstorm_cycle` — persist the selected brainstorm / chain bundle so question packets, working memory, evidence chains, and synthesis packets survive restarts and agent handoffs
 
+When PaperNexus `idea_catalyst` runs in `live_discovery` or `hybrid` mode, the MCP response is not enough by itself. AutoResearch must materialize the returned packet bundle into project-local durable artifacts under `{PROJ}/researcher/idea-catalyst/`:
+
+- `live_packet_bundle.json`
+- `LIVE_DISCOVERY_RUN_MANIFEST.json`
+- `LIVE_DISCOVERY_EVIDENCE_CARDS.json`
+- `LIVE_DISCOVERY_READ_MODEL.json`
+
+The read model must record target/source retrieval counts, source-domain pruning decisions, evidence IDs, pairwise ranking backend, temporal cutoff/leakage policy, and a `ready` or `degraded` status. Metadata-only or heuristic live-discovery output can enrich ideation, but it does not replace source-backed graph proof for downstream claims.
+
 The graph-backed brainstorming pack should preserve:
 
 - frontier lens (`limitation / contradiction / transfer / composition`)
@@ -393,7 +402,7 @@ This applies regardless of `AUTO_PROCEED`. Skipping a stage (e.g. going IDEA →
 | From stage | To stage | Completion signals (all must exist) |
 |------------|----------|--------------------------------------|
 | SETUP      | GRAPH_BUILD | `{PROJ}/PROJECT_MANIFEST.json` with `idle_research` block present, `{PROJ}/TRACK_REGISTRY.json`, `{PROJ}/CLAIM_POLICY.md`, `{PROJ}/researcher/EXPERIMENT_LEDGER.json`, `{PROJ}/graph/` |
-| GRAPH_BUILD | FRONTIER_MAPPING | `{PROJ}/graph/PAPERNEXUS_STATUS.json`, `{PROJ}/graph/GRAPH_BUILD_REPORT.md`, `{PROJ}/graph/GRAPH_PRESENCE_CHECK.json`, and `paper_ingestion.graph_presence_status = ready` recorded in `{PROJ}/PROJECT_MANIFEST.json` against the shared global graph |
+| GRAPH_BUILD | FRONTIER_MAPPING | `{PROJ}/graph/PAPERNEXUS_SYNC_STATE.json` with source-backed graph readiness, a valid graph build receipt/certification, and compatible manifest projections such as `paper_ingestion.papernexus_sync_can_continue = true`; legacy `paper_ingestion.graph_presence_status = ready` is only a compatibility projection, not the source of truth |
 | FRONTIER_MAPPING | IDEA | `{PROJ}/researcher/FRONTIER_REPORT.md`, frontier files under `{PROJ}/graph/` (or legacy non-empty `{PROJ}/graph/subgraphs/`), and `current_micro_stage = frontiers_packaged` |
 | IDEA       | PLAN     | `{PROJ}/researcher/IDEA_REPORT.md`, `{PROJ}/researcher/IDEA_AUDIT.md`, `{PROJ}/TRACK_REGISTRY.json` with 1–2 `active` tracks, graph-backed innovation evidence recorded for each active track, a non-empty reasoning packet under `{PROJ}/researcher/reasoning/<track-id>/` for each active track, and when experiment memory contains newer evidence than the last ideation reflection, `{PROJ}/researcher/INNOVATION_REFLECTION.md` refreshed after the latest experiment results |
 | **PLAN**   | **CODE** | **`{PROJ}/orchestrator/PLAN.md`** AND **`{PROJ}/orchestrator/TODOS.md`** AND **`{PROJ}/orchestrator/PLAN_AUDIT.md`** |

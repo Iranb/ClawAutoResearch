@@ -70,7 +70,7 @@ paper/
 - **Never fabricate citations.** Verify citation details against a primary source before adding them to the paper.
 - **Do not run LaTeX compilation.** Compilation is handled by the `paper-compile` skill.
 - **Do not modify experiment code or re-run analyses.**
-- **Do not treat local PaperNexus storage as a writing source of truth.** Workflow-owned graph context should come from project artifacts or authenticated remote API outputs, not from `~/.papernexus/papers`, `~/.papernexus/index-store`, or local live-graph CLI commands.
+- **Do not treat local PaperNexus storage as a writing source of truth.** Workflow-owned graph context should come from project artifacts or authenticated remote HTTP MCP outputs, with remote_api wrappers only as an explicit compatibility fallback, not from `~/.papernexus/papers`, `~/.papernexus/index-store`, or local live-graph CLI commands.
 - **Zotero shortlist first, metadata verification second.** Zotero can organize the queue, but final citations still need source-of-truth verification before they enter `refs.bib`.
 
 ## Communication Style

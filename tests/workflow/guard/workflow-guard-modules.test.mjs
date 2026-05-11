@@ -112,6 +112,88 @@ test("PaperNexus sync state blocks remote summary-only graph readiness and drive
   assert.equal(progress.next_action, syncState.workflow_projection.next_action);
 });
 
+test("PaperNexus sync state allows failed imports when source-backed graph evidence is ready", () => {
+  const syncState = buildPapernexusSyncStateFromGraphPresence({
+    projectId: "failed-import-ready-demo",
+    authorityMode: "remote_mcp",
+    corpus: "GCD",
+    graphPresence: {
+      projectId: "failed-import-ready-demo",
+      checkedAt: "2026-05-11T00:00:00.000Z",
+      status: "ready",
+      verificationMode: "canonical_paper_index",
+      reportPath: "graph/GRAPH_PRESENCE_CHECK.json",
+      paperSourceIndexPath: "researcher/PAPER_SOURCE_INDEX.json",
+      expectedPaperCount: 1,
+      presentPaperCount: 1,
+      missingPaperCount: 0,
+      readyProofLevel: "source_span",
+      sourceBackedPresentCount: 1,
+      paperIndexPresentCount: 1,
+      corpusName: "GCD",
+      refreshRequired: false,
+      refreshReason: null,
+      repairRequired: false,
+      repairReason: null,
+      presentPapers: [
+        {
+          canonical_id: "arxiv:2501.00001",
+          title: "Demo",
+          corpus_source_key: "paper:arxiv:2501.00001",
+          has_paper_index_evidence: true,
+          has_source_span_evidence: true,
+        },
+      ],
+      missingPapers: [],
+      graphBuildWorkflowStatus: "ready",
+      graphBuildCanContinue: true,
+      graphBuildRequiresImport: false,
+      graphBuildStatusReason: null,
+    },
+    certificationSummary: {
+      sourceBackedGraphClaim: true,
+      reportPath: "graph/PAPERNEXUS_TASK_CERTIFICATION.json",
+      limitations: ["failed_import_tasks"],
+      taskCount: 2,
+      completedTaskCount: 1,
+      failedTaskCount: 1,
+      queueRemaining: 0,
+      metadataOnlyPaperCount: 0,
+      sourceBackedPaperCount: 1,
+    },
+    receiptPath: "graph/PAPERNEXUS_GRAPH_BUILD_RECEIPT.json",
+    receipt: {
+      schema_version: 1,
+      status: "graph_ready",
+      graph_visibility: "verified",
+      source_backed_count: 1,
+      source_backed_graph_claim: true,
+      task_summary: {
+        total: 2,
+        pending: 0,
+        running: 0,
+        completed: 1,
+        failed: 1,
+        remaining: 0,
+      },
+      coverage: {
+        min_required_satisfied: true,
+        min_source_backed_papers: 1,
+        notes: ["failed_import_tasks"],
+      },
+    },
+  });
+
+  assert.equal(syncState.imports.failed_count, 1);
+  assert.equal(syncState.proof.min_required_satisfied, true);
+  assert.equal(syncState.workflow_projection.can_continue, true);
+  assert.equal(papernexusSyncStateAllowsWorkflowContinue(syncState), true);
+  assert.equal(
+    syncState.conflicts.includes("graph_ready_with_failed_import_tasks"),
+    false
+  );
+});
+
 test("graph_build stage accepts partial graph coverage when missing papers are repair-only", async () => {
   const manifest = {
     project_id: "partial-graph-demo",
@@ -547,6 +629,59 @@ test("graph_build remote mode requires source-backed sync state with receipt pro
     deps
   );
   assert.deepEqual(missingWithReadySyncState, []);
+
+  const readyReceiptPath = path.join(
+    projectRoot,
+    "graph",
+    "PAPERNEXUS_GRAPH_BUILD_RECEIPT.json"
+  );
+  const readyReceipt = JSON.parse(await fs.readFile(readyReceiptPath, "utf8"));
+  readyReceipt.task_summary = {
+    total: 2,
+    pending: 0,
+    running: 0,
+    completed: 1,
+    failed: 1,
+    remaining: 0,
+  };
+  await fs.writeFile(
+    readyReceiptPath,
+    `${JSON.stringify(readyReceipt, null, 2)}\n`,
+    "utf8"
+  );
+
+  const readySyncStatePath = path.join(
+    projectRoot,
+    "graph",
+    "PAPERNEXUS_SYNC_STATE.json"
+  );
+  const readySyncState = JSON.parse(await fs.readFile(readySyncStatePath, "utf8"));
+  readySyncState.imports = {
+    ...readySyncState.imports,
+    total_count: 2,
+    pending_count: 0,
+    running_count: 0,
+    completed_count: 1,
+    failed_count: 1,
+    remaining_count: 0,
+  };
+  await fs.writeFile(
+    readySyncStatePath,
+    `${JSON.stringify(readySyncState, null, 2)}\n`,
+    "utf8"
+  );
+
+  const missingWithFailedImportReadySyncState =
+    await collectGraphBuildStageMissingSignals(
+      {
+        projectRoot,
+        manifest,
+        trackRegistry: null,
+        experimentLedger: null,
+      },
+      deps
+    );
+  assert.deepEqual(missingWithFailedImportReadySyncState, []);
 
   await fs.writeFile(
     path.join(projectRoot, "graph", "PAPERNEXUS_SYNC_STATE.json"),

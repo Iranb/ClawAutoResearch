@@ -45,6 +45,14 @@ const PAPER_NEXUS_IDEA_CATALYST_BUNDLE_PATH =
   "researcher/papernexus/IDEA_CATALYST_PACKET_BUNDLE.json";
 const PAPER_SOURCE_INDEX_PATH = "researcher/PAPER_SOURCE_INDEX.json";
 const CANDIDATE_POOL_PATH = "researcher/idea-catalyst/CANDIDATE_POOL.json";
+const LIVE_DISCOVERY_READ_MODEL_PATH =
+  "researcher/idea-catalyst/LIVE_DISCOVERY_READ_MODEL.json";
+const LIVE_PACKET_BUNDLE_PATH =
+  "researcher/idea-catalyst/live_packet_bundle.json";
+const LIVE_DISCOVERY_EVIDENCE_CARDS_PATH =
+  "researcher/idea-catalyst/LIVE_DISCOVERY_EVIDENCE_CARDS.json";
+const LIVE_DISCOVERY_RUN_MANIFEST_PATH =
+  "researcher/idea-catalyst/LIVE_DISCOVERY_RUN_MANIFEST.json";
 const CANDIDATE_SCORECARD_PATH =
   "researcher/idea-catalyst/CANDIDATE_SCORECARD.json";
 const CANDIDATE_TOURNAMENT_PATH =
@@ -918,6 +926,294 @@ function objectList(value: unknown): unknown[] {
   return Array.isArray(value) ? value : [];
 }
 
+function recordList(value: unknown): Record<string, unknown>[] {
+  return objectList(value)
+    .map((entry) => asRecord(entry))
+    .filter((entry): entry is Record<string, unknown> => Boolean(entry));
+}
+
+function booleanValue(value: unknown): boolean | null {
+  if (typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (normalized === "true") return true;
+    if (normalized === "false") return false;
+  }
+  return null;
+}
+
+function isLiveIdeaCatalystPacketBundle(value: Record<string, unknown> | null): boolean {
+  if (!value) {
+    return false;
+  }
+  const mode = pickString(value, ["mode"]);
+  return (
+    mode === "live_discovery" ||
+    mode === "hybrid" ||
+    Boolean(asRecord(value.live_retrieval ?? value.liveRetrieval)) ||
+    booleanValue(
+      asRecord(value.faithfulness_report ?? value.faithfulnessReport)
+        ?.live_target_source_retrieval_loop
+    ) === true
+  );
+}
+
+function buildLiveDiscoveryEvidenceCards(packetBundle: Record<string, unknown>) {
+  const sourceAnalyses = recordList(
+    packetBundle.source_domain_analyses ?? packetBundle.sourceDomainAnalyses
+  );
+  return sourceAnalyses.map((analysis, index) => {
+    const supportingPapers = recordList(
+      analysis.supporting_papers ?? analysis.supportingPapers
+    );
+    const takeaways = recordList(analysis.takeaways);
+    const snippetIds = supportingPapers.flatMap((paper) =>
+      recordList(paper.snippets).map((snippet) =>
+        pickString(snippet, ["snippet_id", "snippetId"])
+      )
+    );
+    return {
+      card_id: `live-source-domain-${index + 1}`,
+      source_domain:
+        pickString(analysis, ["source_domain", "sourceDomain"]) ??
+        `source-domain-${index + 1}`,
+      target_challenge_id: pickString(analysis, [
+        "target_challenge_id",
+        "targetChallengeId",
+      ]),
+      target_challenge: pickString(analysis, [
+        "target_challenge",
+        "targetChallenge",
+      ]),
+      accepted: booleanValue(analysis.accepted) === true,
+      pruning_decision: pickString(analysis, [
+        "pruning_decision",
+        "pruningDecision",
+      ]),
+      retrieved_paper_count:
+        pickNumber(analysis, ["retrieved_paper_count", "retrievedPaperCount"]) ?? 0,
+      retrieved_snippet_count:
+        pickNumber(analysis, [
+          "retrieved_snippet_count",
+          "retrievedSnippetCount",
+        ]) ?? 0,
+      relevant_paper_count:
+        pickNumber(analysis, ["relevant_paper_count", "relevantPaperCount"]) ?? 0,
+      relevance_ratio:
+        pickNumber(analysis, ["relevance_ratio", "relevanceRatio"]) ?? null,
+      evidence_ids: uniqueStrings([
+        ...supportingPapers
+          .map((paper) => pickString(paper, ["paper_key", "paperKey"]))
+          .filter((entry): entry is string => Boolean(entry)),
+        ...snippetIds.filter((entry): entry is string => Boolean(entry)),
+        ...takeaways
+          .map((takeaway) => pickString(takeaway, ["id"]))
+          .filter((entry): entry is string => Boolean(entry)),
+      ]),
+      supporting_papers: supportingPapers.map((paper) => ({
+        paper_key: pickString(paper, ["paper_key", "paperKey"]),
+        title: pickString(paper, ["title"]),
+        snippet_ids: recordList(paper.snippets)
+          .map((snippet) => pickString(snippet, ["snippet_id", "snippetId"]))
+          .filter((entry): entry is string => Boolean(entry)),
+      })),
+      takeaway_ids: takeaways
+        .map((takeaway) => pickString(takeaway, ["id"]))
+        .filter((entry): entry is string => Boolean(entry)),
+    };
+  });
+}
+
+function buildLiveIdeaCatalystReadModel(params: {
+  packetBundle: Record<string, unknown> | null;
+  materializedAt: string;
+}) {
+  const packetBundle = params.packetBundle;
+  if (!isLiveIdeaCatalystPacketBundle(packetBundle)) {
+    return null;
+  }
+  const liveRetrieval = asRecord(
+    packetBundle?.live_retrieval ?? packetBundle?.liveRetrieval
+  ) ?? {};
+  const faithfulnessReport = asRecord(
+    packetBundle?.faithfulness_report ?? packetBundle?.faithfulnessReport
+  ) ?? {};
+  const sourceAnalyses = recordList(
+    packetBundle?.source_domain_analyses ?? packetBundle?.sourceDomainAnalyses
+  );
+  const evidenceCards = buildLiveDiscoveryEvidenceCards(packetBundle ?? {});
+  const targetRetrievals = recordList(
+    liveRetrieval.target_retrievals ?? liveRetrieval.targetRetrievals
+  );
+  const acceptedSourceDomainCount =
+    pickNumber(liveRetrieval, [
+      "accepted_source_domain_count",
+      "acceptedSourceDomainCount",
+    ]) ??
+    sourceAnalyses.filter((entry) => booleanValue(entry.accepted) === true).length;
+  const prunedSourceDomainCount =
+    pickNumber(liveRetrieval, [
+      "pruned_source_domain_count",
+      "prunedSourceDomainCount",
+    ]) ??
+    sourceAnalyses.filter((entry) => booleanValue(entry.accepted) === false).length;
+  const pairwiseRankingBackend =
+    pickString(faithfulnessReport, [
+      "pairwise_ranking_backend",
+      "pairwiseRankingBackend",
+    ]) ??
+    pickString(liveRetrieval, ["pairwise_ranking_backend", "pairwiseRankingBackend"]);
+  const degradedReasons: string[] = [];
+  if (pairwiseRankingBackend && pairwiseRankingBackend !== "llm-pairwise-v1") {
+    degradedReasons.push(
+      `pairwise_ranking_backend=${pairwiseRankingBackend}`
+    );
+  }
+  if (sourceAnalyses.length === 0) {
+    degradedReasons.push("source_domain_analyses_empty");
+  } else if (acceptedSourceDomainCount <= 0) {
+    degradedReasons.push("all_source_domains_pruned");
+  }
+  if (targetRetrievals.length === 0) {
+    degradedReasons.push("target_retrievals_empty");
+  }
+  const status = degradedReasons.length > 0 ? "degraded" : "ready";
+  const targetPaperCount = targetRetrievals.reduce((sum, entry) => {
+    return (
+      sum +
+      (pickNumber(entry, ["paperCount", "paper_count"]) ??
+        pickNumber(entry, ["resultCount", "result_count"]) ??
+        0)
+    );
+  }, 0);
+  const sourceRetrievedPaperCount = evidenceCards.reduce(
+    (sum, card) => sum + card.retrieved_paper_count,
+    0
+  );
+  const sourceRetrievedSnippetCount = evidenceCards.reduce(
+    (sum, card) => sum + card.retrieved_snippet_count,
+    0
+  );
+  const evidenceIds = uniqueStrings(
+    evidenceCards.flatMap((card) => card.evidence_ids)
+  );
+  const temporalCutoff = {
+    year: pickString(liveRetrieval, ["year"]),
+    publication_date_or_year: pickString(liveRetrieval, [
+      "publication_date_or_year",
+      "publicationDateOrYear",
+    ]),
+    inserted_before: pickString(liveRetrieval, [
+      "inserted_before",
+      "insertedBefore",
+    ]),
+    recorded: Boolean(
+      pickString(liveRetrieval, ["year"]) ??
+        pickString(liveRetrieval, [
+          "publication_date_or_year",
+          "publicationDateOrYear",
+        ]) ??
+        pickString(liveRetrieval, ["inserted_before", "insertedBefore"])
+    ),
+  };
+  const leakagePolicy =
+    "Live discovery snippets are ideation evidence only; source-backed graph proof is still required for claim-ready downstream writing.";
+  const runManifest = {
+    contract_version: "papernexus-live-idea-catalyst-run-manifest-v1",
+    status,
+    materialized_at: params.materializedAt,
+    source_path: PAPER_NEXUS_IDEA_CATALYST_BUNDLE_PATH,
+    mode: pickString(packetBundle ?? {}, ["mode"]) ?? "live_discovery",
+    target_domain: pickString(packetBundle ?? {}, [
+      "target_domain",
+      "targetDomain",
+    ]),
+    target_field_of_study: pickString(packetBundle ?? {}, [
+      "target_field_of_study",
+      "targetFieldOfStudy",
+    ]),
+    retrieval_backend: pickString(liveRetrieval, [
+      "retrieval_backend",
+      "retrievalBackend",
+    ]),
+    target_retrieval_count: targetRetrievals.length,
+    target_paper_count: targetPaperCount,
+    accepted_source_domain_count: acceptedSourceDomainCount,
+    pruned_source_domain_count: prunedSourceDomainCount,
+    pairwise_ranking_backend: pairwiseRankingBackend ?? null,
+    degraded_reasons: degradedReasons,
+    temporal_cutoff: temporalCutoff,
+    leakage_policy: leakagePolicy,
+  };
+  const evidenceCardArtifact = {
+    contract_version: "papernexus-live-idea-catalyst-evidence-cards-v1",
+    status,
+    materialized_at: params.materializedAt,
+    card_count: evidenceCards.length,
+    cards: evidenceCards,
+  };
+  const readModel = {
+    contract_version: "papernexus-live-idea-catalyst-read-model-v1",
+    status,
+    materialized_at: params.materializedAt,
+    source_path: PAPER_NEXUS_IDEA_CATALYST_BUNDLE_PATH,
+    live_packet_bundle_path: LIVE_PACKET_BUNDLE_PATH,
+    run_manifest_path: LIVE_DISCOVERY_RUN_MANIFEST_PATH,
+    evidence_cards_path: LIVE_DISCOVERY_EVIDENCE_CARDS_PATH,
+    pairwise_ranking_backend: pairwiseRankingBackend ?? null,
+    accepted_source_domain_count: acceptedSourceDomainCount,
+    pruned_source_domain_count: prunedSourceDomainCount,
+    source_domain_count: sourceAnalyses.length,
+    source_retrieved_paper_count: sourceRetrievedPaperCount,
+    source_retrieved_snippet_count: sourceRetrievedSnippetCount,
+    target_retrieval_count: targetRetrievals.length,
+    target_paper_count: targetPaperCount,
+    target_retrievals: targetRetrievals.map((entry) => ({
+      query: pickString(entry, ["query"]),
+      paper_count:
+        pickNumber(entry, ["paperCount", "paper_count"]) ??
+        pickNumber(entry, ["resultCount", "result_count"]) ??
+        0,
+    })),
+    source_domains: evidenceCards.map((card) => ({
+      card_id: card.card_id,
+      source_domain: card.source_domain,
+      accepted: card.accepted,
+      pruning_decision: card.pruning_decision,
+      retrieved_paper_count: card.retrieved_paper_count,
+      retrieved_snippet_count: card.retrieved_snippet_count,
+      relevant_paper_count: card.relevant_paper_count,
+      evidence_ids: card.evidence_ids,
+    })),
+    evidence_ids: evidenceIds,
+    temporal_cutoff: temporalCutoff,
+    leakage_policy: leakagePolicy,
+    degraded_reasons: degradedReasons,
+  };
+  return {
+    status,
+    packetBundle,
+    runManifest,
+    evidenceCardArtifact,
+    readModel,
+    sessionProjection: {
+      status,
+      read_model_path: LIVE_DISCOVERY_READ_MODEL_PATH,
+      live_packet_bundle_path: LIVE_PACKET_BUNDLE_PATH,
+      run_manifest_path: LIVE_DISCOVERY_RUN_MANIFEST_PATH,
+      evidence_cards_path: LIVE_DISCOVERY_EVIDENCE_CARDS_PATH,
+      pairwise_ranking_backend: pairwiseRankingBackend ?? null,
+      accepted_source_domain_count: acceptedSourceDomainCount,
+      pruned_source_domain_count: prunedSourceDomainCount,
+      target_retrieval_count: targetRetrievals.length,
+      target_paper_count: targetPaperCount,
+      degraded_reasons: degradedReasons,
+    },
+  };
+}
+
 function traceIdFromRecord(record: Record<string, unknown>, fallback: string) {
   return (
     pickString(record, [
@@ -1572,6 +1868,10 @@ export async function materializeIdeaCatalystState(params: {
       ? buildIdeaCatalystRankedFragments(ideaFragmentsPacket, { llmJudgments })
       : null;
   const materializedAt = nowIso();
+  const liveDiscoveryReadModel = buildLiveIdeaCatalystReadModel({
+    packetBundle: ideaCatalystPacketBundleForMerge,
+    materializedAt,
+  });
 
   const next = normalizeIdeaCatalystState({
     ...serializeIdeaCatalystState(current),
@@ -1658,6 +1958,22 @@ export async function materializeIdeaCatalystState(params: {
     [CANDIDATE_TOURNAMENT_PATH, candidateTournamentPacket],
     [SELECTED_IDEAS_PATH, selectedIdeasPacket],
     [REJECTED_IDEAS_PATH, rejectedIdeasPacket],
+    [
+      LIVE_PACKET_BUNDLE_PATH,
+      liveDiscoveryReadModel?.packetBundle ?? null,
+    ],
+    [
+      LIVE_DISCOVERY_RUN_MANIFEST_PATH,
+      liveDiscoveryReadModel?.runManifest ?? null,
+    ],
+    [
+      LIVE_DISCOVERY_EVIDENCE_CARDS_PATH,
+      liveDiscoveryReadModel?.evidenceCardArtifact ?? null,
+    ],
+    [
+      LIVE_DISCOVERY_READ_MODEL_PATH,
+      liveDiscoveryReadModel?.readModel ?? null,
+    ],
     [next.ideaFragmentsPath, ideaFragmentsPacket],
     [next.rankedFragmentsPath, rankedFragmentsPacket],
     [
@@ -1702,6 +2018,7 @@ export async function materializeIdeaCatalystState(params: {
         candidate_pool_size: candidatePoolPacket.candidate_pool_size,
         selected_idea_count: selectedIdeasPacket.selected_count,
         rejected_idea_count: rejectedIdeasPacket.rejected_count,
+        live_discovery: liveDiscoveryReadModel?.sessionProjection ?? null,
         updated_at: next.lastUpdatedAt,
       },
     ],

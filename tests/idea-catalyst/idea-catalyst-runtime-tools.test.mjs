@@ -555,6 +555,173 @@ test("research_workflow materialize_idea_catalyst_state scaffolds IDEA-CATALYST 
   assert.equal(gateDecision.evidence.coverage_summary.unresolved_questions >= 1, true);
 });
 
+test("research_workflow materialize_idea_catalyst_state persists PaperNexus live/hybrid discovery read-model artifacts", async (t) => {
+  const projectRoot = await makeCatalystProjectRoot();
+  const previousProjectRoot = process.env.OPENCLAW_PROJECT;
+
+  t.after(async () => {
+    if (previousProjectRoot === undefined) delete process.env.OPENCLAW_PROJECT;
+    else process.env.OPENCLAW_PROJECT = previousProjectRoot;
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await writeJson(
+    path.join(projectRoot, "researcher", "papernexus", "IDEA_CATALYST_PACKET_BUNDLE.json"),
+    {
+      packet_bundle: {
+        contractVersion: 1,
+        mode: "hybrid",
+        target_domain: "Computer Science",
+        target_field_of_study: "Computer Science",
+        source_domain_analyses: [
+          {
+            source_domain: "Psychology",
+            target_challenge_id: "challenge-1",
+            target_challenge: "memory preservation",
+            retrieved_paper_count: 2,
+            retrieved_snippet_count: 3,
+            relevant_paper_count: 0,
+            relevance_ratio: 0,
+            accepted: false,
+            pruning_decision: "pruned_below_majority_relevance",
+            supporting_papers: [
+              {
+                paper_key: "s2:psych-1",
+                title: "Metacontrol snippets",
+                snippets: [{ snippet_id: "snippet-psych-1" }],
+              },
+            ],
+            takeaways: [{ id: "takeaway-psych-1" }],
+          },
+        ],
+        idea_fragments: [
+          {
+            candidate_id: "live-idea-1",
+            source_domain: "Psychology",
+            title: "Metacontrol memory gating",
+          },
+        ],
+        live_retrieval: {
+          retrieval_backend: "semantic-scholar-snippets",
+          target_retrievals: [
+            {
+              query: "GCD memory preservation",
+              paperCount: 3,
+              resultCount: 3,
+            },
+          ],
+          accepted_source_domain_count: 0,
+          pruned_source_domain_count: 1,
+        },
+        faithfulness_report: {
+          semantic_scholar_snippets_adapter: true,
+          live_target_source_retrieval_loop: true,
+          pairwise_llm_interdisciplinary_ranking: false,
+          pairwise_ranking_backend: "heuristic-fallback",
+        },
+      },
+    }
+  );
+
+  process.env.OPENCLAW_PROJECT = projectRoot;
+  const tool = createResearchWorkflowTool({ workspaceDir: projectRoot });
+  const result = await executeWorkflowTool(tool, {
+    action: "materialize_idea_catalyst_state",
+    ideaCatalystMaterialization: {
+      basis_stage: "idea",
+    },
+  });
+
+  assert.equal(result.state.status, "ready");
+  assert.ok(
+    result.generatedFiles.some((filePath) =>
+      /LIVE_DISCOVERY_READ_MODEL\.json$/.test(filePath)
+    )
+  );
+  assert.ok(
+    result.generatedFiles.some((filePath) =>
+      /LIVE_DISCOVERY_EVIDENCE_CARDS\.json$/.test(filePath)
+    )
+  );
+  assert.ok(
+    result.generatedFiles.some((filePath) =>
+      /LIVE_DISCOVERY_RUN_MANIFEST\.json$/.test(filePath)
+    )
+  );
+  assert.ok(
+    result.generatedFiles.some((filePath) =>
+      /live_packet_bundle\.json$/.test(filePath)
+    )
+  );
+
+  const readModel = JSON.parse(
+    await fs.readFile(
+      path.join(
+        projectRoot,
+        "researcher",
+        "idea-catalyst",
+        "LIVE_DISCOVERY_READ_MODEL.json"
+      ),
+      "utf8"
+    )
+  );
+  assert.equal(readModel.status, "degraded");
+  assert.equal(readModel.pairwise_ranking_backend, "heuristic-fallback");
+  assert.ok(readModel.degraded_reasons.includes("pairwise_ranking_backend=heuristic-fallback"));
+  assert.ok(readModel.degraded_reasons.includes("all_source_domains_pruned"));
+  assert.equal(readModel.accepted_source_domain_count, 0);
+  assert.equal(readModel.pruned_source_domain_count, 1);
+  assert.equal(readModel.source_domain_count, 1);
+  assert.equal(readModel.source_retrieved_paper_count, 2);
+  assert.equal(readModel.source_retrieved_snippet_count, 3);
+  assert.equal(readModel.target_retrieval_count, 1);
+  assert.equal(readModel.target_paper_count, 3);
+  assert.equal(readModel.temporal_cutoff.recorded, false);
+  assert.match(readModel.leakage_policy, /source-backed graph proof/);
+  assert.equal(readModel.source_domains[0].pruning_decision, "pruned_below_majority_relevance");
+  assert.deepEqual(readModel.evidence_ids.sort(), [
+    "s2:psych-1",
+    "snippet-psych-1",
+    "takeaway-psych-1",
+  ].sort());
+
+  const evidenceCards = JSON.parse(
+    await fs.readFile(
+      path.join(
+        projectRoot,
+        "researcher",
+        "idea-catalyst",
+        "LIVE_DISCOVERY_EVIDENCE_CARDS.json"
+      ),
+      "utf8"
+    )
+  );
+  assert.equal(evidenceCards.status, "degraded");
+  assert.equal(evidenceCards.card_count, 1);
+  assert.deepEqual(evidenceCards.cards[0].evidence_ids.sort(), [
+    "s2:psych-1",
+    "snippet-psych-1",
+    "takeaway-psych-1",
+  ].sort());
+
+  const sessionState = JSON.parse(
+    await fs.readFile(
+      path.join(
+        projectRoot,
+        "researcher",
+        "idea-catalyst",
+        "CATALYST_SESSION_STATE.json"
+      ),
+      "utf8"
+    )
+  );
+  assert.equal(sessionState.live_discovery.status, "degraded");
+  assert.equal(
+    sessionState.live_discovery.read_model_path,
+    "researcher/idea-catalyst/LIVE_DISCOVERY_READ_MODEL.json"
+  );
+});
+
 test("research_workflow materialize_idea_catalyst_state prunes unsupported scout domains and syncs bridge evidence back into ideation contract", async (t) => {
   const projectRoot = await makeCatalystProjectRoot();
   const previousProjectRoot = process.env.OPENCLAW_PROJECT;

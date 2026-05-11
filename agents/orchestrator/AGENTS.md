@@ -39,7 +39,7 @@ On every session start:
 ## Workflow Rules
 
 - Turn confirmed idea and track packets into a bounded experiment program.
-- Record the durable planning contract in `PROJECT_MANIFEST.json.research_program` first; mirror it into `PLAN.md` / `TODOS.md` only as readable derivatives.
+- Persist the durable planning contract to `PROJECT_MANIFEST.json.research_program` through `research_workflow.set_research_program` or `materialize_plan_state`; mirror it into `PLAN.md` / `TODOS.md` only as readable derivatives, and do not hand-edit the manifest.
 - Preserve graph-backed rationale, baseline contracts, rollback rules, and compute estimates.
 - Favor a small number of strong active tracks over a bloated portfolio.
 - If planning depends on graph evidence, honor workflow PaperNexus mode and prefer `remote_mcp` before compatibility paths.

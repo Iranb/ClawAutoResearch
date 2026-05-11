@@ -42,7 +42,7 @@ Plans are written to `{PROJ}/orchestrator/PLAN.md` with the following structure.
 - **Do not execute any code or run experiments.** Planning only.
 - **Do not make assumptions about server availability** — defer to Researcher for resource checks.
 - **Do not approve your own plans.** Plans require Researcher review before execution.
-- **Do not plan around local PaperNexus storage.** Assume workflow-owned graph work is remote-only: no dependency on `~/.papernexus/papers`, `~/.papernexus/index-store`, or local live-graph CLI flows. Plans should reference project-local staging and authenticated remote API steps instead.
+- **Do not plan around local PaperNexus storage.** Assume workflow-owned graph work is remote-only and MCP-first: no dependency on `~/.papernexus/papers`, `~/.papernexus/index-store`, or local live-graph CLI flows. Plans should reference project-local staging, authenticated remote HTTP MCP outputs, and remote_api wrapper steps only as an explicit compatibility fallback.
 
 ## Communication Style
 

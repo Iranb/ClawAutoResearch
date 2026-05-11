@@ -402,11 +402,6 @@ function readReceiptSourceBackedCount(receipt: JsonRecord | null): number | null
     asNumber(receipt?.sourceBackedCount);
 }
 
-function readReceiptFailedTaskCount(receipt: JsonRecord | null): number | null {
-  const taskSummary = asRecord(receipt?.task_summary ?? receipt?.taskSummary);
-  return asNumber(taskSummary?.failed);
-}
-
 function readReceiptMinRequiredSatisfied(receipt: JsonRecord | null): boolean | null {
   const coverage = asRecord(receipt?.coverage);
   return asBoolean(
@@ -459,10 +454,6 @@ function buildSyncStateConflicts(params: {
   ) {
     conflicts.push("strict_remote_ready_requires_source_backed_per_paper_proof");
   }
-  if (params.imports.failed_count > 0 && params.graphStatus === "ready") {
-    conflicts.push("graph_ready_with_failed_import_tasks");
-  }
-
   const receipt = params.receipt;
   if (!receipt) {
     return conflicts;
@@ -472,7 +463,6 @@ function buildSyncStateConflicts(params: {
     receipt.graph_visibility ?? receipt.graphVisibility
   );
   const receiptSourceBackedCount = readReceiptSourceBackedCount(receipt) ?? 0;
-  const receiptFailedTaskCount = readReceiptFailedTaskCount(receipt) ?? 0;
   const receiptMinRequiredSatisfied =
     readReceiptMinRequiredSatisfied(receipt) === true;
   const receiptSourceBackedClaim =
@@ -484,7 +474,6 @@ function buildSyncStateConflicts(params: {
       receiptVisibility !== "verified" ||
       !receiptSourceBackedClaim ||
       !receiptMinRequiredSatisfied ||
-      receiptFailedTaskCount > 0 ||
       receiptSourceBackedCount <= 0)
   ) {
     conflicts.push("receipt_graph_ready_conflicts_with_sync_evidence");
@@ -540,7 +529,6 @@ export function buildPapernexusSyncStateFromGraphPresence(params: {
   const minRequiredSatisfied =
     graphStatus === "ready" &&
     perPaperProof &&
-    imports.failed_count === 0 &&
     params.graphPresence.presentPaperCount >= params.graphPresence.expectedPaperCount &&
     params.graphPresence.expectedPaperCount > 0 &&
     params.graphPresence.missingPaperCount === 0 &&
@@ -687,8 +675,7 @@ export function papernexusSyncStateSupportsGraphReady(
     state.proof.source_backed_graph_claim === true &&
     state.proof.graph_visibility === "verified" &&
     state.proof.min_required_satisfied === true &&
-    Boolean(state.proof.latest_receipt_path) &&
-    state.imports.failed_count === 0
+    Boolean(state.proof.latest_receipt_path)
   );
 }
 
@@ -715,7 +702,6 @@ export function papernexusSyncStateAllowsWorkflowContinue(
     state.workflow_projection.can_continue === true &&
     state.proof.graph_visibility === "verified" &&
     state.proof.min_required_satisfied === true &&
-    state.imports.failed_count === 0 &&
     state.conflicts.length === 0
   );
 }

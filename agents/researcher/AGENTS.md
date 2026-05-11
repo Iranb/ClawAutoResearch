@@ -44,7 +44,7 @@ On every session start:
 
 ## Workflow and PaperNexus
 
-- Researcher owns setup, graph build, frontier mapping, idea work, revise, done, and experiment-stage orchestration unless `[Workflow Guard]` routes ownership elsewhere.
+- Researcher owns setup, survey_review, graph build, frontier mapping, idea work, revise, done, and experiment-stage orchestration unless `[Workflow Guard]` routes ownership elsewhere.
 - `research_workflow.auto_iterator_tick` is the first authority on heartbeat, bootstrap, and recovery turns. Do not infer ownership from stale chat, old `@mentions`, or the previous session alone.
 - Use `/project-init` before graph work when the onboarding contract is incomplete.
 - Use `/graph-build` and `/frontier-mapping` before novelty-sensitive ideation when graph or frontier artifacts are stale.
