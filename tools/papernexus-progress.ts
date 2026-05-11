@@ -11,6 +11,10 @@ import {
   isPaperIngestionExecutableUploadRequest,
   normalizePaperIngestionState,
 } from "./workflow-guard-state/paper-ingestion";
+import {
+  readPapernexusSyncState,
+  type PapernexusSyncState,
+} from "./papernexus-sync-state";
 
 type ManifestLike = Record<string, unknown>;
 
@@ -52,6 +56,9 @@ export type PapernexusProgressCounters = {
   completed_ratio: number | null;
   percent: number | null;
   eta_hint: string | null;
+  total?: number | null;
+  completed?: number | null;
+  remaining?: number | null;
 };
 
 export type PapernexusProgressRemoteTask = {
@@ -164,6 +171,9 @@ function normalizeProgressCounters(value: unknown): PapernexusProgressCounters {
         ? Math.max(0, Math.min(100, Math.round(percentRaw)))
         : null,
     eta_hint: pickString(record, ["eta_hint", "etaHint"]),
+    total: normalizeCount(record.total),
+    completed: normalizeCount(record.completed),
+    remaining: normalizeCount(record.remaining),
   };
 }
 
@@ -242,7 +252,7 @@ export function getPapernexusProgressPath(projectRoot: string): string {
   return path.join(projectRoot, "graph", "PAPERNEXUS_PROGRESS.json");
 }
 
-export async function readPapernexusProgress(
+async function readPapernexusProgressProjection(
   projectRoot: string
 ): Promise<PapernexusProgressSnapshot | null> {
   const raw = await readJsonIfExists<Record<string, unknown>>(
@@ -271,6 +281,120 @@ export async function readPapernexusProgress(
     next_action: pickString(record, ["next_action", "nextAction"]),
     blocking_reason: pickString(record, ["blocking_reason", "blockingReason"]),
   };
+}
+
+export function derivePapernexusProgressSnapshotFromSyncState(params: {
+  syncState: PapernexusSyncState;
+  previous?: PapernexusProgressSnapshot | null;
+  ownerRun?: OwnerRunOverride;
+  updatedAt?: string | null;
+}): PapernexusProgressSnapshot {
+  const imports = params.syncState.imports;
+  const graph = params.syncState.graph_presence;
+  const projection = params.syncState.workflow_projection;
+  const ownerRun =
+    normalizeOwnerRun(params.ownerRun) ?? params.previous?.owner_run ?? null;
+  const phase: PapernexusProgressPhase =
+    projection.runtime_status === "ready"
+      ? "ready"
+      : projection.runtime_status === "waiting_import"
+        ? "waiting_import"
+        : projection.runtime_status === "waiting_graph"
+          ? "verifying_graph"
+          : projection.runtime_status === "degraded"
+            ? "verifying_graph"
+            : imports.failed_count > 0
+              ? "failed"
+              : "needs_repair";
+  const total =
+    imports.total_count > 0
+      ? imports.total_count
+      : graph.expected_paper_count > 0
+        ? graph.expected_paper_count
+        : null;
+  const completed =
+    imports.total_count > 0
+      ? imports.completed_count
+      : graph.present_paper_count > 0 || graph.expected_paper_count > 0
+        ? graph.present_paper_count
+        : null;
+  const remaining =
+    total !== null && completed !== null
+      ? Math.max(0, total - completed)
+      : imports.remaining_count;
+  const completedRatio =
+    total !== null && total > 0 && completed !== null
+      ? Number((completed / total).toFixed(4))
+      : phase === "ready"
+        ? 1
+        : phase === "failed" || phase === "needs_repair"
+          ? 0
+          : null;
+  const percent =
+    completedRatio === null
+      ? null
+      : Math.max(0, Math.min(100, Math.round(completedRatio * 100)));
+
+  return {
+    updated_at: params.updatedAt ?? params.syncState.generated_at,
+    phase,
+    owner_run: ownerRun,
+    batch: {
+      manifest_path: params.syncState.desired_corpus.source,
+      total_items: imports.total_count > 0 ? imports.total_count : total,
+      pending_items: imports.pending_count,
+      running_items: imports.running_count,
+      synced_items: imports.completed_count,
+      failed_items: imports.failed_count,
+    },
+    graph_check: {
+      expected_papers: graph.expected_paper_count,
+      present_papers: graph.present_paper_count,
+      missing_papers: graph.missing_paper_count,
+      last_checked_at: params.syncState.generated_at,
+      status: graph.status,
+    },
+    remote_task: params.previous?.remote_task ?? null,
+    queue_progress:
+      imports.total_count > 0 ||
+      imports.remaining_count > 0 ||
+      imports.completed_count > 0 ||
+      imports.failed_count > 0
+        ? {
+            total: imports.total_count,
+            pending: imports.pending_count,
+            running: imports.running_count,
+            completed: imports.completed_count,
+            failed: imports.failed_count,
+            remaining: imports.remaining_count,
+            overall_percent: percent,
+          }
+        : null,
+    progress: {
+      completed_ratio: completedRatio,
+      percent,
+      eta_hint: projection.blocking_reason ?? projection.next_action,
+      total,
+      completed,
+      remaining,
+    },
+    next_action: projection.next_action,
+    blocking_reason: projection.blocking_reason,
+  };
+}
+
+export async function readPapernexusProgress(
+  projectRoot: string
+): Promise<PapernexusProgressSnapshot | null> {
+  const previous = await readPapernexusProgressProjection(projectRoot);
+  const syncState = await readPapernexusSyncState(projectRoot);
+  if (syncState) {
+    return derivePapernexusProgressSnapshotFromSyncState({
+      syncState,
+      previous,
+    });
+  }
+  return previous;
 }
 
 function resolveTrackedImportWrapper(wrapper: string | null | undefined): string | null {
@@ -892,16 +1016,24 @@ export async function writePapernexusProgressFromManifest(params: {
   blockingReasonOverride?: string | null;
   updatedAt?: string | null;
 }): Promise<PapernexusProgressSnapshot | null> {
-  const previous = await readPapernexusProgress(params.projectRoot);
-  const next = derivePapernexusProgressSnapshot({
-    manifest: params.manifest,
-    previous,
-    ownerRun: params.ownerRun,
-    phaseOverride: params.phaseOverride,
-    nextActionOverride: params.nextActionOverride,
-    blockingReasonOverride: params.blockingReasonOverride,
-    updatedAt: params.updatedAt,
-  });
+  const previous = await readPapernexusProgressProjection(params.projectRoot);
+  const syncState = await readPapernexusSyncState(params.projectRoot);
+  const next = syncState
+    ? derivePapernexusProgressSnapshotFromSyncState({
+        syncState,
+        previous,
+        ownerRun: params.ownerRun,
+        updatedAt: params.updatedAt,
+      })
+    : derivePapernexusProgressSnapshot({
+        manifest: params.manifest,
+        previous,
+        ownerRun: params.ownerRun,
+        phaseOverride: params.phaseOverride,
+        nextActionOverride: params.nextActionOverride,
+        blockingReasonOverride: params.blockingReasonOverride,
+        updatedAt: params.updatedAt,
+      });
   if (!next) {
     return null;
   }

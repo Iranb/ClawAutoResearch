@@ -76,6 +76,117 @@ test("deriveWorkflowGraphContext exposes durable graph-build workflow contracts"
   assert.match(context.graphBuildStatusReason ?? "", /partially populated/i);
 });
 
+test("deriveWorkflowGraphContext keeps remote_summary proof from promoting readiness without source-backed claim", () => {
+  const context = deriveWorkflowGraphContext({
+    manifest: {
+      paper_ingestion: {
+        graph_presence_status: "ready",
+        graph_presence_ready_proof_level: "remote_summary",
+        graph_presence_checked_at: "2026-04-11T08:00:00.000Z",
+        graph_presence_source_backed_present_count: 0,
+        graph_presence_paper_index_present_count: 0,
+        refresh_required: false,
+        repair_required: false,
+        runtime_status: "ready",
+        graph_build_workflow_status: "ready",
+        graph_build_can_continue: true,
+        graph_build_requires_import: false,
+        graph_build_requires_source_repair: false,
+        papernexus_claim_level: "remote_corpus_summary",
+        papernexus_source_backed_graph_claim: false,
+      },
+    },
+    stage: "graph_build",
+    nowIso: "2026-04-11T08:00:10.000Z",
+    minRefreshIntervalMs: 15_000,
+  });
+
+  assert.equal(context.status, "stale");
+  assert.equal(context.graphPresenceReadyProofLevel, "remote_summary");
+  assert.equal(context.graphPresenceSourceBackedPresentCount, 0);
+  assert.equal(context.graphPresencePaperIndexPresentCount, 0);
+});
+
+test("deriveWorkflowGraphContext lets sync state override stale manifest graph-ready fields", () => {
+  const context = deriveWorkflowGraphContext({
+    manifest: {
+      paper_ingestion: {
+        graph_presence_status: "ready",
+        graph_presence_checked_at: "2026-04-11T08:00:00.000Z",
+        refresh_required: false,
+        runtime_status: "ready",
+        papernexus_claim_level: "source_backed_graph",
+        papernexus_source_backed_graph_claim: true,
+      },
+    },
+    papernexusSyncState: {
+      schema_version: 1,
+      project_id: "sync-priority-demo",
+      generated_at: "2026-04-11T08:00:05.000Z",
+      authority: {
+        mode: "remote_mcp",
+        corpus: "GCD",
+        api_fallback_used: false,
+        tool_versions: {},
+      },
+      desired_corpus: {
+        source: "researcher/PAPER_SOURCE_INDEX.json",
+        paper_count: 1,
+        papers: ["arxiv:2501.00001"],
+      },
+      discovery: {
+        metadata_only_count: 1,
+        source_resolved_count: 0,
+      },
+      imports: {
+        total_count: 1,
+        pending_count: 0,
+        running_count: 0,
+        completed_count: 1,
+        failed_count: 0,
+        remaining_count: 0,
+        tasks: [],
+      },
+      graph_presence: {
+        status: "degraded",
+        ready_proof_level: "remote_summary",
+        verification_mode: "remote_corpus_summary",
+        expected_paper_count: 1,
+        present_paper_count: 1,
+        missing_paper_count: 0,
+        source_backed_present_count: 0,
+        paper_index_present_count: 0,
+        present_papers: [],
+        missing_papers: [],
+      },
+      proof: {
+        latest_receipt_path: "graph/PAPERNEXUS_GRAPH_BUILD_RECEIPT.json",
+        certification_path: "graph/PAPERNEXUS_TASK_CERTIFICATION.json",
+        graph_presence_report_path: "graph/GRAPH_PRESENCE_CHECK.json",
+        source_backed_graph_claim: false,
+        graph_visibility: "unverified",
+        graph_fingerprint: null,
+        min_required_satisfied: false,
+      },
+      workflow_projection: {
+        runtime_status: "degraded",
+        can_continue: false,
+        blocking_reason: "summary-only graph evidence",
+        next_action: "refresh PaperNexus graph presence with per-paper source-backed evidence",
+      },
+      conflicts: [],
+    },
+    stage: "graph_build",
+    nowIso: "2026-04-11T08:00:10.000Z",
+    minRefreshIntervalMs: 15_000,
+  });
+
+  assert.equal(context.status, "stale");
+  assert.equal(context.graphPresenceReadyProofLevel, "remote_summary");
+  assert.equal(context.waitingReason, "summary-only graph evidence");
+  assert.equal(context.runtimeStatus, "waiting_graph");
+});
+
 test("deriveWorkflowGraphContext treats missing corpus checks as unavailable graph context", () => {
   const context = deriveWorkflowGraphContext({
     manifest: {

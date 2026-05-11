@@ -22,7 +22,11 @@ type PapernexusSurveyPaper = {
   doi: string | null;
   arxivId: string | null;
   providers: string[];
-  evidenceLevel: "graph_backed" | "source_backed" | "metadata_supported";
+  evidenceLevel:
+    | "graph_backed"
+    | "source_resolved"
+    | "import_pending"
+    | "metadata_supported";
   sourceStatus: string | null;
   importStatus: string | null;
   taskId: string | null;
@@ -238,18 +242,21 @@ function normalizePaper(candidate: Record<string, unknown>, index: number): Pape
     "graph_synced",
     "indexed",
   ]);
-  const sourceBacked =
+  const sourceResolved =
     Boolean(sourcePath) ||
     sourceKind === "pdf" ||
     sourceKind === "markdown" ||
-    sourceStatus === "fulltext_ready" ||
+    sourceStatus === "fulltext_ready";
+  const importPending =
     Boolean(taskId) ||
     ["submitted", "running"].includes(normalizedImportStatus);
   const evidenceLevel = graphBackedStatuses.has(normalizedImportStatus)
     ? "graph_backed"
-    : sourceBacked
-      ? "source_backed"
-      : "metadata_supported";
+    : sourceResolved
+      ? "source_resolved"
+      : importPending
+        ? "import_pending"
+        : "metadata_supported";
   return {
     canonicalId,
     title,
@@ -674,7 +681,9 @@ export async function materializePapernexusSurveyReadModel(params: {
         screening_reason:
           paper.evidenceLevel === "metadata_supported"
             ? "Included as metadata-supported PaperNexus topical evidence; avoid graph-backed claims until source materializes."
-            : "Included as PaperNexus source-backed topical evidence.",
+            : paper.evidenceLevel === "import_pending"
+              ? "Included as PaperNexus import-pending topical evidence; avoid source-backed claims until graph/source materializes."
+              : "Included as PaperNexus source-resolved topical evidence.",
       })),
     },
     generatedFiles,

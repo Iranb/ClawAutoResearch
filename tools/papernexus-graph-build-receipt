@@ -1,0 +1,15 @@
+import * as path from "node:path";
+import { writeJsonEnsured } from "./workflow-guard-core/fs";
+import { resolveProjectArtifactPath } from "./workflow-guard-core/paths";
+
+export const DEFAULT_PAPERNEXUS_GRAPH_BUILD_RECEIPT_PATH =
+  "graph/PAPERNEXUS_GRAPH_BUILD_RECEIPT.json";
+
+export async function writePapernexusGraphBuildReceipt(params) {
+  const receiptPath = DEFAULT_PAPERNEXUS_GRAPH_BUILD_RECEIPT_PATH;
+  const resolvedPath =
+    resolveProjectArtifactPath(params.projectRoot, receiptPath) ??
+    path.join(params.projectRoot, receiptPath);
+  await writeJsonEnsured(resolvedPath, params.receipt);
+  return receiptPath;
+}

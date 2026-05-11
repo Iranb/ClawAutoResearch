@@ -74,6 +74,57 @@ describe("readProjectDetailSummary", () => {
     expect(result?.evidenceBoard.evidenceCloseoutStatus).toBe("not_applicable");
   });
 
+  it("prefers PaperNexus sync state over stale progress and manifest PaperNexus blockers", async () => {
+    const projectsRoot = await createProjectsRootFixture();
+    const projectRoot = path.join(projectsRoot, "gcd-confirmation-bias-mitigation");
+
+    await writeFile(
+      path.join(projectRoot, "graph", "PAPERNEXUS_SYNC_STATE.json"),
+      JSON.stringify(
+        {
+          schema_version: 1,
+          generated_at: "2026-05-11T09:00:00.000Z",
+          imports: {
+            total_count: 1,
+            completed_count: 1,
+            remaining_count: 0,
+            failed_count: 0,
+          },
+          graph_presence: {
+            status: "ready",
+            ready_proof_level: "source_span",
+            expected_paper_count: 1,
+            present_paper_count: 1,
+            missing_paper_count: 0,
+          },
+          workflow_projection: {
+            runtime_status: "ready",
+            can_continue: true,
+            blocking_reason: null,
+            next_action: "continue workflow",
+          },
+        },
+        null,
+        2,
+      ),
+    );
+
+    const result = await readProjectDetailSummary({
+      projectsRoot,
+      projectId: "gcd-confirmation-bias-mitigation",
+    });
+
+    expect(result).toMatchObject({
+      status: "active",
+      updatedAt: "2026-05-11T09:00:00.000Z",
+      blockingReason: null,
+      nextAction: "continue workflow",
+      papernexusPhase: "ready",
+      papernexusProgressSummary: "1/1 completed (0 remaining)",
+      source: ["manifest", "papernexus_sync_state", "papernexus_progress"],
+    });
+  });
+
   it("keeps the summary usable when optional fields are missing", async () => {
     const projectsRoot = await createProjectsRootFixture();
     const sparseProjectRoot = path.join(projectsRoot, "sparse-project");

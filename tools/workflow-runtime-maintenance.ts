@@ -91,15 +91,23 @@ const ACTIVE_SESSION_INSPECTION_GRACE_MS = 30 * 1000;
 const ACTIVE_RUN_FAILURE_PROBE_TIMEOUT_MS = 25;
 const RECOVERABLE_TRACKING_LOSS_EXTRA_REPLAY_ATTEMPTS = 1;
 const ACTIVE_PAPER_INGESTION_REQUEST_STATUSES = new Set([
+  "queued",
   "launching",
   "running",
 ]);
+const QUEUED_PAPER_INGESTION_REPAIR_TTL_MS = 5 * 60 * 1000;
 const ACTIVE_RUNTIME_QUEUE_STATUSES = new Set([
   "queued",
   "launching",
   "running",
   "degraded",
   "needs_repair",
+]);
+const RETIRABLE_OBSOLETE_AUTO_STAGE_QUEUE_STATUSES = new Set([
+  "queued",
+  "launching",
+  "running",
+  "degraded",
 ]);
 const TERMINAL_RUNTIME_QUEUE_STATUSES = new Set([
   "completed",
@@ -113,6 +121,21 @@ const ACTIVE_UNDERLYING_SESSION_STATUSES = new Set([
   "running",
   "starting",
 ]);
+const WORKFLOW_STAGE_RETIREMENT_ORDER = [
+  "setup",
+  "graph_build",
+  "frontier_mapping",
+  "idea",
+  "plan",
+  "code",
+  "experiment",
+  "analyze",
+  "review",
+  "survey_review",
+  "write",
+  "submit",
+  "done",
+];
 
 type InvalidRuntimeSessionRepair = {
   reason: string;
@@ -129,6 +152,8 @@ export type WorkflowRuntimeMaintenanceResult = {
   repairedSessionKeys: string[];
   repairedPaperIngestionRequestIds: string[];
   exhaustedSessionKeys: string[];
+  retiredObsoleteStageQueueKeys: string[];
+  retiredObsoleteStageSessionKeys: string[];
   incidents: WorkflowRuntimeIncidentEntry[];
   handoffMaintenance: WorkflowHandoffMaintenanceResult;
   watchdogSummary: {
@@ -252,6 +277,68 @@ function isAutoDispatchQueueEntry(entry: WorkflowRuntimeQueueEntry): boolean {
     (entry.source === "workflow_auto_stage" ||
       entry.source === "workflow_auto_mitigation")
   );
+}
+
+function isAutoStageDispatchEntry(entry: WorkflowRuntimeQueueEntry): boolean {
+  return (
+    entry.entryType === "dispatch_task" &&
+    entry.source === "workflow_auto_stage" &&
+    entry.kind === "workflow_stage_dispatch" &&
+    Boolean(entry.dispatchPayload)
+  );
+}
+
+function workflowStageRetirementRank(stage: string | null): number | null {
+  if (!stage) {
+    return null;
+  }
+  const index = WORKFLOW_STAGE_RETIREMENT_ORDER.indexOf(stage);
+  return index >= 0 ? index : null;
+}
+
+function isDispatchStageBehindCurrentStage(params: {
+  dispatchStage: string | null;
+  currentStage: string | null;
+}): boolean {
+  const dispatchRank = workflowStageRetirementRank(params.dispatchStage);
+  const currentRank = workflowStageRetirementRank(params.currentStage);
+  return dispatchRank !== null && currentRank !== null && dispatchRank < currentRank;
+}
+
+function isAutoStageDispatchSupersededByProjectRouting(params: {
+  entry: WorkflowRuntimeQueueEntry;
+  currentStage: string | null;
+  currentOwner: string | null;
+}): boolean {
+  if (!isAutoStageDispatchEntry(params.entry)) {
+    return false;
+  }
+  const dispatchStage = readString(params.entry.dispatchPayload?.stage);
+  const dispatchOwner = readString(params.entry.dispatchPayload?.toRole);
+  if (!dispatchStage && !dispatchOwner) {
+    return false;
+  }
+  if (
+    dispatchStage &&
+    params.currentStage &&
+    isDispatchStageBehindCurrentStage({
+      dispatchStage,
+      currentStage: params.currentStage,
+    })
+  ) {
+    return true;
+  }
+  if (
+    dispatchStage &&
+    params.currentStage &&
+    dispatchStage !== params.currentStage
+  ) {
+    return false;
+  }
+  if (dispatchOwner && params.currentOwner && dispatchOwner !== params.currentOwner) {
+    return true;
+  }
+  return false;
 }
 
 function hasDurableProjectBindingForWorkflowQueue(params: {
@@ -700,7 +787,11 @@ async function markStalePaperIngestionRequestsNeedsRepair(params: {
       return request;
     }
     const updatedMs = paperRequestTimestampMs(request);
-    if (updatedMs != null && currentMs - updatedMs < graceMs) {
+    const staleMs =
+      status === "queued"
+        ? Math.max(QUEUED_PAPER_INGESTION_REPAIR_TTL_MS, graceMs)
+        : graceMs;
+    if (updatedMs != null && currentMs - updatedMs < staleMs) {
       return request;
     }
     const requestId =
@@ -1971,12 +2062,14 @@ async function markLinkedSessionsFailed(params: {
 async function markLinkedSessionsCompleted(params: {
   projectRoot: string;
   queueKey: string;
-}) {
+}): Promise<string[]> {
   const currentAt = nowIso();
+  const completedSessionKeys: string[] = [];
   await updateSessions(params.projectRoot, (entry) => {
     if (entry.queueKey !== params.queueKey) {
       return entry;
     }
+    completedSessionKeys.push(entry.sessionKey);
     return {
       ...entry,
       status: "completed",
@@ -1985,6 +2078,100 @@ async function markLinkedSessionsCompleted(params: {
       lastError: null,
     };
   });
+  return completedSessionKeys;
+}
+
+async function retireObsoleteAutoStageDispatchRuntime(params: {
+  projectRoot: string;
+  projectId: string | null;
+  currentStage: string | null;
+  currentOwner: string | null;
+}): Promise<{ queueKeys: string[]; sessionKeys: string[] }> {
+  if (!params.currentStage && !params.currentOwner) {
+    return { queueKeys: [], sessionKeys: [] };
+  }
+  const [queueStore, sessionsStore] = await Promise.all([
+    readWorkflowRuntimeQueueStore(params.projectRoot),
+    readWorkflowRuntimeSessionsStore(params.projectRoot),
+  ]);
+  const activeQueueKeys = new Set(
+    sessionsStore.entries
+      .filter((entry) =>
+        ACTIVE_UNDERLYING_SESSION_STATUSES.has(
+          normalizeRuntimeLikeStatus(entry.status) ?? ""
+        )
+      )
+      .map((entry) => readString(entry.queueKey))
+      .filter((entry): entry is string => Boolean(entry))
+  );
+  const retiredEntries = queueStore.entries.filter(
+    (entry) =>
+      RETIRABLE_OBSOLETE_AUTO_STAGE_QUEUE_STATUSES.has(entry.status) &&
+      !activeQueueKeys.has(entry.queueKey) &&
+      isAutoStageDispatchSupersededByProjectRouting({
+        entry,
+        currentStage: params.currentStage,
+        currentOwner: params.currentOwner,
+      })
+  );
+  const queueKeys: string[] = [];
+  const sessionKeys: string[] = [];
+  for (const entry of retiredEntries) {
+    const dispatchStage = readString(entry.dispatchPayload?.stage);
+    const dispatchOwner = readString(entry.dispatchPayload?.toRole);
+    const summary = buildDispatchSupersededByProjectRoutingReason({
+      queueKey: entry.queueKey,
+      dispatchStage,
+      dispatchOwner,
+      currentStage: params.currentStage,
+      currentOwner: params.currentOwner,
+    });
+    await markQueueCompleted({
+      projectRoot: params.projectRoot,
+      entry,
+      summary,
+    });
+    sessionKeys.push(
+      ...(await markLinkedSessionsCompleted({
+        projectRoot: params.projectRoot,
+        queueKey: entry.queueKey,
+      }))
+    );
+    queueKeys.push(entry.queueKey);
+  }
+  if (queueKeys.length > 0 || sessionKeys.length > 0) {
+    await appendWorkflowDiagnosticEvent({
+      projectRoot: params.projectRoot,
+      projectId: params.projectId,
+      component: "runtime_maintenance",
+      action: "obsolete_auto_stage_runtime_retired",
+      status: "completed",
+      stage: params.currentStage,
+      owner: params.currentOwner,
+      summary:
+        "Runtime maintenance retired auto-stage runtime entries after project routing advanced.",
+      details: {
+        queueKeys,
+        sessionKeys,
+        currentStage: params.currentStage,
+        currentOwner: params.currentOwner,
+      },
+    });
+    await appendWorkflowRuntimeEvent({
+      projectRoot: params.projectRoot,
+      projectId: params.projectId,
+      kind: "obsolete_auto_stage_runtime_retired",
+      summary:
+        "Runtime maintenance retired stale auto-stage dispatches after the project moved to a newer stage.",
+      details: {
+        queueKeys,
+        sessionKeys,
+        currentStage: params.currentStage,
+        currentOwner: params.currentOwner,
+      },
+    });
+  }
+  return { queueKeys, sessionKeys: uniqueStrings(sessionKeys) };
 }
 
 async function retireCompletedAutoCodeReviewRuntimeState(params: {
@@ -2633,6 +2820,13 @@ export async function runWorkflowRuntimeMaintenancePass(params: {
     projectRoot,
     projectId,
   });
+  const retiredObsoleteAutoStageRuntime =
+    await retireObsoleteAutoStageDispatchRuntime({
+      projectRoot,
+      projectId,
+      currentStage,
+      currentOwner,
+    });
   await reconcileTerminalPaperIngestionRequestsWithRuntimeQueue({
     projectRoot,
     projectId,
@@ -3162,6 +3356,10 @@ export async function runWorkflowRuntimeMaintenancePass(params: {
       cooldownQueueKeys,
       requeuedTrackingLossQueueKeys,
       terminalPaperRetiredQueueKeys,
+      retiredObsoleteStageQueueKeys:
+        retiredObsoleteAutoStageRuntime.queueKeys,
+      retiredObsoleteStageSessionKeys:
+        retiredObsoleteAutoStageRuntime.sessionKeys,
       exhaustedSessionKeys,
       handoffMaintenance,
       queueRepairPending: watchdogSummary.queueRepairPending,
@@ -3198,6 +3396,10 @@ export async function runWorkflowRuntimeMaintenancePass(params: {
       cooldownQueueKeys,
       requeuedTrackingLossQueueKeys,
       terminalPaperRetiredQueueKeys,
+      retiredObsoleteStageQueueKeys:
+        retiredObsoleteAutoStageRuntime.queueKeys,
+      retiredObsoleteStageSessionKeys:
+        retiredObsoleteAutoStageRuntime.sessionKeys,
       exhaustedSessionKeys,
       repairedSessionKeys,
       repairedPaperIngestionRequestIds:
@@ -3224,6 +3426,10 @@ export async function runWorkflowRuntimeMaintenancePass(params: {
     repairedPaperIngestionRequestIds:
       paperIngestionMaintenance.repairedRequestIds,
     exhaustedSessionKeys,
+    retiredObsoleteStageQueueKeys:
+      retiredObsoleteAutoStageRuntime.queueKeys,
+    retiredObsoleteStageSessionKeys:
+      retiredObsoleteAutoStageRuntime.sessionKeys,
     incidents,
     handoffMaintenance,
     watchdogSummary,

@@ -26,6 +26,10 @@ import {
   isBrainstormCycleReady,
 } from "../workflow-kernel/readiness";
 import { auditFrontierReportText } from "../workflow-intermediate-artifact-audit";
+import {
+  papernexusSyncStateAllowsWorkflowContinue,
+  readPapernexusSyncState,
+} from "../papernexus-sync-state";
 
 type ManifestLike = Record<string, unknown>;
 
@@ -650,6 +654,7 @@ async function graphPresenceSupportsFrontierRecovery(params: {
     presence != null;
   const graphReasoning = asRecord(params.manifest.graph_reasoning);
   const frontierRecovery = asRecord(graphReasoning?.frontier_recovery);
+  const remotePapernexusConfigured = manifestUsesRemotePapernexus(params.manifest);
   const explicitRecoveryAllowed =
     frontierRecovery?.allow_local_fallback === true ||
     frontierRecovery?.mode === "local_fallback_when_needed" ||
@@ -672,25 +677,91 @@ async function graphPresenceSupportsFrontierRecovery(params: {
     paperIngestion,
     graphPresenceStatus: status,
   }).ready;
-  const usableStatus = new Set([
+  if (remotePapernexusConfigured) {
+    return false;
+  }
+  const syncState = await readPapernexusSyncState(params.projectRoot);
+  if (syncState) {
+    const proofLevel = syncState.graph_presence.ready_proof_level;
+    const hasPerPaperProof =
+      proofLevel === "source_span" || proofLevel === "paper_index";
+    const metadataOnly =
+      syncState.discovery.source_resolved_count <= 0 &&
+      syncState.discovery.metadata_only_count > 0;
+    if (metadataOnly && !hasPerPaperProof) {
+      return false;
+    }
+    const syncReady = papernexusSyncStateAllowsWorkflowContinue(syncState, {
+      strictRemote: false,
+    });
+    const syncPartialWithProof =
+      syncState.graph_presence.status === "degraded" &&
+      hasPerPaperProof &&
+      syncState.graph_presence.present_paper_count > 0;
+    return (
+      hasGraphReport &&
+      (syncReady ||
+        ((explicitRecoveryAllowed || providerCapacityRecoverySignal) &&
+          syncPartialWithProof))
+    );
+  }
+  const localUsableStatus = new Set([
     "ready",
     "completed",
     "partial",
     "degraded",
     "available",
   ]);
-  const readyGraphPresence =
-    usableStatus.has(status ?? "") ||
+  const allCanonicalPapersPresent =
     presence?.all_canonical_papers_present === true ||
-    presence?.allCanonicalPapersPresent === true ||
+    presence?.allCanonicalPapersPresent === true;
+  const localReadyGraphPresence =
+    localUsableStatus.has(status ?? "") ||
+    allCanonicalPapersPresent ||
     (presentCount != null && presentCount > 0);
   return (
     hasGraphReport &&
-    (readyGraphPresence ||
+    (localReadyGraphPresence ||
       providerCapacityRecoverySignal ||
       localSourceGraphFallbackReady ||
       (expectedCount != null && expectedCount > 0 && status !== "missing"))
   );
+}
+
+function manifestUsesRemotePapernexus(manifest: ManifestLike): boolean {
+  const paperIngestion = asRecord(manifest.paper_ingestion) ?? {};
+  const directAccessMode = normalizeStage(
+    pickString(manifest, ["papernexusAccessMode", "papernexus_access_mode"]) ??
+      pickString(paperIngestion, ["papernexusAccessMode", "papernexus_access_mode"])
+  );
+  if (directAccessMode === "remote_mcp") {
+    return true;
+  }
+  if (directAccessMode === "local_mcp") {
+    return false;
+  }
+  const directMcpUrl =
+    pickString(manifest, ["papernexusMcpUrl", "papernexus_mcp_url"]) ??
+    pickString(paperIngestion, ["papernexusMcpUrl", "papernexus_mcp_url"]);
+  if (directMcpUrl) {
+    return true;
+  }
+  const queuedRequests = Array.isArray(paperIngestion.queued_requests)
+    ? paperIngestion.queued_requests
+    : [];
+  return queuedRequests
+    .map((entry) => asRecord(entry))
+    .filter((entry): entry is Record<string, unknown> => Boolean(entry))
+    .some((entry) => {
+      const wrapper = pickString(entry, ["wrapper"]);
+      const lastSessionKey = pickString(entry, ["last_session_key", "lastSessionKey"]);
+      const source = pickString(entry, ["source"]);
+      return (
+        wrapper === "papernexus_remote_mcp" ||
+        source === "papernexus_remote_mcp" ||
+        /papernexus:remote_mcp:/i.test(lastSessionKey ?? "")
+      );
+    });
 }
 
 async function hasRecoverableFrontierMappingSources(params: {
@@ -988,17 +1059,26 @@ async function materializeMissingFrontierRecoveryCore(params: {
   now: string;
   generatedFiles: string[];
 }): Promise<void> {
+  const syncState = await readPapernexusSyncState(params.projectRoot);
   const presence = await readArtifactJson(params.projectRoot, "graph/GRAPH_PRESENCE_CHECK.json");
   const expectedPaperCount =
+    syncState?.graph_presence.expected_paper_count ??
     readFiniteNumber(presence?.expected_paper_count) ??
     readFiniteNumber(presence?.expectedPaperCount);
   const presentPaperCount =
+    syncState?.graph_presence.present_paper_count ??
     readFiniteNumber(presence?.present_paper_count) ??
     readFiniteNumber(presence?.presentPaperCount);
   const missingPaperCount =
+    syncState?.graph_presence.missing_paper_count ??
     readFiniteNumber(presence?.missing_paper_count) ??
     readFiniteNumber(presence?.missingPaperCount);
-  const graphStatus = normalizeStage(presence?.status) ?? "available";
+  const graphStatus =
+    syncState?.graph_presence.status ?? normalizeStage(presence?.status) ?? "available";
+  const claimReadiness =
+    syncState && papernexusSyncStateAllowsWorkflowContinue(syncState, { strictRemote: false })
+      ? "graph_backed"
+      : "coverage_only";
   const fallbackReason =
     "local_frontier_mapping_recovery_after_graph_degraded_or_missing_agent_outputs";
   const profile = inferFrontierRecoveryProfile(params.topic);
@@ -1019,6 +1099,9 @@ async function materializeMissingFrontierRecoveryCore(params: {
       fallback_reason: fallbackReason,
       generated_at: params.now,
       graph_presence_status: graphStatus,
+      graph_ready_proof_level: syncState?.graph_presence.ready_proof_level ?? null,
+      papernexus_sync_state_path: syncState ? "graph/PAPERNEXUS_SYNC_STATE.json" : null,
+      claim_readiness: claimReadiness,
       expected_paper_count: expectedPaperCount,
       present_paper_count: presentPaperCount,
       missing_paper_count: missingPaperCount,

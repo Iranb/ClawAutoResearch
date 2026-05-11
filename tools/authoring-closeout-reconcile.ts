@@ -1275,6 +1275,144 @@ function summarizeExperimentResults(results: Record<string, unknown> | null) {
   return parts.join(", ");
 }
 
+function relativeProjectPath(projectRoot: string, absolutePath: string) {
+  return path.relative(projectRoot, absolutePath).split(path.sep).join("/");
+}
+
+function metricFromKeyMetric(source: Record<string, unknown>, metricNames: string[]) {
+  const keyMetric = readRecord(source.keyMetric) ?? readRecord(source.key_metric);
+  const name = readString(keyMetric?.name)?.toLowerCase().replace(/[-\s]+/g, "_");
+  if (!name || !metricNames.includes(name)) {
+    return null;
+  }
+  return readNumber(keyMetric?.value);
+}
+
+function withNumericField(
+  record: Record<string, unknown> | null,
+  key: string,
+  value: number | null
+) {
+  const next = { ...(record ?? {}) };
+  if (value !== null && readNumber(next[key]) === null) {
+    next[key] = value;
+  }
+  return next;
+}
+
+function normalizeResultSource(
+  source: Record<string, unknown>,
+  sourcePath: string | null = null
+): Record<string, unknown> {
+  const normalized: Record<string, unknown> = { ...source };
+  if (sourcePath && !readString(normalized.source_path)) {
+    normalized.source_path = sourcePath;
+  }
+
+  const keyMetricHScore = metricFromKeyMetric(normalized, ["h_score", "hscore"]);
+  const proposedHScore =
+    readNestedNumber(normalized, [
+      ["proposed", "h_score"],
+      ["proposed", "score"],
+      ["metrics", "h_score"],
+      ["metrics", "score"],
+      ["primary_result", "h_score"],
+      ["h_score"],
+    ]) ?? keyMetricHScore;
+  const baselineHScore = readNestedNumber(normalized, [
+    ["baseline", "h_score"],
+    ["baseline", "score"],
+    ["metrics", "baseline_h_score"],
+    ["metrics", "baseline_score"],
+  ]);
+  const deltaHScore = readNestedNumber(normalized, [
+    ["delta_h"],
+    ["metrics", "delta_h_score"],
+    ["primary_result", "delta_h_score"],
+  ]);
+  const knownAccuracy = readNestedNumber(normalized, [
+    ["proposed", "known_accuracy"],
+    ["metrics", "known_accuracy"],
+    ["primary_result", "known_accuracy"],
+  ]);
+  const novelAccuracy = readNestedNumber(normalized, [
+    ["proposed", "novel_accuracy"],
+    ["metrics", "novel_accuracy"],
+    ["primary_result", "novel_accuracy"],
+  ]);
+
+  normalized.proposed = withNumericField(
+    withNumericField(
+      withNumericField(readRecord(normalized.proposed), "h_score", proposedHScore),
+      "known_accuracy",
+      knownAccuracy
+    ),
+    "novel_accuracy",
+    novelAccuracy
+  );
+  normalized.baseline = withNumericField(
+    readRecord(normalized.baseline),
+    "h_score",
+    baselineHScore
+  );
+  normalized.primary_result = withNumericField(
+    readRecord(normalized.primary_result),
+    "h_score",
+    proposedHScore
+  );
+  if (deltaHScore !== null && readNumber(normalized.delta_h) === null) {
+    normalized.delta_h = deltaHScore;
+  }
+  return normalized;
+}
+
+async function listResultSummaryFiles(
+  root: string,
+  depth = 0
+): Promise<string[]> {
+  if (depth > 5 || !(await pathExists(root))) {
+    return [];
+  }
+  const entries = await fs.readdir(root, { withFileTypes: true }).catch(() => []);
+  const files: string[] = [];
+  for (const entry of entries) {
+    const absolutePath = path.join(root, entry.name);
+    if (entry.isFile() && entry.name === "RESULT_SUMMARY.json") {
+      files.push(absolutePath);
+    } else if (entry.isDirectory()) {
+      files.push(...(await listResultSummaryFiles(absolutePath, depth + 1)));
+    }
+  }
+  return files.sort();
+}
+
+async function readCoderResultSummarySources(
+  projectRoot: string
+): Promise<Record<string, unknown>[]> {
+  const coderRoot = path.join(projectRoot, "coder");
+  const files = await listResultSummaryFiles(coderRoot);
+  const sources = await Promise.all(
+    files.map(async (filePath) => {
+      const [source, stat] = await Promise.all([
+        readJsonIfExists<Record<string, unknown>>(filePath),
+        fs.stat(filePath).catch(() => null),
+      ]);
+      if (!source || Object.keys(source).length === 0) {
+        return null;
+      }
+      const normalized = normalizeResultSource(
+        source,
+        relativeProjectPath(projectRoot, filePath)
+      );
+      if (stat && readNumber(normalized.source_mtime_ms) === null) {
+        normalized.source_mtime_ms = stat.mtimeMs;
+      }
+      return normalized;
+    })
+  );
+  return sources.filter((source): source is Record<string, unknown> => Boolean(source));
+}
+
 async function readExperimentLedgerResultSource(
   projectRoot: string
 ): Promise<Record<string, unknown> | null> {
@@ -1300,7 +1438,7 @@ async function readExperimentLedgerResultSource(
       keyMetric && readString(keyMetric.name) && readNumber(keyMetric.value) !== null
         ? { [readString(keyMetric.name)!]: readNumber(keyMetric.value) }
         : {};
-    return {
+    return normalizeResultSource({
       source: "researcher/EXPERIMENT_LEDGER.json",
       experiment_id: readString(experiment.experimentId) ?? readString(experiment.experiment_id),
       metrics: metrics ?? {},
@@ -1315,7 +1453,7 @@ async function readExperimentLedgerResultSource(
         : Array.isArray(experiment.evidence_pointers)
           ? experiment.evidence_pointers
           : [],
-    };
+    });
   }
   return null;
 }
@@ -1338,13 +1476,12 @@ async function readResultSnapshot(projectRoot: string): Promise<{
       path.join(projectRoot, "researcher", "evaluation_summary.json")
     ),
     readExperimentLedgerResultSource(projectRoot),
+    readCoderResultSummarySources(projectRoot),
   ]);
-  const sources = candidates.filter(
+  const sources = candidates.flat().filter(
     (entry): entry is Record<string, unknown> => Boolean(entry && Object.keys(entry).length > 0)
   );
-  const source = [...sources].sort(
-    (left, right) => resultCompletenessScore(right) - resultCompletenessScore(left)
-  )[0] ?? null;
+  const source = selectBestResultSource(sources);
   const baselineHScore = readNestedNumberFromSources(sources, [
     ["baseline", "h_score"],
     ["metrics", "baseline_h_score"],
@@ -1425,28 +1562,76 @@ function resultCompletenessScore(source: Record<string, unknown> | null | undefi
   return checks.filter((fields) => readNestedNumber(source, [fields]) !== null).length;
 }
 
+function resultSourceTimestampScore(source: Record<string, unknown> | null | undefined) {
+  if (!source) {
+    return 0;
+  }
+  const direct =
+    readNumber(source.source_mtime_ms) ??
+    readNumber(source.sourceMtimeMs) ??
+    readNumber(source.mtime_ms);
+  if (direct !== null) {
+    return direct;
+  }
+  const timestamp =
+    readString(source.updated_at) ??
+    readString(source.updatedAt) ??
+    readString(source.finished_at) ??
+    readString(source.finishedAt) ??
+    readString(source.generated_at) ??
+    readString(source.generatedAt);
+  const parsed = timestamp ? Date.parse(timestamp) : Number.NaN;
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function selectBestResultSource(
+  sources: Array<Record<string, unknown> | null | undefined>
+): Record<string, unknown> | null {
+  return sources
+    .filter((source): source is Record<string, unknown> =>
+      Boolean(source && Object.keys(source).length > 0)
+    )
+    .map((source) => normalizeResultSource(source))
+    .sort((left, right) => {
+      const completenessDelta =
+        resultCompletenessScore(right) - resultCompletenessScore(left);
+      if (completenessDelta !== 0) {
+        return completenessDelta;
+      }
+      return resultSourceTimestampScore(right) - resultSourceTimestampScore(left);
+    })[0] ?? null;
+}
+
 async function ensureAggregateResults(projectRoot: string, resultSource: Record<string, unknown> | null) {
   const aggregatePath = path.join(projectRoot, "researcher", "artifacts", "results", "results.json");
-  const existing = await readJsonIfExists<Record<string, unknown>>(aggregatePath);
-  if (existing && resultCompletenessScore(existing) >= resultCompletenessScore(resultSource)) {
-    return null;
-  }
-  const source =
-    resultSource ??
+  const fallbackCandidates = await Promise.all([
     (await readJsonIfExists<Record<string, unknown>>(
       path.join(projectRoot, "researcher", "artifacts", "results", "exp-1", "RESULT_SUMMARY.json")
     )) ??
+      null,
     (await readJsonIfExists<Record<string, unknown>>(
       path.join(projectRoot, "researcher", "artifacts", "results", "metrics.json")
     )) ??
-    (await readExperimentLedgerResultSource(projectRoot)) ??
+      null,
+    readExperimentLedgerResultSource(projectRoot),
     (await readJsonIfExists<Record<string, unknown>>(
       path.join(projectRoot, "researcher", "evaluation_summary.json")
-    ));
+    )) ??
+      null,
+    readCoderResultSummarySources(projectRoot),
+  ]);
+  const source = selectBestResultSource([resultSource, ...fallbackCandidates.flat()]);
   if (!source) {
     return null;
   }
-  await writeJsonEnsured(aggregatePath, source);
+  const existing = await readJsonIfExists<Record<string, unknown>>(aggregatePath);
+  if (existing && resultCompletenessScore(existing) >= resultCompletenessScore(source)) {
+    return null;
+  }
+  const normalized = normalizeResultSource(source);
+  normalized.source_score = resultCompletenessScore(normalized);
+  normalized.selected_reason = "selected_highest_completeness_result_source";
+  await writeJsonEnsured(aggregatePath, normalized);
   return "researcher/artifacts/results/results.json";
 }
 
@@ -3107,6 +3292,19 @@ export async function reconcileAuthoringCloseout(params: {
   latestManifest.current_stage = nextStage;
   latestManifest.owner_agent = nextStage === "write" ? "academic_writer" : "reviewer";
   latestManifest.workflow_line = workflowLine;
+  latestManifest.next_action =
+    nextStage === "submit"
+      ? "Run /auto-review or /submit-review using the refreshed manuscript, review packet, and compiled PDF."
+      : nextStage === "review"
+        ? "Rerun review against the refreshed authoring artifacts before submit closeout."
+        : "Run /authoring-closeout again after resolving the remaining writing, evidence, citation, or review blockers.";
+  latestManifest.blocking_reason =
+    nextStage === "submit"
+      ? null
+      : reviewPendingReason ??
+        writingSession.state.pendingReason ??
+        citationIntegrity.state.pendingReason ??
+        "Authoring closeout still has unresolved blockers.";
   const existingWritePackage = readRecord(latestManifest.write_package) ?? {};
   latestManifest.write_package = {
     ...existingWritePackage,

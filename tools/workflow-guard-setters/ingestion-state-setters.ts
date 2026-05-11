@@ -30,6 +30,10 @@ import {
 } from "../workflow-guard-state/experiment-search-spec";
 import { writePapernexusProgressFromManifest } from "../papernexus-progress";
 import {
+  DEFAULT_PAPERNEXUS_SYNC_STATE_PATH,
+  readPapernexusSyncState,
+} from "../papernexus-sync-state";
+import {
   normalizeCitationCollectionState,
   normalizeFigureQcState,
   normalizeExperimentSearchState,
@@ -92,6 +96,27 @@ function readExplicitReplaceFlag(
   keys: readonly string[]
 ): boolean {
   return keys.some((key) => record[key] === true);
+}
+
+function pickNullableStringPatch(
+  record: Record<string, unknown>,
+  keys: readonly string[],
+  fallback: string | null
+): string | null {
+  for (const key of keys) {
+    if (!Object.prototype.hasOwnProperty.call(record, key)) {
+      continue;
+    }
+    const value = record[key];
+    if (value === null) {
+      return null;
+    }
+    const stringValue = asString(value);
+    if (stringValue) {
+      return stringValue;
+    }
+  }
+  return fallback;
 }
 
 async function upsertJsonArtifact(
@@ -674,7 +699,7 @@ export async function setPaperQcState(params: {
       pickString(patch, ["latestReportPath", "latest_report_path"]) ??
       current.latestReportPath,
     pendingReason:
-      pickString(patch, ["pendingReason", "pending_reason"]) ?? current.pendingReason,
+      pickNullableStringPatch(patch, ["pendingReason", "pending_reason"], current.pendingReason),
     lastUpdatedAt:
       pickString(patch, ["lastUpdatedAt", "last_updated_at"]) ??
       new Date().toISOString(),
@@ -870,9 +895,30 @@ export async function setPaperIngestionState(params: {
       new Date().toISOString(),
   };
 
+  const syncState = await readPapernexusSyncState(params.projectRoot);
+  const syncProjection = syncState
+    ? {
+        graph_presence_checked_at: syncState.generated_at,
+        graph_presence_status:
+          syncState.graph_presence.status === "ready"
+            ? "ready"
+            : "missing_papers",
+        graph_build_status_reason:
+          syncState.workflow_projection.blocking_reason,
+        papernexus_sync_state_path: DEFAULT_PAPERNEXUS_SYNC_STATE_PATH,
+        papernexus_sync_state_checked_at: syncState.generated_at,
+        papernexus_sync_runtime_status:
+          syncState.workflow_projection.runtime_status,
+        papernexus_sync_can_continue:
+          syncState.workflow_projection.can_continue,
+        papernexus_sync_next_action:
+          syncState.workflow_projection.next_action,
+      }
+    : {};
   manifest.paper_ingestion = {
     ...(asRecord(manifest.paper_ingestion) ?? {}),
     ...serializePaperIngestionState(next),
+    ...syncProjection,
   };
   await saveProjectManifest(params.projectRoot, manifest);
   await writePapernexusProgressFromManifest({

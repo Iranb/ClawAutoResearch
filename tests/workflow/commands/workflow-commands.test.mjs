@@ -820,8 +820,70 @@ test("show-commands command lists the available slash commands and when to use t
   assert.match(result.text, /\/papernexus-stage-remote/);
   assert.match(result.text, /\/authoring-closeout/);
   assert.match(result.text, /\/capture-diagnostics/);
+  assert.match(result.text, /\/autoresearch-buttons-test/);
   assert.match(result.text, /\/show-commands/);
   assert.match(result.text, /普通论文从 \/project-init 或 \/research-pipeline 开始/);
+});
+
+test("autoresearch-buttons-test command returns reusable Discord-native test buttons", async () => {
+  const api = makeApi();
+  const command = getCommand(createResearchWorkflowCommands(api), "autoresearch-buttons-test");
+
+  const result = await command.handler({
+    channel: "discord",
+    isAuthorizedSender: true,
+    commandBody: "/autoresearch-buttons-test",
+    args: undefined,
+    config: {},
+    from: "discord:channel:paper-lab",
+    to: undefined,
+    accountId: "default",
+    requestConversationBinding: async () => ({ status: "error" }),
+    detachConversationBinding: async () => ({ removed: false }),
+    getCurrentConversationBinding: async () => null,
+  });
+
+  const components = result.channelData?.discord?.components;
+  assert.equal(components?.reusable, true);
+  assert.match(result.text, /按钮测试/);
+
+  const actionsBlock = components?.blocks?.find((block) => block.type === "actions");
+  assert.ok(actionsBlock);
+  assert.deepEqual(
+    actionsBlock.buttons.map((button) => button.label),
+    ["测试 A", "测试 B", "测试 C", "测试 D"]
+  );
+  assert.deepEqual(
+    actionsBlock.buttons.map((button) => button.callbackData),
+    [
+      "/autoresearch-buttons-test --ping A",
+      "/autoresearch-buttons-test --ping B",
+      "/autoresearch-buttons-test --ping C",
+      "/autoresearch-buttons-test --ping D",
+    ]
+  );
+});
+
+test("autoresearch-buttons-test ping only posts a test message", async () => {
+  const api = makeApi();
+  const command = getCommand(createResearchWorkflowCommands(api), "autoresearch-buttons-test");
+
+  const result = await command.handler({
+    channel: "discord",
+    isAuthorizedSender: true,
+    commandBody: "/autoresearch-buttons-test --ping C",
+    args: "--ping C",
+    config: {},
+    from: "discord:channel:paper-lab",
+    to: undefined,
+    accountId: "default",
+    requestConversationBinding: async () => ({ status: "error" }),
+    detachConversationBinding: async () => ({ removed: false }),
+    getCurrentConversationBinding: async () => null,
+  });
+
+  assert.equal(result.text, "AutoResearch 按钮 C 测试通过。");
+  assert.equal(result.channelData, undefined);
 });
 
 test("clear-projects-state command clears only PROJECTS_STATE project entries", async (t) => {
@@ -1563,6 +1625,9 @@ test("auto-research command bootstraps topic-only onboarding and starts the back
   const manifest = JSON.parse(
     await fs.readFile(path.join(projectRoot, "PROJECT_MANIFEST.json"), "utf8")
   );
+  const projectsState = JSON.parse(
+    await fs.readFile(path.join(projectsRoot, "PROJECTS_STATE.json"), "utf8")
+  );
 
   await assertWorkflowProjectScaffold(projectRoot);
   assert.match(result.text ?? "", /Full-auto research pipeline started/i);
@@ -1606,6 +1671,11 @@ test("auto-research command bootstraps topic-only onboarding and starts the back
   assert.equal(manifest.graph_guided_writing.enabled, true);
   assert.equal(manifest.graph_guided_writing.status, "pending");
   assert.equal(manifest.graph_guided_writing.citation_source_mode, "graph_only");
+  assert.deepEqual(
+    projectsState.projects.map((entry) => entry.id),
+    ["gcd-confirmation-bias-mitigation"]
+  );
+  assert.equal(projectsState.projects[0].stage, "setup");
   assert.equal(captured.backgroundParams.backgroundRun.kind, "research_pipeline");
   assert.equal(
     captured.backgroundParams.snapshot.channelProjectBindingsEnabled,

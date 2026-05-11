@@ -32,6 +32,8 @@ import {
   deriveWorkflowGraphContext,
   shouldRefreshWorkflowGraphPresence,
 } from "../workflow-kernel/graph-context";
+import { DEFAULT_PAPERNEXUS_GRAPH_BUILD_RECEIPT_PATH } from "../papernexus-graph-build-receipt";
+import { readPapernexusSyncState } from "../papernexus-sync-state";
 import { summarizeEvidenceCloseoutState } from "../workflow-evidence/closeout-summary";
 import { evaluateExperimentSearchDecision } from "../workflow-experiment-decision";
 import { normalizeWritingContractState } from "../workflow-guard-state/writing-contract";
@@ -184,8 +186,77 @@ function graphBuildPresenceBlocksAdvance(
       context.graphPresenceStatus === "missing_corpus" ||
       context.graphPresenceStatus === "missing_papers" ||
       context.graphPresenceCheckStatus === "missing_corpus" ||
-      context.graphPresenceCheckStatus === "missing_papers")
+      context.graphPresenceCheckStatus === "missing_papers" ||
+      context.repairRequired)
   );
+}
+
+function paperIngestionRequestUsesStrictRemotePapernexus(
+  request: ReturnType<typeof normalizePaperIngestionState>["queuedRequests"][number]
+): boolean {
+  const wrapper = request.wrapper ?? "";
+  const lastSessionKey = request.lastSessionKey ?? "";
+  return (
+    wrapper === "papernexus_remote_mcp" ||
+    /papernexus:remote_mcp:/i.test(lastSessionKey)
+  );
+}
+
+function manifestUsesStrictRemotePapernexus(
+  manifest: ManifestLike | null | undefined,
+  state: ReturnType<typeof normalizePaperIngestionState>
+): boolean {
+  const paperIngestion = asRecord(manifest?.paper_ingestion);
+  const accessMode = normalizeStage(
+    pickString(manifest ?? {}, ["papernexusAccessMode", "papernexus_access_mode"]) ??
+      pickString(paperIngestion ?? {}, [
+        "papernexusAccessMode",
+        "papernexus_access_mode",
+      ])
+  );
+  if (accessMode === "remote_mcp") {
+    return true;
+  }
+  if (accessMode === "local_mcp") {
+    return false;
+  }
+  return state.queuedRequests.some(paperIngestionRequestUsesStrictRemotePapernexus);
+}
+
+function isVerifiedSourceBackedGraphBuildReceipt(
+  receipt: Record<string, unknown> | null | undefined
+): boolean {
+  if (!receipt) {
+    return false;
+  }
+  const receiptStatus = normalizeStage(receipt.status);
+  const graphVisibility = normalizeStage(
+    receipt.graph_visibility ?? receipt.graphVisibility
+  );
+  const coverage = asRecord(receipt.coverage);
+  const taskSummary = asRecord(receipt.task_summary ?? receipt.taskSummary);
+  const sourceBackedCount =
+    pickNumber(receipt, ["source_backed_count", "sourceBackedCount"]) ?? 0;
+  const failedTaskCount = pickNumber(taskSummary ?? {}, ["failed"]) ?? 0;
+  return (
+    (receiptStatus === "graph_ready" || receiptStatus === "evidence_ready") &&
+    graphVisibility === "verified" &&
+    (receipt.source_backed_graph_claim === true ||
+      receipt.sourceBackedGraphClaim === true) &&
+    (coverage?.min_required_satisfied === true ||
+      coverage?.minRequiredSatisfied === true) &&
+    sourceBackedCount > 0 &&
+    failedTaskCount === 0
+  );
+}
+
+async function hasVerifiedSourceBackedGraphBuildReceipt(
+  projectRoot: string
+): Promise<boolean> {
+  const receipt = await readJsonIfExists<Record<string, unknown>>(
+    path.join(projectRoot, DEFAULT_PAPERNEXUS_GRAPH_BUILD_RECEIPT_PATH)
+  );
+  return isVerifiedSourceBackedGraphBuildReceipt(receipt);
 }
 
 type MailboxQueueResultLike = {
@@ -1322,14 +1393,51 @@ export async function runWorkflowAutoIteratorImpl(
       contract === "literature_discovery_requisition_degraded" ||
       contract === "literature_discovery_requisition_verified_graph"
   );
+  const paperIngestionStateForGraphRefresh = normalizePaperIngestionState(
+    manifest.paper_ingestion
+  );
+  let papernexusSyncState = await readPapernexusSyncState(projectRoot);
+  const graphPresenceRefreshRequested = shouldRefreshWorkflowGraphPresence({
+    manifest,
+    stage: stageBefore,
+    nowIso: now,
+    minRefreshIntervalMs: AUTO_ITERATOR_GRAPH_REFRESH_MIN_INTERVAL_MS,
+    papernexusSyncState,
+  });
+  const remoteGraphRepairWithoutVerifiedReceipt =
+    stageBefore === "graph_build" &&
+    paperIngestionStateForGraphRefresh.repairRequired &&
+    manifestUsesStrictRemotePapernexus(
+      manifest,
+      paperIngestionStateForGraphRefresh
+    ) &&
+    !(await hasVerifiedSourceBackedGraphBuildReceipt(projectRoot));
   const shouldRefreshGraphPresenceNow =
     !graphPresenceAcceptedByPreflight &&
-    shouldRefreshWorkflowGraphPresence({
-      manifest,
+    graphPresenceRefreshRequested &&
+    !remoteGraphRepairWithoutVerifiedReceipt;
+  if (
+    !graphPresenceAcceptedByPreflight &&
+    graphPresenceRefreshRequested &&
+    remoteGraphRepairWithoutVerifiedReceipt
+  ) {
+    await appendWorkflowDiagnosticEvent({
+      projectRoot,
+      projectId,
+      component: "auto_iterator",
+      action: "graph_presence_refresh_skipped",
+      status: "blocked",
       stage: stageBefore,
-      nowIso: now,
-      minRefreshIntervalMs: AUTO_ITERATOR_GRAPH_REFRESH_MIN_INTERVAL_MS,
+      owner: asString(manifest.owner_agent),
+      summary:
+        "Skipped graph presence refresh because strict remote PaperNexus repair lacks a verified graph build receipt.",
+      details: {
+        reason: "remote_papernexus_missing_verified_graph_build_receipt",
+        receiptPath: DEFAULT_PAPERNEXUS_GRAPH_BUILD_RECEIPT_PATH,
+        repairReason: paperIngestionStateForGraphRefresh.repairReason,
+      },
     });
+  }
   if (stageBefore === "graph_build" && shouldRefreshGraphPresenceNow) {
     graphPresenceCheck = await deps.checkGraphPresenceForWorkflow({
       projectRoot,
@@ -1359,7 +1467,23 @@ export async function runWorkflowAutoIteratorImpl(
         normalizeStage(asRecord(manifest.paper_ingestion)?.graph_presence_status) ===
           "ready";
       const sourceCatchup: GraphBuildSourceCatchupResult =
-        graphPresenceReady && !hasOutstandingGraphBuildIngestionWork(manifest)
+        remoteGraphRepairWithoutVerifiedReceipt
+        ? {
+            attempted: false,
+            queued: false,
+            skippedReason:
+              "Strict remote PaperNexus repair is blocked until a verified graph build receipt is available.",
+            sourceIndexPath: null,
+            materializedPaperCount: 0,
+            requestId: null,
+            batchManifestPath: null,
+            errors: [
+              paperIngestionStateForGraphRefresh.repairReason ??
+                "Remote PaperNexus graph build receipt is missing or unverified.",
+            ],
+            attempts: [],
+          }
+        : graphPresenceReady && !hasOutstandingGraphBuildIngestionWork(manifest)
         ? {
             attempted: false,
             queued: false,
@@ -1447,6 +1571,7 @@ export async function runWorkflowAutoIteratorImpl(
     manifest =
       (await readJsonIfExists<ManifestLike>(path.join(projectRoot, "PROJECT_MANIFEST.json"))) ??
       manifest;
+    papernexusSyncState = await readPapernexusSyncState(projectRoot);
   }
 
   const graphContextBeforeRouting = deriveWorkflowGraphContext({
@@ -1455,6 +1580,7 @@ export async function runWorkflowAutoIteratorImpl(
     nowIso: now,
     minRefreshIntervalMs: AUTO_ITERATOR_GRAPH_REFRESH_MIN_INTERVAL_MS,
     graphPresenceCheck,
+    papernexusSyncState,
   });
   const paperIngestionStateBeforeRouting = graphContextBeforeRouting.paperIngestionState;
   const ideaCatalystStateBeforeRouting = normalizeIdeaCatalystState(manifest.idea_catalyst);
@@ -1574,16 +1700,20 @@ export async function runWorkflowAutoIteratorImpl(
   if (
     graphBuildPresenceBlocksCurrentStage &&
     !effectiveMissingSignals.some((signal) =>
-      /paper_ingestion\.graph_presence_status = ready/i.test(signal)
+      /paper_ingestion\.graph_presence_status = ready|verified source-backed PaperNexus graph/i.test(signal)
     )
   ) {
     const graphPresenceStatus =
       graphContextBeforeRouting.graphPresenceCheckStatus ??
       graphContextBeforeRouting.graphPresenceStatus ??
       "unset";
+    const graphPresenceSignal =
+      graphPresenceStatus === "ready" && graphContextBeforeRouting.status !== "ready"
+        ? "verified source-backed PaperNexus graph receipt is required before graph_build can advance"
+        : `PROJECT_MANIFEST.json.paper_ingestion.graph_presence_status = ready (current: ${graphPresenceStatus})`;
     effectiveMissingSignals = [
       ...effectiveMissingSignals,
-      `PROJECT_MANIFEST.json.paper_ingestion.graph_presence_status = ready (current: ${graphPresenceStatus})`,
+      graphPresenceSignal,
     ];
     await appendWorkflowDiagnosticEvent({
       projectRoot,
@@ -1594,8 +1724,9 @@ export async function runWorkflowAutoIteratorImpl(
       stage: stageEffective,
       owner: asString(manifest.owner_agent),
       summary:
-        "Graph build cannot advance because graph presence is not ready.",
+        "Graph build cannot advance because graph context is not verified-ready.",
       details: {
+        graphContextStatus: graphContextBeforeRouting.status,
         graphPresenceStatus,
         graphBuildWorkflowStatus: graphContextBeforeRouting.graphBuildWorkflowStatus,
         graphBuildCanContinue: graphContextBeforeRouting.graphBuildCanContinue,
@@ -1968,6 +2099,7 @@ export async function runWorkflowAutoIteratorImpl(
     nowIso: now,
     minRefreshIntervalMs: AUTO_ITERATOR_GRAPH_REFRESH_MIN_INTERVAL_MS,
     graphPresenceCheck,
+    papernexusSyncState,
   });
   const paperIngestionStateForActions = graphContextForActions.paperIngestionState;
   const experimentSearchState = deps.normalizeExperimentSearchState(

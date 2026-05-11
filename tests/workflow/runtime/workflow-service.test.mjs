@@ -437,6 +437,36 @@ test("listWorkflowCoordinatorProjects prefers active projects from PROJECTS_STAT
   );
 });
 
+test("listWorkflowCoordinatorProjects falls back to directory scan when PROJECTS_STATE is empty", async (t) => {
+  const projectsRoot = await makeProjectsRoot();
+  await makeProject(projectsRoot, "stale-alpha", "graph_build");
+
+  t.after(async () => {
+    await fs.rm(projectsRoot, { recursive: true, force: true });
+  });
+
+  await writeJson(path.join(projectsRoot, "PROJECTS_STATE.json"), {
+    updated_at: "2026-05-10T00:00:00.000Z",
+    projects: [],
+  });
+
+  const projects = await listWorkflowCoordinatorProjects({
+    projectsRoot,
+    maxProjects: 5,
+  });
+
+  assert.deepEqual(projects, [
+    {
+      projectId: "stale-alpha",
+      projectRoot: path.join(projectsRoot, "stale-alpha"),
+      source: "scan",
+      stage: "graph_build",
+      updatedAt: null,
+      channelKey: null,
+    },
+  ]);
+});
+
 test("runWorkflowCoordinatorPass invokes auto iterator in service mode", async (t) => {
   const projectsRoot = await makeProjectsRoot();
   const alphaRoot = await makeProject(projectsRoot, "alpha", "graph_build");

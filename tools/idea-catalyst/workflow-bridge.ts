@@ -9,6 +9,7 @@ import {
   serializePaperIngestionState,
 } from "../workflow-guard-state/paper-ingestion";
 import { resolveWorkflowSharedPapernexusCorpus } from "../papernexus-shared-corpus";
+import { readPapernexusSyncState } from "../papernexus-sync-state";
 import { normalizeIdeaCatalystState, serializeIdeaCatalystState } from "./state";
 
 function sanitizeIdFragment(value: string | null | undefined): string {
@@ -489,10 +490,12 @@ export async function queueIdeaCatalystRequisition(params: {
     (await readJsonIfExists<Record<string, unknown>>(
       resolveProjectArtifactPath(projectRoot, "graph/PAPERNEXUS_STATUS.json") ?? ""
     )) ?? null;
+  const syncState = await readPapernexusSyncState(projectRoot);
   const projectId =
     pickString(manifest, ["project_id", "projectId"]) ?? path.basename(projectRoot);
   const sharedCorpus = resolveWorkflowSharedPapernexusCorpus({
     candidates: [
+      syncState?.authority.corpus ?? null,
       pickString(graphStatus ?? {}, ["corpus_name", "corpusName"]),
       paperIngestion.repairTargetCorpus,
     ],

@@ -53,6 +53,29 @@ type PapernexusProgressFile = {
   } | null;
 };
 
+type PapernexusSyncStateFile = {
+  generated_at?: string | null;
+  imports?: {
+    total_count?: number | null;
+    completed_count?: number | null;
+    remaining_count?: number | null;
+    failed_count?: number | null;
+  } | null;
+  graph_presence?: {
+    status?: string | null;
+    ready_proof_level?: string | null;
+    expected_paper_count?: number | null;
+    present_paper_count?: number | null;
+    missing_paper_count?: number | null;
+  } | null;
+  workflow_projection?: {
+    runtime_status?: string | null;
+    can_continue?: boolean | null;
+    blocking_reason?: string | null;
+    next_action?: string | null;
+  } | null;
+};
+
 type TaskGraphFile = { tasks?: Array<Record<string, unknown>> | null };
 type TeamRoundFile = {
   leadRole?: string | null;
@@ -153,7 +176,7 @@ export type ProjectDetailSummary = {
     topTierVerdict: string | null;
     evidenceCloseoutStatus: string | null;
   };
-  source: Array<"manifest" | "papernexus_progress" | "fallback">;
+  source: Array<"manifest" | "papernexus_sync_state" | "papernexus_progress" | "fallback">;
 };
 
 export async function readProjectDetailSummary(params: {
@@ -175,6 +198,9 @@ export async function readProjectDetailSummary(params: {
   const progress = await readJsonFile<PapernexusProgressFile>(
     path.join(projectRoot, "graph", "PAPERNEXUS_PROGRESS.json"),
   );
+  const papernexusSyncState = await readJsonFile<PapernexusSyncStateFile>(
+    path.join(projectRoot, "graph", "PAPERNEXUS_SYNC_STATE.json"),
+  );
   const dashboardSummary = await readLocalDashboardSummary(projectRoot, manifest);
   const paperStory = asRecord(manifest?.paper_story_state);
   const resultsStoryline = asRecord(manifest?.results_storyline);
@@ -188,6 +214,10 @@ export async function readProjectDetailSummary(params: {
     source.push("manifest");
   }
 
+  if (papernexusSyncState) {
+    source.push("papernexus_sync_state");
+  }
+
   if (progress) {
     source.push("papernexus_progress");
   }
@@ -197,8 +227,18 @@ export async function readProjectDetailSummary(params: {
   }
 
   const currentStage = asString(manifest?.current_stage);
-  const blockingReason = asString(manifest?.blocking_reason);
-  const nextAction = asString(manifest?.next_action);
+  const manifestBlockingReason = asString(manifest?.blocking_reason);
+  const syncBlockingReason = asString(
+    papernexusSyncState?.workflow_projection?.blocking_reason,
+  );
+  const blockingReason =
+    syncBlockingReason ??
+    (papernexusSyncState && isPapernexusBlockingReason(manifestBlockingReason)
+      ? null
+      : manifestBlockingReason);
+  const nextAction =
+    asString(papernexusSyncState?.workflow_projection?.next_action) ??
+    asString(manifest?.next_action);
   const paperMode = getPaperMode(manifest?.writing_contract);
   const surveyStatus = asString(manifest?.survey_review?.status);
   const [
@@ -242,7 +282,8 @@ export async function readProjectDetailSummary(params: {
     paperMode,
     owner: asString(manifest?.owner_agent),
     status: deriveStatus({ currentStage, blockingReason, nextAction }),
-    updatedAt: asString(manifest?.updated_at),
+    updatedAt:
+      asString(papernexusSyncState?.generated_at) ?? asString(manifest?.updated_at),
     blockingReason,
     nextAction,
     resumeAction: asString(manifest?.resume_action),
@@ -306,8 +347,11 @@ export async function readProjectDetailSummary(params: {
             "survey outputs",
           )
         : null,
-    papernexusPhase: asString(progress?.phase),
-    papernexusProgressSummary: formatPapernexusProgressSummary(progress?.progress),
+    papernexusPhase:
+      formatPapernexusSyncPhase(papernexusSyncState) ?? asString(progress?.phase),
+    papernexusProgressSummary:
+      formatPapernexusSyncProgressSummary(papernexusSyncState) ??
+      formatPapernexusProgressSummary(progress?.progress),
     topTierVerdict: asString(manifest?.opportunity_scorecard?.verdict),
     teamRoundLead: dashboardSummary.teamRound.leadRole,
     teamRoundActiveSessions: dashboardSummary.teamRound.activeSessionCount,
@@ -397,6 +441,60 @@ function deriveStatus(params: {
   }
 
   return "active";
+}
+
+function isPapernexusBlockingReason(value: string | null): boolean {
+  return Boolean(
+    value &&
+      /papernexus|graph presence|graph_presence|graph build|missing_sources|missing papers|missing_papers/i.test(
+        value,
+      ),
+  );
+}
+
+function formatPapernexusSyncPhase(
+  syncState: PapernexusSyncStateFile | null,
+): string | null {
+  const runtimeStatus = asString(syncState?.workflow_projection?.runtime_status);
+  switch (runtimeStatus) {
+    case "ready":
+      return "ready";
+    case "waiting_import":
+      return "waiting_import";
+    case "waiting_graph":
+    case "degraded":
+      return "verifying_graph";
+    case "blocked": {
+      const failedCount = asNumber(syncState?.imports?.failed_count) ?? 0;
+      return failedCount > 0 ? "failed" : "needs_repair";
+    }
+    default:
+      return null;
+  }
+}
+
+function formatPapernexusSyncProgressSummary(
+  syncState: PapernexusSyncStateFile | null,
+): string | null {
+  const total = asNumber(syncState?.imports?.total_count);
+  const completed = asNumber(syncState?.imports?.completed_count);
+  const remaining = asNumber(syncState?.imports?.remaining_count);
+  if (total !== null && completed !== null && total > 0) {
+    const resolvedRemaining =
+      remaining ?? Math.max(0, total - completed);
+    return `${completed}/${total} completed (${resolvedRemaining} remaining)`;
+  }
+
+  const expected = asNumber(syncState?.graph_presence?.expected_paper_count);
+  const present = asNumber(syncState?.graph_presence?.present_paper_count);
+  const missing = asNumber(syncState?.graph_presence?.missing_paper_count);
+  if (expected !== null && present !== null && expected > 0) {
+    return `${present}/${expected} graph present${
+      missing !== null ? ` (${missing} missing)` : ""
+    }`;
+  }
+
+  return null;
 }
 
 function formatPapernexusProgressSummary(

@@ -182,6 +182,116 @@ test("runWorkflowRuntimeMaintenancePass replays repairable background transition
   );
 });
 
+test("runWorkflowRuntimeMaintenancePass retires obsolete auto-stage dispatches after the project advances", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  const projectId = "obsolete-stage-demo";
+  const graphQueueKey = `${projectRoot}::graph_build::researcher::Run /graph-build`;
+  const frontierQueueKey = `${projectRoot}::frontier_mapping::researcher::Run /frontier-mapping`;
+  const queuedAt = "2026-05-10T14:30:00.000Z";
+
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await makeProject(projectRoot, projectId);
+  await migrateWorkflowRuntimeState({
+    projectRoot,
+    projectId,
+    compatibilityMode: "sessions_spawn_runtime",
+    reason: "test_bootstrap",
+  });
+
+  const autoStageQueue = (queueKey, stage, status) => ({
+    transitionId: queueKey,
+    queueId: queueKey,
+    queueKey,
+    source: "workflow_auto_stage",
+    entryType: "dispatch_task",
+    ownerAgent: "researcher",
+    channelKey: "local:obsolete-stage-demo",
+    requesterSessionKey: "agent:researcher:local:obsolete-stage-demo",
+    messageChannel: "local",
+    preferredSessionKey: `agent:researcher:local:obsolete-stage-demo:${stage}`,
+    family: "research",
+    kind: "workflow_stage_dispatch",
+    projectId,
+    projectRoot,
+    queuedAt,
+    lastAttemptedAt: status === "queued" ? null : queuedAt,
+    lastCheckedAt: status === "queued" ? null : queuedAt,
+    nextRetryAt: null,
+    attemptCount: status === "queued" ? 0 : 1,
+    summary: `Dispatch ${stage}`,
+    status,
+    fallbackMode: null,
+    lastError: null,
+    parentSessionKey: null,
+    threadBindingKey: null,
+    depth: 0,
+    runPayload: null,
+    dispatchPayload: {
+      requesterChannel: "local",
+      requesterAccountId: null,
+      preferredSessionKeys: [`agent:researcher:local:obsolete-stage-demo:${stage}`],
+      fromRole: "researcher",
+      toRole: "researcher",
+      projectRoot,
+      projectId,
+      stage,
+      summary: `Dispatch ${stage}`,
+      command: `Run /${stage}`,
+      mailboxMessageId: null,
+      requireMailboxAcknowledgement: true,
+      extraBody: null,
+      waitTimeoutMs: 5000,
+      retryOnTimeout: true,
+      enableSpawnFallback: true,
+      useWorkflowHandoff: true,
+      autoModeActive: true,
+    },
+  });
+
+  await writeWorkflowRuntimeQueueStore({
+    projectRoot,
+    projectId,
+    entries: [
+      autoStageQueue(graphQueueKey, "graph_build", "running"),
+      autoStageQueue(frontierQueueKey, "frontier_mapping", "running"),
+    ],
+  });
+
+  const result = await runWorkflowRuntimeMaintenancePass({
+    projectRoot,
+    projectId,
+    staleSessionAgeMs: 365 * 24 * 60 * 60 * 1000,
+  });
+
+  assert.deepEqual(result.retiredObsoleteStageQueueKeys.sort(), [
+    frontierQueueKey,
+    graphQueueKey,
+  ].sort());
+  assert.deepEqual(result.retiredObsoleteStageSessionKeys, []);
+
+  const queueStore = await readWorkflowRuntimeQueueStore(projectRoot);
+  assert.equal(
+    queueStore.entries.find((entry) => entry.queueKey === graphQueueKey)?.status,
+    "completed"
+  );
+  assert.equal(
+    queueStore.entries.find((entry) => entry.queueKey === frontierQueueKey)?.status,
+    "completed"
+  );
+  const sessionsStore = await readWorkflowRuntimeSessionsStore(projectRoot);
+  assert.deepEqual(sessionsStore.entries, []);
+  const diagnostics = await readWorkflowDiagnosticEvents(projectRoot);
+  assert.equal(
+    diagnostics.some(
+      (entry) => entry.action === "obsolete_auto_stage_runtime_retired"
+    ),
+    true
+  );
+});
+
 test("runWorkflowRuntimeMaintenancePass recreates a failed background transition after runtime tracking loss", async (t) => {
   const projectRoot = await makeProjectRoot();
   const queueKey = "repair:bg:tracking-loss";
@@ -2465,13 +2575,11 @@ test("runWorkflowRuntimeMaintenancePass marks PaperNexus requests without runtim
       {
         request_id: "stale-upload",
         request_kind: "upload_manifest",
-        status: "running",
+        status: "queued",
         wrapper: "pn_batch_import.py",
         command_text:
           "python3 skills/papernexus/scripts/pn_batch_import.py --manifest batch.json submit",
         updated_at: "2026-04-20T00:00:00.000Z",
-        last_run_id: "run:missing-upload",
-        last_session_key: "agent:researcher:local:subagent:missing-papernexus",
       },
     ],
     active_batches: [],

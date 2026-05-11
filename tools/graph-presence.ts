@@ -18,7 +18,18 @@ import {
   sourceProviderRank as sourceProviderRankShared,
 } from "./paper-source-contract";
 import { writePapernexusProgressFromManifest } from "./papernexus-progress";
-import { certifyPapernexusTaskForProject } from "./papernexus-task-certification";
+import {
+  certifyPapernexusTaskForProject,
+  type PapernexusTaskCertification,
+} from "./papernexus-task-certification";
+import {
+  writePapernexusGraphBuildReceipt,
+  type PapernexusGraphBuildReceipt,
+} from "./papernexus-graph-build-receipt";
+import {
+  buildPapernexusSyncStateFromGraphPresence,
+  writePapernexusSyncState,
+} from "./papernexus-sync-state";
 import {
   DEFAULT_SHARED_PAPERNEXUS_CORPUS,
   resolvePapernexusSharedCorpusFallback,
@@ -40,6 +51,12 @@ export type GraphPresenceVerificationMode =
   | "canonical_paper_index"
   | "remote_corpus_summary"
   | "paper_source_index_override";
+
+export type GraphPresenceReadyProofLevel =
+  | "source_span"
+  | "paper_index"
+  | "remote_summary"
+  | "none";
 
 type ManifestLike = Record<string, unknown>;
 
@@ -114,6 +131,9 @@ export type GraphPresenceCheckResult = {
   expectedPaperCount: number;
   presentPaperCount: number;
   missingPaperCount: number;
+  readyProofLevel: GraphPresenceReadyProofLevel;
+  sourceBackedPresentCount: number;
+  paperIndexPresentCount: number;
   corpusRoot: string | null;
   corpusName: string | null;
   corpusManifestPath: string | null;
@@ -706,6 +726,156 @@ function getGraphBuildReportPath(projectRoot: string): string {
   return path.join(projectRoot, "graph", "GRAPH_BUILD_REPORT.md");
 }
 
+function uniqueGraphPresenceStrings(values: Array<string | null | undefined>): string[] {
+  return Array.from(new Set(values.filter((value): value is string => Boolean(value)))).sort();
+}
+
+function hasGraphPresenceEvidenceRecord(value: Record<string, unknown> | null): boolean {
+  return Boolean(value && Object.keys(value).length > 0);
+}
+
+function countGraphPresencePaperIndexEvidence(papers: GraphPresenceMatch[]): number {
+  return papers.filter(
+    (paper) =>
+      hasGraphPresenceEvidenceRecord(paper.graphIndexEvidence) ||
+      paper.matchedBy === "paper_source_index"
+  ).length;
+}
+
+function countGraphPresenceSourceSpanEvidence(papers: GraphPresenceMatch[]): number {
+  return papers.filter((paper) => hasGraphPresenceEvidenceRecord(paper.sourceSpanEvidence)).length;
+}
+
+function deriveGraphPresenceReadyProofLevel(params: {
+  status: GraphPresenceStatus;
+  verificationMode: GraphPresenceVerificationMode;
+  expectedPaperCount: number;
+  presentPapers: GraphPresenceMatch[];
+  paperIndexPresentCount: number;
+  sourceBackedPresentCount: number;
+}): GraphPresenceReadyProofLevel {
+  if (params.status !== "ready" || params.expectedPaperCount <= 0) {
+    return "none";
+  }
+  if (params.sourceBackedPresentCount >= params.expectedPaperCount) {
+    return "source_span";
+  }
+  if (params.paperIndexPresentCount >= params.expectedPaperCount) {
+    return "paper_index";
+  }
+  if (
+    params.verificationMode === "remote_corpus_summary" ||
+    params.presentPapers.length === 0
+  ) {
+    return "remote_summary";
+  }
+  return "none";
+}
+
+function normalizeGraphPresenceReadyProofLevel(
+  value: unknown
+): GraphPresenceReadyProofLevel | null {
+  const normalized = typeof value === "string" ? value.trim().toLowerCase() : null;
+  return normalized === "source_span" ||
+    normalized === "paper_index" ||
+    normalized === "remote_summary" ||
+    normalized === "none"
+    ? normalized
+    : null;
+}
+
+async function writeGraphPresenceBuildReceipt(params: {
+  projectRoot: string;
+  result: GraphPresenceCheckResult;
+  certification: PapernexusTaskCertification;
+  corpus: string | null;
+}): Promise<{
+  path: string;
+  receipt: PapernexusGraphBuildReceipt;
+}> {
+  const canonicalIdsInGraph = uniqueGraphPresenceStrings(
+    params.result.presentPapers.map((paper) => paper.canonicalId)
+  );
+  const canonicalIdsMissing = uniqueGraphPresenceStrings(
+    params.result.missingPapers.map((paper) => paper.canonicalId)
+  );
+  const canonicalIdsRequested = uniqueGraphPresenceStrings([
+    ...canonicalIdsInGraph,
+    ...canonicalIdsMissing,
+  ]);
+  const sourceBackedGraphClaim = params.certification.source_backed_graph_claim === true;
+  const receipt: PapernexusGraphBuildReceipt = {
+    schema_version: 1,
+    request_id: null,
+    run_id: null,
+    corpus: params.result.corpusName ?? params.corpus,
+    status:
+      params.result.status === "ready" && sourceBackedGraphClaim
+        ? "graph_ready"
+        : params.result.status === "ready"
+          ? "waiting_graph_commit"
+          : params.result.status === "missing_sources"
+            ? "source_blocked"
+            : "waiting_graph_commit",
+    graph_visibility:
+      params.result.status === "ready" ? "verified" : "unverified",
+    graph_fingerprint: [
+      params.result.corpusName ?? params.corpus ?? "corpus",
+      params.result.checkedAt,
+      canonicalIdsInGraph.join(","),
+    ].join(":"),
+    checked_at: params.result.checkedAt,
+    canonical_ids_requested: canonicalIdsRequested,
+    canonical_ids_in_graph: canonicalIdsInGraph,
+    canonical_ids_missing: canonicalIdsMissing,
+    source_backed_count:
+      params.certification.graph.source_backed_present_count,
+    metadata_only_count:
+      params.certification.source_index.metadata_only_paper_count,
+    source_backed_graph_claim: sourceBackedGraphClaim,
+    active_in_graph_sources: uniqueGraphPresenceStrings(
+      params.result.presentPapers.map((paper) => paper.corpusSourceKey)
+    ),
+    task_summary: {
+      total: params.certification.upload.import_tasks.task_count,
+      pending: Math.max(
+        0,
+        params.certification.upload.import_tasks.task_count -
+          params.certification.upload.import_tasks.completed_task_count -
+          params.certification.upload.import_tasks.failed_task_count
+      ),
+      running: 0,
+      completed: params.certification.upload.import_tasks.completed_task_count,
+      failed: params.certification.upload.import_tasks.failed_task_count,
+      remaining: Math.max(
+        0,
+        params.certification.upload.queue_remaining ?? 0
+      ),
+    },
+    coverage: {
+      min_required_satisfied:
+        params.result.status === "ready" &&
+        sourceBackedGraphClaim &&
+        params.certification.upload.import_tasks.failed_task_count === 0,
+      min_source_backed_papers: Math.max(1, params.result.expectedPaperCount),
+      notes: params.certification.limitations,
+    },
+    evidence_packet_path: null,
+    limitations: params.certification.limitations,
+    repair_hints:
+      params.result.status === "ready" && sourceBackedGraphClaim
+        ? []
+        : [
+            "Use PaperNexus discovery/import/graph sync until the receipt is source-backed and graph-visible.",
+          ],
+  };
+  const receiptPath = await writePapernexusGraphBuildReceipt({
+    projectRoot: params.projectRoot,
+    receipt,
+  });
+  return { path: receiptPath, receipt };
+}
+
 function buildStatusRecordFromPresenceResult(params: {
   result: GraphPresenceCheckResult;
   mode: string;
@@ -722,6 +892,9 @@ function buildStatusRecordFromPresenceResult(params: {
     expected_paper_count: params.result.expectedPaperCount,
     present_paper_count: params.result.presentPaperCount,
     missing_paper_count: params.result.missingPaperCount,
+    ready_proof_level: params.result.readyProofLevel,
+    source_backed_present_count: params.result.sourceBackedPresentCount,
+    paper_index_present_count: params.result.paperIndexPresentCount,
     refresh_required: params.result.refreshRequired,
     refresh_reason: params.result.refreshReason,
     repair_required: params.result.repairRequired,
@@ -745,11 +918,14 @@ function renderGraphBuildReport(result: GraphPresenceCheckResult): string {
     `Project: ${result.projectId ?? path.basename(result.projectRoot)}`,
     `Graph Presence Status: ${result.status}`,
     `Verification Mode: ${result.verificationMode}`,
+    `Ready Proof Level: ${result.readyProofLevel}`,
     `Corpus: ${result.corpusName ?? "unset"}`,
     `Corpus Root: ${result.corpusRoot ?? "unset"}`,
     `Expected Papers: ${result.expectedPaperCount}`,
     `Present Papers: ${result.presentPaperCount}`,
     `Missing Papers: ${result.missingPaperCount}`,
+    `Source-backed Present Papers: ${result.sourceBackedPresentCount}`,
+    `Paper-index Present Papers: ${result.paperIndexPresentCount}`,
     `Graph Build Workflow Status: ${result.graphBuildWorkflowStatus}`,
     `Graph Build Can Continue: ${result.graphBuildCanContinue ? "yes" : "no"}`,
     `Refresh Required: ${result.refreshRequired ? "yes" : "no"}`,
@@ -1546,6 +1722,46 @@ function pickEvidenceRecord(
   return null;
 }
 
+function pickEvidenceArrayRecord(
+  source: Record<string, unknown>,
+  keys: string[],
+  targetKey: string
+): Record<string, unknown> | null {
+  for (const key of keys) {
+    const values = Array.isArray(source[key]) ? source[key] : [];
+    if (values.length > 0) {
+      return { [targetKey]: values, count: values.length };
+    }
+  }
+  return null;
+}
+
+function buildImplicitGraphIndexEvidence(
+  source: Record<string, unknown>
+): Record<string, unknown> | null {
+  const activeInGraph =
+    typeof source.activeInGraph === "boolean"
+      ? source.activeInGraph
+      : typeof source.active_in_graph === "boolean"
+        ? source.active_in_graph
+        : true;
+  if (!activeInGraph) {
+    return null;
+  }
+  const paperId = pickString(source, ["paperId", "paper_id"]);
+  const sourceKey = pickString(source, ["sourceKey", "source_key"]);
+  const inputPath = pickString(source, ["inputPath", "input_path"]);
+  if (!paperId && !sourceKey && !inputPath) {
+    return null;
+  }
+  return {
+    paper_id: paperId,
+    source_key: sourceKey ?? inputPath,
+    active_in_graph: true,
+    evidence_source: "remote_corpus_source",
+  };
+}
+
 function buildCorpusPaper(entry: Record<string, unknown>): CorpusPaper {
   const identifiers = asRecord(entry.identifiers);
   const sourceHints = uniqueStrings([
@@ -1586,18 +1802,19 @@ function buildCorpusPaper(entry: Record<string, unknown>): CorpusPaper {
     paperId: pickString(entry, ["paperId", "paper_id"]),
     paperTitle,
     sourceKey: pickString(entry, ["sourceKey", "source_key"]),
-    graphIndexEvidence: pickEvidenceRecord(entry, [
-      "graphIndexEvidence",
-      "graph_index_evidence",
-      "graphIndex",
-      "graph_index",
-    ]),
-    sourceSpanEvidence: pickEvidenceRecord(entry, [
-      "sourceSpanEvidence",
-      "source_span_evidence",
-      "sourceSpans",
-      "source_spans",
-    ]),
+    graphIndexEvidence:
+      pickEvidenceRecord(entry, [
+        "graphIndexEvidence",
+        "graph_index_evidence",
+        "graphIndex",
+        "graph_index",
+      ]) ?? buildImplicitGraphIndexEvidence(entry),
+    sourceSpanEvidence:
+      pickEvidenceRecord(entry, [
+        "sourceSpanEvidence",
+        "source_span_evidence",
+      ]) ??
+      pickEvidenceArrayRecord(entry, ["sourceSpans", "source_spans"], "spans"),
     activeInGraph:
       typeof entry.activeInGraph === "boolean"
         ? entry.activeInGraph
@@ -1893,13 +2110,29 @@ function applyPaperSourceIndexGraphPresenceOverride(params: {
           params.result.expectedPaperCount,
           params.result.corpusRoot
         );
+  const verificationMode =
+    confirmation.verificationMode ?? params.result.verificationMode;
+  const paperIndexPresentCount =
+    countGraphPresencePaperIndexEvidence(confirmation.presentPapers);
+  const sourceBackedPresentCount =
+    countGraphPresenceSourceSpanEvidence(confirmation.presentPapers);
   return {
     ...params.result,
     status,
-    verificationMode: confirmation.verificationMode ?? params.result.verificationMode,
+    verificationMode,
     blockingReason: refreshReason,
     presentPaperCount: confirmation.presentPapers.length,
     missingPaperCount: confirmation.missingPapers.length,
+    readyProofLevel: deriveGraphPresenceReadyProofLevel({
+      status,
+      verificationMode,
+      expectedPaperCount: params.result.expectedPaperCount,
+      presentPapers: confirmation.presentPapers,
+      paperIndexPresentCount,
+      sourceBackedPresentCount,
+    }),
+    sourceBackedPresentCount,
+    paperIndexPresentCount,
     refreshRequired,
     refreshReason,
     repairRequired:
@@ -2485,8 +2718,9 @@ function buildRemoteStatusRecordFromSources(params: {
         .slice(0, expectedPaperCount)
         .map(buildRemoteCorpusSummaryMatch)
     : [];
+  const effectivePresentPapers = summaryOnly ? summaryPresentPapers : presentPapers;
   const presentPaperCount = summaryOnly
-    ? Math.min(summaryReportedPaperCount, expectedPaperCount)
+    ? Math.min(summaryPresentPapers.length, expectedPaperCount)
     : presentPapers.length;
   const missingPaperCount = summaryOnly
     ? Math.max(0, expectedPaperCount - presentPaperCount)
@@ -2497,15 +2731,28 @@ function buildRemoteStatusRecordFromSources(params: {
       : missingPaperCount > 0
         ? "missing_papers"
         : "ready";
+  const verificationMode: GraphPresenceVerificationMode =
+    params.expectedPapers.length === 0 && expectedPaperCount > 0
+      ? "remote_corpus_summary"
+      : "canonical_paper_index";
+  const paperIndexPresentCount =
+    countGraphPresencePaperIndexEvidence(effectivePresentPapers);
+  const sourceBackedPresentCount =
+    countGraphPresenceSourceSpanEvidence(effectivePresentPapers);
+  const readyProofLevel = deriveGraphPresenceReadyProofLevel({
+    status,
+    verificationMode,
+    expectedPaperCount,
+    presentPapers: effectivePresentPapers,
+    paperIndexPresentCount,
+    sourceBackedPresentCount,
+  });
 
   return {
     checked_at: params.checkedAt,
     status,
     mode: params.mode,
-    verification_mode:
-      params.expectedPapers.length === 0 && expectedPaperCount > 0
-        ? "remote_corpus_summary"
-        : "canonical_paper_index",
+    verification_mode: verificationMode,
     corpus_name:
       params.preferredCorpusName ??
       pickString(manifest, ["corpusName", "corpus_name"]) ??
@@ -2519,10 +2766,11 @@ function buildRemoteStatusRecordFromSources(params: {
     expected_paper_count: expectedPaperCount,
     present_paper_count: presentPaperCount,
     missing_paper_count: missingPaperCount,
+    ready_proof_level: readyProofLevel,
+    source_backed_present_count: sourceBackedPresentCount,
+    paper_index_present_count: paperIndexPresentCount,
     missing_papers: serializeMissingPapers(missingPapers),
-    present_papers: serializePresentPapers(
-      summaryOnly ? summaryPresentPapers : presentPapers
-    ),
+    present_papers: serializePresentPapers(effectivePresentPapers),
     refresh_required: status !== "ready",
     refresh_reason:
       status === "ready"
@@ -2538,6 +2786,81 @@ function buildRemoteStatusRecordFromSources(params: {
               params.remoteEndpoint
           ),
   };
+}
+
+function shouldPreserveCachedReadyRemoteSummary(params: {
+  candidate: Record<string, unknown>;
+  cached: Record<string, unknown> | null;
+}): boolean {
+  if (!params.cached) {
+    return false;
+  }
+  const cachedStatus = pickString(params.cached, ["status"])?.trim().toLowerCase() ?? null;
+  const cachedVerificationMode =
+    pickString(params.cached, ["verification_mode", "verificationMode"])
+      ?.trim()
+      .toLowerCase() ?? null;
+  if (cachedStatus !== "ready" || cachedVerificationMode !== "remote_corpus_summary") {
+    return false;
+  }
+  const cachedPresent =
+    pickCount(params.cached, ["present_paper_count", "presentPaperCount"]) ?? 0;
+  const cachedExpected =
+    pickCount(params.cached, ["expected_paper_count", "expectedPaperCount"]) ?? 0;
+  const cachedPresentPapers = deserializePresentPapers(
+    params.cached.present_papers ?? params.cached.presentPapers
+  );
+  const candidatePresent =
+    pickCount(params.candidate, ["present_paper_count", "presentPaperCount"]) ?? 0;
+  const candidateMissing =
+    pickCount(params.candidate, ["missing_paper_count", "missingPaperCount"]) ?? 0;
+  if (
+    cachedPresent <= 0 ||
+    cachedExpected <= 0 ||
+    cachedPresentPapers.length === 0 ||
+    candidatePresent > 0 ||
+    candidateMissing <= 0
+  ) {
+    return false;
+  }
+  const cachedCorpus = pickString(params.cached, ["corpus_name", "corpusName"]);
+  const candidateCorpus = pickString(params.candidate, ["corpus_name", "corpusName"]);
+  if (cachedCorpus && candidateCorpus && cachedCorpus !== candidateCorpus) {
+    return false;
+  }
+  return true;
+}
+
+function buildManifestReadyRemoteSummaryStatusRecord(
+  manifest: ManifestLike
+): Record<string, unknown> | null {
+  const paperIngestion = asRecord(manifest.paper_ingestion);
+  const status =
+    pickString(paperIngestion, ["graph_presence_status", "graphPresenceStatus"])
+      ?.trim()
+      .toLowerCase() ?? null;
+  const expectedPaperCount =
+    pickCount(paperIngestion, [
+      "graph_presence_expected_papers",
+      "graphPresenceExpectedPapers",
+      "graph_presence_expected",
+      "graphPresenceExpected",
+    ]) ?? 0;
+  const presentPaperCount =
+    pickCount(paperIngestion, [
+      "graph_presence_present_papers",
+      "graphPresencePresentPapers",
+      "graph_presence_present",
+      "graphPresencePresent",
+      "remote_paper_count",
+      "remotePaperCount",
+      "synced_papers",
+      "syncedPapers",
+    ]) ?? 0;
+  if (status !== "ready" || expectedPaperCount <= 0 || presentPaperCount <= 0) {
+    return null;
+  }
+  return null;
 }
 
 async function refreshRemoteStatusRecord(params: {
@@ -2571,6 +2894,9 @@ async function refreshRemoteStatusRecord(params: {
   const targetCorpus = preferredCorpusName;
   const remoteEndpoint =
     params.remoteInspection.summary.mcpUrl ?? params.remoteInspection.summary.apiBaseUrl ?? null;
+  const cachedReadySummaryRecord =
+    params.cachedStatusRecord ??
+    buildManifestReadyRemoteSummaryStatusRecord(params.manifest);
 
   if (
     params.remoteInspection.summary.mcpUrl &&
@@ -2591,6 +2917,14 @@ async function refreshRemoteStatusRecord(params: {
         preferredCorpusName,
         preferredCorpusRoot,
       });
+      if (
+        shouldPreserveCachedReadyRemoteSummary({
+          candidate: statusRecord,
+          cached: cachedReadySummaryRecord,
+        })
+      ) {
+        return { statusRecord: cachedReadySummaryRecord, refreshError: null };
+      }
       await writeJsonEnsured(statusPath, statusRecord);
       return { statusRecord, refreshError: null };
     }
@@ -2619,6 +2953,14 @@ async function refreshRemoteStatusRecord(params: {
         preferredCorpusName,
         preferredCorpusRoot,
       });
+      if (
+        shouldPreserveCachedReadyRemoteSummary({
+          candidate: statusRecord,
+          cached: cachedReadySummaryRecord,
+        })
+      ) {
+        return { statusRecord: cachedReadySummaryRecord, refreshError: null };
+      }
       await writeJsonEnsured(statusPath, statusRecord);
       return { statusRecord, refreshError: null };
     }
@@ -2663,22 +3005,6 @@ async function checkGraphPresenceViaRemoteStatus(params: {
   const remoteEndpoint =
     remoteInspection.summary.apiBaseUrl ?? remoteInspection.summary.mcpUrl ?? null;
   const paperIngestionProgress = summarizePaperIngestionProgress(params.manifest);
-  const paperIngestionRecord = asRecord(params.manifest.paper_ingestion);
-  const manifestGraphPresenceStatus =
-    pickString(paperIngestionRecord, [
-      "graph_presence_status",
-      "graphPresenceStatus",
-    ])?.trim().toLowerCase() ?? null;
-  const manifestPresentHint = maxPositiveCount([
-    pickCount(paperIngestionRecord, [
-      "graph_presence_present_papers",
-      "graphPresencePresentPapers",
-      "graph_presence_present",
-      "graphPresencePresent",
-    ]),
-    pickCount(paperIngestionRecord, ["remote_paper_count", "remotePaperCount"]),
-    pickCount(paperIngestionRecord, ["synced_papers", "syncedPapers"]),
-  ]);
   const refreshedStatus = remoteInspection.tokenAvailable
     ? await refreshRemoteStatusRecord({
         projectRoot: params.projectRoot,
@@ -2696,6 +3022,16 @@ async function checkGraphPresenceViaRemoteStatus(params: {
         refreshError: null,
       };
   const statusRecord = refreshedStatus.statusRecord;
+  const statusPresentPapers = deserializePresentPapers(
+    statusRecord?.present_papers ?? statusRecord?.presentPapers
+  );
+  const statusVerificationMode =
+    pickString(statusRecord, ["verification_mode", "verificationMode"])?.trim().toLowerCase() ??
+    null;
+  const remoteSummaryWithoutPerPaperProof =
+    params.expected.papers.length > 0 &&
+    statusVerificationMode === "remote_corpus_summary" &&
+    statusPresentPapers.length === 0;
 
   let status: GraphPresenceStatus = "ready";
   let refreshReason: string | null = null;
@@ -2725,8 +3061,15 @@ async function checkGraphPresenceViaRemoteStatus(params: {
         refreshReason =
           pickString(statusRecord, ["refresh_reason", "refreshReason"]) ??
           buildBlockingReason("missing_corpus", [], expectedPaperCount, remoteEndpoint);
-      } else if (normalizedStatus === "missing_papers" || presentPaperCount < expectedPaperCount) {
+      } else if (
+        normalizedStatus === "missing_papers" ||
+        presentPaperCount < expectedPaperCount ||
+        remoteSummaryWithoutPerPaperProof
+      ) {
         status = "missing_papers";
+        if (remoteSummaryWithoutPerPaperProof) {
+          presentPaperCount = Math.min(presentPaperCount, statusPresentPapers.length);
+        }
         refreshReason =
           pickString(statusRecord, ["refresh_reason", "refreshReason"]) ??
           buildBlockingReason("missing_papers", [], expectedPaperCount, remoteEndpoint);
@@ -2775,20 +3118,7 @@ async function checkGraphPresenceViaRemoteStatus(params: {
       pickString(statusRecord, ["status"])?.trim().toLowerCase() ?? null;
     const statusRefreshReason =
       pickString(statusRecord, ["refresh_reason", "refreshReason"]) ?? null;
-    const remoteZeroCountAnomaly =
-      params.expected.papers.length === 0 &&
-      presentPaperCount === 0 &&
-      expectedPaperCount > 0 &&
-      (normalizedStatus === "missing_sources" || normalizedStatus === "missing_papers") &&
-      manifestGraphPresenceStatus === "ready" &&
-      (manifestPresentHint ?? 0) >= expectedPaperCount;
-
-    if (remoteZeroCountAnomaly) {
-      status = "ready";
-      presentPaperCount = expectedPaperCount;
-      missingPapers = [];
-      refreshReason = null;
-    } else if (statusExpectedCount !== expectedPaperCount) {
+    if (statusExpectedCount !== expectedPaperCount) {
       status = "missing_corpus";
       refreshReason = paperIngestionProgress.inFlight
         ? buildInFlightRemoteRefreshReason({
@@ -2813,10 +3143,14 @@ async function checkGraphPresenceViaRemoteStatus(params: {
         );
     } else if (
       normalizedStatus === "missing_papers" ||
+      remoteSummaryWithoutPerPaperProof ||
       missingPapers.length > 0 ||
       presentPaperCount < expectedPaperCount
     ) {
       status = "missing_papers";
+      if (remoteSummaryWithoutPerPaperProof) {
+        presentPaperCount = Math.min(presentPaperCount, statusPresentPapers.length);
+      }
       refreshReason = paperIngestionProgress.inFlight
         ? buildInFlightRemoteRefreshReason({
             remoteEndpoint,
@@ -2878,21 +3212,42 @@ async function checkGraphPresenceViaRemoteStatus(params: {
         refreshReason,
       })
     : null;
-  const presentPapers = deserializePresentPapers(statusRecord?.present_papers);
+  const presentPapers = statusPresentPapers;
+  const paperIndexPresentCount =
+    pickCount(statusRecord, ["paper_index_present_count", "paperIndexPresentCount"]) ??
+    countGraphPresencePaperIndexEvidence(presentPapers);
+  const sourceBackedPresentCount =
+    pickCount(statusRecord, [
+      "source_backed_present_count",
+      "sourceBackedPresentCount",
+    ]) ?? countGraphPresenceSourceSpanEvidence(presentPapers);
+  const verificationMode: GraphPresenceVerificationMode =
+    params.expected.papers.length === 0 && expectedPaperCount > 0
+      ? "remote_corpus_summary"
+      : statusRecord &&
+          pickString(statusRecord, ["verification_mode", "verificationMode"]) ===
+            "paper_source_index_override"
+        ? "paper_source_index_override"
+        : "canonical_paper_index";
+  const readyProofLevel =
+    normalizeGraphPresenceReadyProofLevel(
+      statusRecord?.ready_proof_level ?? statusRecord?.readyProofLevel
+    ) ??
+    deriveGraphPresenceReadyProofLevel({
+      status,
+      verificationMode,
+      expectedPaperCount,
+      presentPapers,
+      paperIndexPresentCount,
+      sourceBackedPresentCount,
+    });
 
   const result: GraphPresenceCheckResult = {
     projectRoot: params.projectRoot,
     projectId: params.projectId,
     checkedAt: params.checkedAt,
     status,
-    verificationMode:
-      params.expected.papers.length === 0 && expectedPaperCount > 0
-        ? "remote_corpus_summary"
-        : statusRecord &&
-            pickString(statusRecord, ["verification_mode", "verificationMode"]) ===
-              "paper_source_index_override"
-          ? "paper_source_index_override"
-          : "canonical_paper_index",
+    verificationMode,
     blockingReason: refreshReason,
     reportPath: params.reportPath,
     paperSourceIndexPath: params.expected.paperSourceIndexPath,
@@ -2908,6 +3263,9 @@ async function checkGraphPresenceViaRemoteStatus(params: {
               ? missingPapers.length
               : expectedPaperCount - presentPaperCount
           ),
+    readyProofLevel,
+    sourceBackedPresentCount,
+    paperIndexPresentCount,
     corpusRoot:
       sanitizeCorpusRootValue(
         pickString(statusRecord, ["corpus_root", "corpusRoot"])
@@ -2955,6 +3313,9 @@ async function checkGraphPresenceViaRemoteStatus(params: {
     expected_paper_count: finalizedResult.expectedPaperCount,
     present_paper_count: finalizedResult.presentPaperCount,
     missing_paper_count: finalizedResult.missingPaperCount,
+    ready_proof_level: finalizedResult.readyProofLevel,
+    source_backed_present_count: finalizedResult.sourceBackedPresentCount,
+    paper_index_present_count: finalizedResult.paperIndexPresentCount,
     refresh_required: finalizedResult.refreshRequired,
     refresh_reason: finalizedResult.refreshReason,
     repair_required: finalizedResult.repairRequired,
@@ -3026,6 +3387,49 @@ export async function checkGraphPresenceForWorkflow(params: {
       checkedAt,
       graphPresenceResult: result,
     });
+    const graphBuildReceipt = await writeGraphPresenceBuildReceipt({
+      projectRoot,
+      result,
+      certification,
+      corpus: sharedCorpus,
+    });
+    const papernexusSyncState = buildPapernexusSyncStateFromGraphPresence({
+      projectId,
+      authorityMode: remoteMcpUrl ? "remote_mcp" : "remote_api",
+      corpus: sharedCorpus,
+      graphPresence: {
+        projectId,
+        checkedAt,
+        status: result.status,
+        verificationMode: result.verificationMode,
+        reportPath: path.relative(projectRoot, reportPath),
+        paperSourceIndexPath: result.paperSourceIndexPath,
+        expectedPaperCount: result.expectedPaperCount,
+        presentPaperCount: result.presentPaperCount,
+        missingPaperCount: result.missingPaperCount,
+        readyProofLevel: result.readyProofLevel,
+        sourceBackedPresentCount: result.sourceBackedPresentCount,
+        paperIndexPresentCount: result.paperIndexPresentCount,
+        corpusName: result.corpusName,
+        refreshRequired: result.refreshRequired,
+        refreshReason: result.refreshReason,
+        repairRequired: result.repairRequired,
+        repairReason: result.repairReason,
+        presentPapers: result.presentPapers,
+        missingPapers: result.missingPapers,
+        graphBuildWorkflowStatus: result.graphBuildWorkflowStatus,
+        graphBuildCanContinue: result.graphBuildCanContinue,
+        graphBuildRequiresImport: result.graphBuildRequiresImport,
+        graphBuildStatusReason: result.graphBuildStatusReason,
+      },
+      certification,
+      receiptPath: graphBuildReceipt.path,
+      receipt: graphBuildReceipt.receipt,
+    });
+    const papernexusSyncStatePath = await writePapernexusSyncState({
+      projectRoot,
+      state: papernexusSyncState,
+    });
 
     if (params.updateManifest !== false) {
       const paperIngestion = asRecord(manifest.paper_ingestion) ?? {};
@@ -3037,6 +3441,9 @@ export async function checkGraphPresenceForWorkflow(params: {
         graph_presence_expected_papers: result.expectedPaperCount,
         graph_presence_present_papers: result.presentPaperCount,
         graph_presence_missing_papers: serializeMissingPapers(result.missingPapers),
+        graph_presence_ready_proof_level: result.readyProofLevel,
+        graph_presence_source_backed_present_count: result.sourceBackedPresentCount,
+        graph_presence_paper_index_present_count: result.paperIndexPresentCount,
         refresh_required: result.refreshRequired ? true : false,
         refresh_reason: result.status === "ready" ? null : result.refreshReason,
         repair_required: result.repairRequired ? true : false,
@@ -3053,6 +3460,15 @@ export async function checkGraphPresenceForWorkflow(params: {
           certification.source_backed_graph_claim,
         papernexus_certification_path: certification.report_path,
         papernexus_certification_limitations: certification.limitations,
+        papernexus_graph_build_receipt_path: graphBuildReceipt.path,
+        papernexus_sync_state_path: papernexusSyncStatePath,
+        papernexus_sync_state_checked_at: papernexusSyncState.generated_at,
+        papernexus_sync_runtime_status:
+          papernexusSyncState.workflow_projection.runtime_status,
+        papernexus_sync_can_continue:
+          papernexusSyncState.workflow_projection.can_continue,
+        papernexus_sync_next_action:
+          papernexusSyncState.workflow_projection.next_action,
       };
       await saveManifest(projectRoot, manifest);
       await writePapernexusProgressFromManifest({
@@ -3177,6 +3593,16 @@ export async function checkGraphPresenceForWorkflow(params: {
         refreshReason,
       })
     : null;
+  const paperIndexPresentCount = countGraphPresencePaperIndexEvidence(presentPapers);
+  const sourceBackedPresentCount = countGraphPresenceSourceSpanEvidence(presentPapers);
+  const readyProofLevel = deriveGraphPresenceReadyProofLevel({
+    status,
+    verificationMode: "canonical_paper_index",
+    expectedPaperCount: expected.papers.length,
+    presentPapers,
+    paperIndexPresentCount,
+    sourceBackedPresentCount,
+  });
 
   const result: GraphPresenceCheckResult = {
     projectRoot,
@@ -3191,6 +3617,9 @@ export async function checkGraphPresenceForWorkflow(params: {
     expectedPaperCount: expected.papers.length,
     presentPaperCount: presentPapers.length,
     missingPaperCount: missingPapers.length,
+    readyProofLevel,
+    sourceBackedPresentCount,
+    paperIndexPresentCount,
     corpusRoot: corpusResolution.corpusRoot,
     corpusName:
       corpusResolution.corpusName ??
@@ -3234,6 +3663,9 @@ export async function checkGraphPresenceForWorkflow(params: {
     expected_paper_count: finalizedResult.expectedPaperCount,
     present_paper_count: finalizedResult.presentPaperCount,
     missing_paper_count: finalizedResult.missingPaperCount,
+    ready_proof_level: finalizedResult.readyProofLevel,
+    source_backed_present_count: finalizedResult.sourceBackedPresentCount,
+    paper_index_present_count: finalizedResult.paperIndexPresentCount,
     refresh_required: finalizedResult.refreshRequired,
     refresh_reason: finalizedResult.refreshReason,
     repair_required: finalizedResult.repairRequired,
@@ -3272,6 +3704,49 @@ export async function checkGraphPresenceForWorkflow(params: {
     checkedAt,
     graphPresenceResult: finalizedResult,
   });
+  const graphBuildReceipt = await writeGraphPresenceBuildReceipt({
+    projectRoot,
+    result: finalizedResult,
+    certification,
+    corpus: finalizedResult.corpusName ?? sharedCorpus,
+  });
+  const papernexusSyncState = buildPapernexusSyncStateFromGraphPresence({
+    projectId,
+    authorityMode: "local_corpus",
+    corpus: finalizedResult.corpusName ?? sharedCorpus,
+    graphPresence: {
+      projectId,
+      checkedAt,
+      status: finalizedResult.status,
+      verificationMode: finalizedResult.verificationMode,
+      reportPath: path.relative(projectRoot, reportPath),
+      paperSourceIndexPath: finalizedResult.paperSourceIndexPath,
+      expectedPaperCount: finalizedResult.expectedPaperCount,
+      presentPaperCount: finalizedResult.presentPaperCount,
+      missingPaperCount: finalizedResult.missingPaperCount,
+      readyProofLevel: finalizedResult.readyProofLevel,
+      sourceBackedPresentCount: finalizedResult.sourceBackedPresentCount,
+      paperIndexPresentCount: finalizedResult.paperIndexPresentCount,
+      corpusName: finalizedResult.corpusName,
+      refreshRequired: finalizedResult.refreshRequired,
+      refreshReason: finalizedResult.refreshReason,
+      repairRequired: finalizedResult.repairRequired,
+      repairReason: finalizedResult.repairReason,
+      presentPapers: finalizedResult.presentPapers,
+      missingPapers: finalizedResult.missingPapers,
+      graphBuildWorkflowStatus: finalizedResult.graphBuildWorkflowStatus,
+      graphBuildCanContinue: finalizedResult.graphBuildCanContinue,
+      graphBuildRequiresImport: finalizedResult.graphBuildRequiresImport,
+      graphBuildStatusReason: finalizedResult.graphBuildStatusReason,
+    },
+    certification,
+    receiptPath: graphBuildReceipt.path,
+    receipt: graphBuildReceipt.receipt,
+  });
+  const papernexusSyncStatePath = await writePapernexusSyncState({
+    projectRoot,
+    state: papernexusSyncState,
+  });
 
   if (params.updateManifest !== false) {
     const paperIngestion = asRecord(manifest.paper_ingestion) ?? {};
@@ -3283,6 +3758,9 @@ export async function checkGraphPresenceForWorkflow(params: {
       graph_presence_expected_papers: finalizedResult.expectedPaperCount,
       graph_presence_present_papers: finalizedResult.presentPaperCount,
       graph_presence_missing_papers: serializeMissingPapers(finalizedResult.missingPapers),
+      graph_presence_ready_proof_level: finalizedResult.readyProofLevel,
+      graph_presence_source_backed_present_count: finalizedResult.sourceBackedPresentCount,
+      graph_presence_paper_index_present_count: finalizedResult.paperIndexPresentCount,
       refresh_required: finalizedResult.refreshRequired ? true : false,
       refresh_reason: finalizedResult.status === "ready" ? null : finalizedResult.refreshReason,
       repair_required: finalizedResult.repairRequired ? true : false,
@@ -3299,6 +3777,15 @@ export async function checkGraphPresenceForWorkflow(params: {
         certification.source_backed_graph_claim,
       papernexus_certification_path: certification.report_path,
       papernexus_certification_limitations: certification.limitations,
+      papernexus_graph_build_receipt_path: graphBuildReceipt.path,
+      papernexus_sync_state_path: papernexusSyncStatePath,
+      papernexus_sync_state_checked_at: papernexusSyncState.generated_at,
+      papernexus_sync_runtime_status:
+        papernexusSyncState.workflow_projection.runtime_status,
+      papernexus_sync_can_continue:
+        papernexusSyncState.workflow_projection.can_continue,
+      papernexus_sync_next_action:
+        papernexusSyncState.workflow_projection.next_action,
     };
     await saveManifest(projectRoot, manifest);
     await writePapernexusProgressFromManifest({

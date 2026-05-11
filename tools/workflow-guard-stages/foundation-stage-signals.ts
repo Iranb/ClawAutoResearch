@@ -3,6 +3,11 @@ import type { ManifestLike, StageSignalsContext } from "./types";
 import { readTextIfExists } from "../workflow-guard-core/fs";
 import { auditFrontierReportText } from "../workflow-intermediate-artifact-audit";
 import { deriveGraphBuildPartialReadiness } from "../workflow-guard-state/paper-ingestion";
+import {
+  DEFAULT_PAPERNEXUS_SYNC_STATE_PATH,
+  papernexusSyncStateSupportsGraphReady,
+  readPapernexusSyncState,
+} from "../papernexus-sync-state";
 
 export interface FoundationStageDeps {
   pathExists: (targetPath: string) => Promise<boolean>;
@@ -74,6 +79,71 @@ export async function collectSetupStageMissingSignals(
   return missing;
 }
 
+function graphBuildQueuedRequestUsesRemotePapernexus(request: unknown): boolean {
+  const record = request && typeof request === "object" && !Array.isArray(request)
+    ? (request as Record<string, unknown>)
+    : {};
+  const wrapper = typeof record.wrapper === "string" ? record.wrapper : "";
+  const lastSessionKey =
+    typeof record.last_session_key === "string"
+      ? record.last_session_key
+      : typeof record.lastSessionKey === "string"
+        ? record.lastSessionKey
+        : "";
+  const commandText =
+    typeof record.command_text === "string"
+      ? record.command_text
+      : typeof record.commandText === "string"
+        ? record.commandText
+        : "";
+  const argsText = Array.isArray(record.args)
+    ? record.args.filter((item): item is string => typeof item === "string").join(" ")
+    : "";
+  return (
+    wrapper === "papernexus_remote_mcp" ||
+    /papernexus:remote_mcp:/i.test(lastSessionKey) ||
+    /papernexus_remote_mcp|remote_mcp/i.test(commandText) ||
+    /papernexus_remote_mcp|remote_mcp/i.test(argsText)
+  );
+}
+
+function graphBuildManifestUsesRemotePapernexus(params: {
+  manifest: ManifestLike | null;
+  paperIngestion: Record<string, unknown> | null;
+  deps: FoundationStageDeps;
+}): boolean {
+  const manifest = params.manifest ?? {};
+  const paperIngestion = params.paperIngestion ?? {};
+  const accessMode =
+    params.deps.normalizeStage(
+      params.deps.pickString(manifest, ["papernexusAccessMode", "papernexus_access_mode"])
+    ) ??
+    params.deps.normalizeStage(
+      params.deps.pickString(paperIngestion, [
+        "papernexusAccessMode",
+        "papernexus_access_mode",
+      ])
+    );
+  if (accessMode === "remote_mcp") {
+    return true;
+  }
+  if (accessMode === "local_mcp") {
+    return false;
+  }
+  const queuedRequests = Array.isArray(paperIngestion.queued_requests)
+    ? paperIngestion.queued_requests
+    : Array.isArray(paperIngestion.queuedRequests)
+      ? paperIngestion.queuedRequests
+      : [];
+  return queuedRequests.some(graphBuildQueuedRequestUsesRemotePapernexus);
+}
+
+function resolveStageArtifactPath(projectRoot: string, artifactPath: string): string {
+  return path.isAbsolute(artifactPath)
+    ? path.normalize(artifactPath)
+    : path.join(projectRoot, artifactPath);
+}
+
 export async function collectGraphBuildStageMissingSignals(
   ctx: StageSignalsContext,
   deps: FoundationStageDeps
@@ -90,12 +160,43 @@ export async function collectGraphBuildStageMissingSignals(
   ) {
     missing.push("{PROJ}/graph/GRAPH_PRESENCE_CHECK.json");
   }
-  if (!deps.manifestFieldExists(ctx.manifest, ["paper_ingestion", "graph_presence_checked_at"])) {
-    missing.push("PROJECT_MANIFEST.json.paper_ingestion.graph_presence_checked_at");
-  }
 
   const paperIngestion = deps.asRecord(ctx.manifest?.paper_ingestion);
   const paperIngestionState = deps.normalizePaperIngestionState(paperIngestion);
+  const remotePapernexusConfigured = graphBuildManifestUsesRemotePapernexus({
+    manifest: ctx.manifest,
+    paperIngestion,
+    deps,
+  });
+  const syncState = await readPapernexusSyncState(ctx.projectRoot);
+  if (!syncState && !deps.manifestFieldExists(ctx.manifest, ["paper_ingestion", "graph_presence_checked_at"])) {
+    missing.push("PROJECT_MANIFEST.json.paper_ingestion.graph_presence_checked_at");
+  }
+  if (remotePapernexusConfigured) {
+    const syncReceiptPath = syncState?.proof.latest_receipt_path
+      ? resolveStageArtifactPath(
+          ctx.projectRoot,
+          syncState.proof.latest_receipt_path
+        )
+      : null;
+    const syncReceiptExists = syncReceiptPath
+      ? await deps.pathExists(syncReceiptPath)
+      : false;
+    const syncStateStructurallyReady =
+      papernexusSyncStateSupportsGraphReady(syncState);
+    if (!syncState) {
+      missing.push(`{PROJ}/${DEFAULT_PAPERNEXUS_SYNC_STATE_PATH}`);
+    } else if (syncStateStructurallyReady && !syncReceiptExists) {
+      missing.push(
+        `PaperNexus sync state receipt is missing: ${syncState.proof.latest_receipt_path ?? "unset"}`
+      );
+    } else if (!syncStateStructurallyReady) {
+      missing.push(
+        `PaperNexus sync state must be source-backed ready (status: ${syncState.graph_presence.status}, proof: ${syncState.graph_presence.ready_proof_level}, runtime: ${syncState.workflow_projection.runtime_status})`
+      );
+    }
+    return missing;
+  }
   const graphPresenceStatus = deps.normalizeGraphPresenceStatus(
     paperIngestion?.graph_presence_status ?? paperIngestion?.graphPresenceStatus
   );

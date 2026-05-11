@@ -58,6 +58,7 @@ import { enqueueWorkflowTask, resolveWorkflowQueueKey } from "./workflow-coordin
 import { createWorkflowExecutionRuntimeFromApi } from "./workflow-execution-runtime.js";
 import { shouldUseChannelProjectBindingForWorkflow } from "./workflow-message-channels.js";
 import { recordWorkflowNotificationChannelForProject } from "./workflow-notification-channels.js";
+import { syncProjectsStateEntry } from "./workflow-project-registry";
 
 // Import types and utilities from decoupled modules
 import {
@@ -543,6 +544,10 @@ const SHOW_COMMANDS_ENTRIES: readonly ShowCommandsEntry[] = [
     intro: "列出当前可用的 slash commands 和用途说明。",
   },
   {
+    label: COMMAND_LABELS.discord_buttons_test,
+    intro: "发送一条 Discord-native reusable 测试面板；按钮只回发测试消息，不推进 workflow。",
+  },
+  {
     label: COMMAND_LABELS.idea_catalyst_search,
     intro: "运行 IDEA-CATALYST 的跨域 research30 检索，并把结果回写到 scouting report。",
   },
@@ -577,6 +582,71 @@ function formatShowCommandsText(): string {
     "Tip: 普通论文从 /project-init 或 /research-pipeline 开始；综述项目直接用 /survey-pipeline \"topic\"。",
   ];
   return lines.join("\n");
+}
+
+const DISCORD_BUTTON_TEST_PING_RE = /^--ping\s+([A-D])$/i;
+
+function createDiscordButtonsTestCommandHandler() {
+  return (ctx: PluginCommandContext) => {
+    const pingMatch = (ctx.args ?? "").trim().match(DISCORD_BUTTON_TEST_PING_RE);
+    if (pingMatch) {
+      return {
+        text: `AutoResearch 按钮 ${pingMatch[1].toUpperCase()} 测试通过。`,
+      };
+    }
+
+    const text =
+      "AutoResearch Discord 按钮测试\n" +
+      "这是临时测试面板。按钮只会在本频道发送测试消息，不会启动或推进 workflow。";
+    const buttonCommand = COMMAND_LABELS.discord_buttons_test;
+
+    return {
+      text,
+      channelData: {
+        discord: {
+          components: {
+            reusable: true,
+            container: {
+              accentColor: 0x2f80ed,
+            },
+            blocks: [
+              {
+                type: "text",
+                text:
+                  "**AutoResearch Discord 按钮测试**\n" +
+                  "按钮只会在本频道发送测试消息，不会启动或推进 workflow。",
+              },
+              {
+                type: "actions",
+                buttons: [
+                  {
+                    label: "测试 A",
+                    style: "primary",
+                    callbackData: `${buttonCommand} --ping A`,
+                  },
+                  {
+                    label: "测试 B",
+                    style: "secondary",
+                    callbackData: `${buttonCommand} --ping B`,
+                  },
+                  {
+                    label: "测试 C",
+                    style: "secondary",
+                    callbackData: `${buttonCommand} --ping C`,
+                  },
+                  {
+                    label: "测试 D",
+                    style: "success",
+                    callbackData: `${buttonCommand} --ping D`,
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      },
+    };
+  };
 }
 
 async function pathExists(filePath: string): Promise<boolean> {
@@ -1462,6 +1532,29 @@ async function persistBootstrapRequest(
   });
 }
 
+async function syncBootstrapProjectRegistryEntry(params: {
+  projectRoot: string;
+  projectId: string | null;
+}) {
+  if (!params.projectId) {
+    return;
+  }
+  const manifest =
+    (await readJsonIfExists<Record<string, unknown>>(
+      path.join(params.projectRoot, "PROJECT_MANIFEST.json")
+    )) ?? {};
+  await syncProjectsStateEntry({
+    projectRoot: params.projectRoot,
+    projectId: params.projectId,
+    manifest,
+    trackRegistry: null,
+    stage: readString(manifest.current_stage) ?? "setup",
+    nextAction: readString(manifest.next_action) ?? "/project-init \"research goal\"",
+    blockingReason: readString(manifest.blocking_reason) ?? null,
+    getActiveTracks: () => [],
+  });
+}
+
 function createAutoResearchCommandHandler(
   api: WorkflowCommandApi,
   deps: WorkflowCommandDependencies
@@ -1576,6 +1669,10 @@ function createAutoResearchCommandHandler(
       await deps.setGraphGuidedWritingState({
         projectRoot: ensuredProject.projectRoot,
         graphGuidedWriting: buildAutoResearchGraphGuidedWritingBootstrapPatch(),
+      });
+      await syncBootstrapProjectRegistryEntry({
+        projectRoot: ensuredProject.projectRoot,
+        projectId: ensuredProject.projectId,
       });
 
       const started = await deps.startBackgroundWorkflowRun({
@@ -2741,6 +2838,13 @@ export function createResearchWorkflowCommands(
         "Capture a bounded workflow diagnostic bundle for the current project, including snapshot, runtime health, handoff, queue, mailbox, graph, and key log tails.",
       acceptsArgs: true,
       handler: createCaptureDiagnosticsCommandHandler(api, resolvedDeps),
+    },
+    {
+      name: "autoresearch-buttons-test",
+      description:
+        "Send a reusable Discord-native AutoResearch button test panel; button clicks only post test messages.",
+      acceptsArgs: true,
+      handler: createDiscordButtonsTestCommandHandler(),
     },
     {
       name: "show-commands",

@@ -295,6 +295,81 @@ test("authoring closeout writes neutral result language when H-score delta is ze
   assert.doesNotMatch(mainTex, /0\.2801/);
 });
 
+test("authoring closeout promotes coder RESULT_SUMMARY and clears stale QC blockers", async (t) => {
+  const projectRoot = await seedWriteReadyProject();
+  t.after(() => fs.rm(projectRoot, { recursive: true, force: true }));
+
+  await fs.rm(path.join(projectRoot, "researcher", "artifacts", "results"), {
+    recursive: true,
+    force: true,
+  });
+  await fs.rm(path.join(projectRoot, "researcher", "evaluation_summary.json"), {
+    force: true,
+  });
+  await writeJson(path.join(projectRoot, "coder", "aaa-exp", "RESULT_SUMMARY.json"), {
+    experiment_id: "exp-1",
+    status: "completed",
+    key_metric: { name: "h_score", value: 0.55 },
+    metrics: { h_score: 0.55 },
+    result_paths: ["coder/aaa-exp/RESULT_SUMMARY.json"],
+  });
+  await writeJson(path.join(projectRoot, "coder", "zzz-exp", "RESULT_SUMMARY.json"), {
+    experiment_id: "exp-1",
+    status: "completed",
+    key_metric: { name: "h_score", value: 0.55 },
+    metrics: { h_score: 0.55 },
+    result_paths: ["coder/zzz-exp/RESULT_SUMMARY.json"],
+  });
+  const older = new Date("2026-05-10T00:00:00.000Z");
+  const newer = new Date("2026-05-10T00:05:00.000Z");
+  await fs.utimes(
+    path.join(projectRoot, "coder", "aaa-exp", "RESULT_SUMMARY.json"),
+    older,
+    older
+  );
+  await fs.utimes(
+    path.join(projectRoot, "coder", "zzz-exp", "RESULT_SUMMARY.json"),
+    newer,
+    newer
+  );
+  await writeText(path.join(projectRoot, "academic_writer", "paper", "main.pdf"), "%PDF-1.4\n");
+
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.next_action = "Run /graph-build before writing.";
+  manifest.blocking_reason = "Waiting for graph readiness.";
+  manifest.paper_qc = {
+    status: "blocked",
+    compile_status: "fail",
+    pending_reason: "main.tex missing",
+  };
+  await writeJson(manifestPath, manifest);
+
+  const closeout = await reconcileAuthoringCloseout({
+    projectRoot,
+    compilePdf: false,
+    currentStageOverride: "write",
+  });
+
+  assert.equal(closeout.nextStage, "submit");
+  const aggregate = JSON.parse(
+    await fs.readFile(
+      path.join(projectRoot, "researcher", "artifacts", "results", "results.json"),
+      "utf8"
+    )
+  );
+  assert.equal(aggregate.source_path, "coder/zzz-exp/RESULT_SUMMARY.json");
+  assert.equal(aggregate.proposed.h_score, 0.55);
+  assert.equal(aggregate.primary_result.h_score, 0.55);
+
+  const updatedManifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  assert.equal(updatedManifest.paper_qc.status, "ready");
+  assert.equal(updatedManifest.paper_qc.compile_status, "pass");
+  assert.equal(updatedManifest.paper_qc.pending_reason, null);
+  assert.equal(updatedManifest.blocking_reason, null);
+  assert.doesNotMatch(updatedManifest.next_action, /graph-build/i);
+});
+
 test("authoring closeout repairs paragraph audit blockers from the audit artifact", async (t) => {
   const projectRoot = await seedWriteReadyProject();
   t.after(() => fs.rm(projectRoot, { recursive: true, force: true }));

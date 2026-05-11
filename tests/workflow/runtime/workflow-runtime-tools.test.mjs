@@ -2615,6 +2615,17 @@ test("research_workflow get_snapshot reconciles finished uploads and refreshes g
             paperId: "paper:2603.08075",
             paperTitle: "Demo Paper",
             activeInGraph: true,
+            sourceSpanEvidence: {
+              available: true,
+              count: 1,
+              spans: [
+                {
+                  span_id: "span-2603.08075",
+                  source_key:
+                    "/remote/corpora/shared-global-graph/md/2603.08075--demo-paper.md",
+                },
+              ],
+            },
           },
         ],
       })
@@ -2986,6 +2997,17 @@ test("research_workflow get_snapshot honors the plugin-configured shared corpus 
               paperId: "paper:2603.08076",
               paperTitle: "Plugin Config Paper",
               activeInGraph: true,
+              sourceSpanEvidence: {
+                available: true,
+                count: 1,
+                spans: [
+                  {
+                    span_id: "span-2603.08076",
+                    source_key:
+                      "/remote/corpora/GCD/md/2603.08076--plugin-config-paper.md",
+                  },
+                ],
+              },
             },
           ],
         })

@@ -103,6 +103,18 @@ import { resolveStageReadiness } from "../workflow-derived-state/stage-readiness
 import { appendWorkflowDiagnosticEvent } from "../workflow-diagnostics.js";
 import { readWorkflowHandoffIntentStore } from "../workflow-handoff/handoff-store";
 import { isWorkflowHandoffTerminalStatus } from "../workflow-handoff/handoff-types";
+import {
+  DEFAULT_PAPERNEXUS_GRAPH_BUILD_RECEIPT_PATH,
+  writePapernexusGraphBuildReceipt,
+  type PapernexusGraphBuildReceipt,
+} from "../papernexus-graph-build-receipt";
+import {
+  buildPapernexusSyncGraphPresenceInputFromReport,
+  buildPapernexusSyncStateFromGraphPresence,
+  papernexusSyncStateSupportsGraphReady,
+  readPapernexusSyncState,
+  writePapernexusSyncState,
+} from "../papernexus-sync-state";
 import type {
   WorkflowHookEvent,
   WorkflowMaterializedArtifact,
@@ -1601,6 +1613,42 @@ function isGraphPresenceReady(manifest: ManifestLike): boolean {
   ]) === "ready";
 }
 
+function paperIngestionRequestUsesRemotePapernexus(
+  request: ReturnType<typeof normalizePaperIngestionState>["queuedRequests"][number]
+): boolean {
+  const wrapper = request.wrapper ?? "";
+  const lastSessionKey = request.lastSessionKey ?? "";
+  const commandText = request.commandText ?? "";
+  const argsText = request.args.join(" ");
+  return (
+    wrapper === "papernexus_remote_mcp" ||
+    /papernexus:remote_mcp:/i.test(lastSessionKey) ||
+    /papernexus_remote_mcp|remote_mcp/i.test(commandText) ||
+    /papernexus_remote_mcp|remote_mcp/i.test(argsText)
+  );
+}
+
+function manifestUsesRemotePapernexus(manifest: ManifestLike): boolean {
+  const paperIngestion =
+    manifest.paper_ingestion &&
+    typeof manifest.paper_ingestion === "object" &&
+    !Array.isArray(manifest.paper_ingestion)
+      ? (manifest.paper_ingestion as Record<string, unknown>)
+      : {};
+  const accessMode =
+    readManifestStatus(manifest, ["papernexusAccessMode", "papernexus_access_mode"]) ??
+    readManifestStatus(paperIngestion, ["papernexusAccessMode", "papernexus_access_mode"]);
+  if (accessMode === "remote_mcp") {
+    return true;
+  }
+  if (accessMode === "local_mcp") {
+    return false;
+  }
+  return normalizePaperIngestionState(paperIngestion).queuedRequests.some(
+    paperIngestionRequestUsesRemotePapernexus
+  );
+}
+
 function isStaleUnresolvedLiteratureDiscoveryRequisition(
   request: ReturnType<typeof normalizePaperIngestionState>["queuedRequests"][number],
   nowMs: number
@@ -1682,6 +1730,9 @@ async function reconcileStaleLiteratureDiscoveryRequisition(params: {
   stage: string | null;
 }): Promise<{ manifest: ManifestLike; updated: boolean }> {
   if (params.stage !== "graph_build" || !isGraphPresenceReady(params.manifest)) {
+    return { manifest: params.manifest, updated: false };
+  }
+  if (manifestUsesRemotePapernexus(params.manifest)) {
     return { manifest: params.manifest, updated: false };
   }
 
@@ -1950,6 +2001,10 @@ async function hasSourceBackedGraphCertification(params: {
   projectRoot: string;
   manifest: ManifestLike;
 }): Promise<boolean> {
+  const syncState = await readPapernexusSyncState(params.projectRoot);
+  if (syncState) {
+    return papernexusSyncStateSupportsGraphReady(syncState);
+  }
   const paperIngestion =
     params.manifest.paper_ingestion &&
     typeof params.manifest.paper_ingestion === "object" &&
@@ -1990,6 +2045,64 @@ function isTerminalGraphReadyUploadFailureRequest(
     return false;
   }
   return request.validationStatus === "valid" || request.validationStatus === "warning";
+}
+
+async function readVerifiedSourceBackedGraphBuildReceipt(
+  projectRoot: string
+): Promise<Record<string, unknown> | null> {
+  const syncState = await readPapernexusSyncState(projectRoot);
+  if (syncState && !papernexusSyncStateSupportsGraphReady(syncState)) {
+    return null;
+  }
+  const receiptArtifactPath =
+    syncState?.proof.latest_receipt_path ??
+    DEFAULT_PAPERNEXUS_GRAPH_BUILD_RECEIPT_PATH;
+  const receipt =
+    (await readJsonIfExists<Record<string, unknown>>(
+      resolveProjectArtifactPath(
+        projectRoot,
+        receiptArtifactPath
+      ) ?? ""
+    )) ?? null;
+  if (!receipt) {
+    return null;
+  }
+  const receiptStatus = normalizeStageValue(receipt.status);
+  const graphVisibility = normalizeStageValue(
+    receipt.graph_visibility ?? receipt.graphVisibility
+  );
+  const coverage =
+    receipt.coverage && typeof receipt.coverage === "object" && !Array.isArray(receipt.coverage)
+      ? (receipt.coverage as Record<string, unknown>)
+      : {};
+  const taskSummary =
+    receipt.task_summary &&
+    typeof receipt.task_summary === "object" &&
+    !Array.isArray(receipt.task_summary)
+      ? (receipt.task_summary as Record<string, unknown>)
+      : {};
+  const sourceBackedCount =
+    typeof receipt.source_backed_count === "number" &&
+    Number.isFinite(receipt.source_backed_count)
+      ? receipt.source_backed_count
+      : typeof receipt.sourceBackedCount === "number" &&
+          Number.isFinite(receipt.sourceBackedCount)
+        ? receipt.sourceBackedCount
+        : 0;
+  const failedTaskCount =
+    typeof taskSummary.failed === "number" && Number.isFinite(taskSummary.failed)
+      ? taskSummary.failed
+      : 0;
+  const verified =
+    (receiptStatus === "graph_ready" || receiptStatus === "evidence_ready") &&
+    graphVisibility === "verified" &&
+    (receipt.source_backed_graph_claim === true ||
+      receipt.sourceBackedGraphClaim === true) &&
+    (coverage.min_required_satisfied === true ||
+      coverage.minRequiredSatisfied === true) &&
+    sourceBackedCount > 0 &&
+    failedTaskCount === 0;
+  return verified ? receipt : null;
 }
 
 function deriveGraphReadyUploadFailureReportPath(request: {
@@ -2038,6 +2151,24 @@ function readBoolean(value: unknown): boolean | null {
 
 function readArray(value: unknown): unknown[] {
   return Array.isArray(value) ? value : [];
+}
+
+function uniqueStagePreflightStrings(values: Array<string | null | undefined>): string[] {
+  return Array.from(new Set(values.filter((value): value is string => Boolean(value)))).sort();
+}
+
+function readCanonicalIdsFromGraphPresenceEntries(value: unknown): string[] {
+  return uniqueStagePreflightStrings(
+    readArray(value).map((entry) => {
+      if (typeof entry === "string" && entry.trim()) {
+        return entry.trim();
+      }
+      const record = entry && typeof entry === "object" && !Array.isArray(entry)
+        ? (entry as Record<string, unknown>)
+        : {};
+      return readManifestString(record, ["canonical_id", "canonicalId", "paper_id", "paperId"]);
+    })
+  );
 }
 
 function hasReadyGraphPresenceManifest(manifest: ManifestLike, checkedAt: string): boolean {
@@ -2163,10 +2294,16 @@ async function reconcileGraphPresenceManifestFromArtifacts(params: {
       "missingPapersCount",
     ]) ?? missingPapers.length;
   if (
+    expectedPaperCount === null ||
+    expectedPaperCount <= 0 ||
+    presentPaperCount === null ||
+    presentPaperCount <= 0
+  ) {
+    return { manifest: params.manifest, updated: false };
+  }
+  if (
     missingPaperCount > 0 ||
-    (expectedPaperCount !== null &&
-      presentPaperCount !== null &&
-      presentPaperCount < expectedPaperCount)
+    presentPaperCount < expectedPaperCount
   ) {
     return { manifest: params.manifest, updated: false };
   }
@@ -2210,6 +2347,182 @@ async function reconcileGraphPresenceManifestFromArtifacts(params: {
   const limitations = Array.isArray(certification.limitations)
     ? certification.limitations
     : [];
+  const sourceBackedGraphClaim =
+    certification.source_backed_graph_claim === true ||
+    certification.sourceBackedGraphClaim === true;
+  const certificationGraph =
+    certification.graph &&
+    typeof certification.graph === "object" &&
+    !Array.isArray(certification.graph)
+      ? (certification.graph as Record<string, unknown>)
+      : {};
+  const certificationUpload =
+    certification.upload &&
+    typeof certification.upload === "object" &&
+    !Array.isArray(certification.upload)
+      ? (certification.upload as Record<string, unknown>)
+      : {};
+  const certificationImportTasks =
+    certificationUpload.import_tasks &&
+    typeof certificationUpload.import_tasks === "object" &&
+    !Array.isArray(certificationUpload.import_tasks)
+      ? (certificationUpload.import_tasks as Record<string, unknown>)
+      : {};
+  const presentCanonicalIds = readCanonicalIdsFromGraphPresenceEntries(
+    report.present_papers ?? report.presentPapers
+  );
+  const missingCanonicalIds = readCanonicalIdsFromGraphPresenceEntries(
+    report.missing_papers ?? report.missingPapers
+  );
+  if (
+    presentCanonicalIds.length === 0 ||
+    presentCanonicalIds.length < expectedPaperCount
+  ) {
+    return { manifest: params.manifest, updated: false };
+  }
+  const graphBuildReceipt: PapernexusGraphBuildReceipt = {
+    schema_version: 1,
+    request_id: null,
+    run_id: null,
+    corpus:
+      readManifestString(report, ["corpus_name", "corpusName"]) ??
+      readManifestString(params.manifest.paper_ingestion, [
+        "papernexus_shared_corpus",
+        "papernexusSharedCorpus",
+      ]),
+    status: sourceBackedGraphClaim ? "graph_ready" : "waiting_graph_commit",
+    graph_visibility: "verified",
+    graph_fingerprint: [
+      readManifestString(report, ["corpus_name", "corpusName"]) ?? "corpus",
+      checkedAt,
+      presentCanonicalIds.join(","),
+    ].join(":"),
+    checked_at: checkedAt,
+    canonical_ids_requested: uniqueStagePreflightStrings([
+      ...presentCanonicalIds,
+      ...missingCanonicalIds,
+    ]),
+    canonical_ids_in_graph: presentCanonicalIds,
+    canonical_ids_missing: missingCanonicalIds,
+    source_backed_count:
+      readManifestNumber(certificationGraph, ["source_backed_present_count"]) ??
+      presentPaperCount,
+    metadata_only_count:
+      readManifestNumber(certification.source_index, ["metadata_only_paper_count"]) ?? 0,
+    source_backed_graph_claim: sourceBackedGraphClaim,
+    active_in_graph_sources: readCanonicalIdsFromGraphPresenceEntries(
+      report.present_papers ?? report.presentPapers
+    ),
+    task_summary: {
+      total: readManifestNumber(certificationImportTasks, ["task_count"]) ?? 0,
+      pending: 0,
+      running: 0,
+      completed:
+        readManifestNumber(certificationImportTasks, ["completed_task_count"]) ?? 0,
+      failed:
+        readManifestNumber(certificationImportTasks, ["failed_task_count"]) ?? 0,
+      remaining:
+        readManifestNumber(certificationUpload, ["queue_remaining"]) ?? 0,
+    },
+    coverage: {
+      min_required_satisfied:
+        sourceBackedGraphClaim &&
+        (readManifestNumber(certificationImportTasks, ["failed_task_count"]) ?? 0) === 0,
+      min_source_backed_papers: Math.max(1, expectedPaperCount),
+      notes: limitations.filter((entry): entry is string => typeof entry === "string"),
+    },
+    evidence_packet_path: readManifestString(params.manifest.papernexus_evidence_packet, [
+      "json_path",
+      "jsonPath",
+    ]),
+    limitations: limitations.filter((entry): entry is string => typeof entry === "string"),
+    repair_hints: sourceBackedGraphClaim
+      ? []
+      : [
+          "Refresh PaperNexus graph certification until source_backed_graph_claim is true.",
+        ],
+  };
+  const graphBuildReceiptPath = await writePapernexusGraphBuildReceipt({
+    projectRoot: params.projectRoot,
+    receipt: graphBuildReceipt,
+  });
+  const accessMode =
+    readManifestStatus(params.manifest, [
+      "papernexusAccessMode",
+      "papernexus_access_mode",
+    ]) ??
+    readManifestStatus(params.manifest.paper_ingestion, [
+      "papernexusAccessMode",
+      "papernexus_access_mode",
+    ]);
+  const authorityMode =
+    accessMode === "remote_mcp"
+      ? "remote_mcp"
+      : accessMode === "remote_api"
+        ? "remote_api"
+        : accessMode === "local_mcp"
+          ? "local_mcp"
+          : accessMode === "local_corpus"
+            ? "local_corpus"
+            : readManifestString(params.manifest, [
+                  "papernexusMcpUrl",
+                  "papernexus_mcp_url",
+                ]) ||
+                readManifestString(params.manifest.paper_ingestion, [
+                  "papernexusMcpUrl",
+                  "papernexus_mcp_url",
+                ])
+              ? "remote_mcp"
+              : "unknown";
+  const sourceBackedPresentCount =
+    readManifestNumber(certificationGraph, ["source_backed_present_count"]) ??
+    presentPaperCount;
+  const paperIndexPresentCount =
+    readManifestNumber(certificationGraph, ["paper_index_present_count"]) ??
+    presentPaperCount;
+  const papernexusSyncState = buildPapernexusSyncStateFromGraphPresence({
+    projectId: manifestProjectId ?? reportProjectId,
+    authorityMode,
+    corpus:
+      readManifestString(report, ["corpus_name", "corpusName"]) ??
+      readManifestString(params.manifest.paper_ingestion, [
+        "papernexus_shared_corpus",
+        "papernexusSharedCorpus",
+      ]),
+    graphPresence: buildPapernexusSyncGraphPresenceInputFromReport({
+      report,
+      checkedAt,
+      reportPath: "graph/GRAPH_PRESENCE_CHECK.json",
+      projectId: manifestProjectId ?? reportProjectId,
+      sourceBackedPresentCount,
+      paperIndexPresentCount,
+    }),
+    certificationSummary: {
+      sourceBackedGraphClaim,
+      reportPath: certificationReportPath,
+      limitations: limitations.filter((entry): entry is string => typeof entry === "string"),
+      taskCount: readManifestNumber(certificationImportTasks, ["task_count"]) ?? 0,
+      completedTaskCount:
+        readManifestNumber(certificationImportTasks, ["completed_task_count"]) ?? 0,
+      failedTaskCount:
+        readManifestNumber(certificationImportTasks, ["failed_task_count"]) ?? 0,
+      queueRemaining: readManifestNumber(certificationUpload, ["queue_remaining"]) ?? 0,
+      metadataOnlyPaperCount:
+        readManifestNumber(certification.source_index, ["metadata_only_paper_count"]) ?? 0,
+      sourceBackedPaperCount:
+        readManifestNumber(certification.source_index, ["source_backed_paper_count"]) ??
+        sourceBackedPresentCount,
+    },
+    receiptPath: graphBuildReceiptPath,
+    receipt: graphBuildReceipt,
+  });
+  const papernexusSyncStatePath = await writePapernexusSyncState({
+    projectRoot: params.projectRoot,
+    state: papernexusSyncState,
+  });
+  if (!sourceBackedGraphClaim) {
+    return { manifest: params.manifest, updated: false };
+  }
   const paperIngestionRecord =
     params.manifest.paper_ingestion &&
     typeof params.manifest.paper_ingestion === "object" &&
@@ -2228,6 +2541,15 @@ async function reconcileGraphPresenceManifestFromArtifacts(params: {
       graph_presence_expected_papers: expectedPaperCount,
       graph_presence_present_papers: presentPaperCount,
       graph_presence_missing_papers: missingPapers,
+      graph_presence_ready_proof_level:
+        readManifestString(report, ["ready_proof_level", "readyProofLevel"]) ??
+        "source_span",
+      graph_presence_source_backed_present_count:
+        readManifestNumber(certificationGraph, ["source_backed_present_count"]) ??
+        presentPaperCount,
+      graph_presence_paper_index_present_count:
+        readManifestNumber(certificationGraph, ["paper_index_present_count"]) ??
+        presentPaperCount,
       refresh_required: false,
       refresh_reason: null,
       repair_required: false,
@@ -2258,11 +2580,18 @@ async function reconcileGraphPresenceManifestFromArtifacts(params: {
         ]) ?? null,
       papernexus_certification_status: certificationStatus,
       papernexus_claim_level: claimLevel,
-      papernexus_source_backed_graph_claim:
-        certification.source_backed_graph_claim === true ||
-        certification.sourceBackedGraphClaim === true,
+      papernexus_source_backed_graph_claim: sourceBackedGraphClaim,
       papernexus_certification_path: certificationReportPath,
       papernexus_certification_limitations: limitations,
+      papernexus_graph_build_receipt_path: graphBuildReceiptPath,
+      papernexus_sync_state_path: papernexusSyncStatePath,
+      papernexus_sync_state_checked_at: papernexusSyncState.generated_at,
+      papernexus_sync_runtime_status:
+        papernexusSyncState.workflow_projection.runtime_status,
+      papernexus_sync_can_continue:
+        papernexusSyncState.workflow_projection.can_continue,
+      papernexus_sync_next_action:
+        papernexusSyncState.workflow_projection.next_action,
       last_updated_at: new Date().toISOString(),
     },
   };
@@ -2298,6 +2627,15 @@ async function reconcileTerminalPaperIngestionUploadFailuresWhenGraphReady(param
     isTerminalGraphReadyUploadFailureRequest
   );
   if (terminalRequests.length === 0) {
+    return { manifest: params.manifest, updated: false };
+  }
+  const verifiedGraphBuildReceipt =
+    await readVerifiedSourceBackedGraphBuildReceipt(params.projectRoot);
+  if (
+    (manifestUsesRemotePapernexus(params.manifest) ||
+      terminalRequests.some(paperIngestionRequestUsesRemotePapernexus)) &&
+    !verifiedGraphBuildReceipt
+  ) {
     return { manifest: params.manifest, updated: false };
   }
 
@@ -2403,6 +2741,25 @@ async function reconcileTerminalPaperIngestionUploadFailuresWhenGraphReady(param
         lastUpdatedAt: now,
       }),
       refresh_required: false,
+      papernexus_certification_status:
+        verifiedGraphBuildReceipt ? "ready" : paperIngestionRecord.papernexus_certification_status,
+      papernexus_claim_level:
+        verifiedGraphBuildReceipt ? "source_backed_graph" : paperIngestionRecord.papernexus_claim_level,
+      papernexus_source_backed_graph_claim:
+        verifiedGraphBuildReceipt ? true : paperIngestionRecord.papernexus_source_backed_graph_claim,
+      papernexus_graph_build_receipt_path:
+        verifiedGraphBuildReceipt
+          ? DEFAULT_PAPERNEXUS_GRAPH_BUILD_RECEIPT_PATH
+          : paperIngestionRecord.papernexus_graph_build_receipt_path,
+      graph_presence_ready_proof_level:
+        verifiedGraphBuildReceipt ? "source_span" : paperIngestionRecord.graph_presence_ready_proof_level,
+      graph_presence_source_backed_present_count:
+        verifiedGraphBuildReceipt
+          ? readManifestNumber(verifiedGraphBuildReceipt, [
+              "source_backed_count",
+              "sourceBackedCount",
+            ])
+          : paperIngestionRecord.graph_presence_source_backed_present_count,
     },
   };
   await writeJsonEnsured(

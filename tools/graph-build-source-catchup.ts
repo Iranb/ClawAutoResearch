@@ -48,6 +48,10 @@ import {
   shouldAutodiscoverRemotePapernexusCorpus,
 } from "./papernexus-shared-corpus";
 import { buildPapernexusBatchImportCommandText } from "./papernexus-batch-executor.js";
+import {
+  writePapernexusGraphBuildReceipt,
+  type PapernexusGraphBuildReceiptStatus,
+} from "./papernexus-graph-build-receipt";
 
 type FetchResponseLike = {
   ok: boolean;
@@ -154,9 +158,43 @@ const DEFAULT_REMOTE_DISCOVERY_MAX_IMPORTED = 8;
 const MAX_REMOTE_DISCOVERY_SEED_PAPERS = 24;
 const REMOTE_LITERATURE_DISCOVERY_PROVIDER = "papernexus-literature-discovery";
 
+type RemoteDiscoveryWorkflowPolicy = {
+  papernexusAccessMode?: string | null;
+  papernexusSharedCorpus?: string | null;
+  papernexusMcpUrl?: string | null;
+  papernexusApiBaseUrl?: string | null;
+  papernexusMcpTransport?: string | null;
+  papernexusMcpTimeoutMs?: number | null;
+  papernexusApiTokenSource?: string | null;
+  papernexusApiTokenEnv?: string | null;
+  papernexusApiTokenService?: string | null;
+  papernexusApiTokenAccount?: string | null;
+  papernexusApiTokenLookupTimeoutMs?: number | null;
+  papernexusAllowLocalMcp?: boolean | null;
+  papernexusMineruHttpUrl?: string | null;
+  papernexusSshTarget?: string | null;
+  papernexusRemoteStagingRoot?: string | null;
+  papernexusDiscoveryProviders?: string[] | string | null;
+  papernexusDiscoveryProcessImports?: boolean | null;
+  papernexusDiscoveryImportMaxPasses?: number | null;
+  papernexusDiscoveryRequestCache?: boolean | null;
+  papernexusDiscoveryRequestCacheTtlMs?: number | null;
+  papernexusProviderRequestSchedulerDelayMs?: number | null;
+  papernexusProviderRequestMaxConcurrent?: number | null;
+  papernexusOpenAlexRequestDelayMs?: number | null;
+  papernexusOpenAlexMaxConcurrent?: number | null;
+  papernexusSemanticScholarRequestDelayMs?: number | null;
+  papernexusSemanticScholarMaxConcurrent?: number | null;
+};
+
 type NormalizedPaperIngestionState = ReturnType<typeof normalizePaperIngestionState>;
 type NormalizedPaperIngestionQueuedRequest =
   NormalizedPaperIngestionState["queuedRequests"][number];
+
+type RemoteImportQueueProgressResult = {
+  payload: Record<string, unknown> | null;
+  error: string | null;
+};
 
 type RemoteDiscoveryClientResolution = {
   clientConfig: PapernexusMcpClientConfig;
@@ -1584,6 +1622,271 @@ async function resolveRemoteDiscoveryClient(params: {
   };
 }
 
+function resolveManifestPapernexusPolicy(
+  manifest: Record<string, unknown>
+): Partial<RemoteDiscoveryWorkflowPolicy> {
+  const paperIngestion = asRecord(manifest.paper_ingestion) ?? {};
+  const state = normalizePaperIngestionState(paperIngestion);
+  const hasRemoteQueuedRequest = state.queuedRequests.some((request) => {
+    const wrapper = request.wrapper ?? "";
+    const lastSessionKey = request.lastSessionKey ?? "";
+    return (
+      wrapper === "papernexus_remote_mcp" ||
+      /papernexus:remote_mcp:/i.test(lastSessionKey)
+    );
+  });
+  const explicitAccessMode =
+    pickString(manifest, ["papernexusAccessMode", "papernexus_access_mode"]) ??
+    pickString(paperIngestion, ["papernexusAccessMode", "papernexus_access_mode"]);
+  return {
+    papernexusAccessMode: explicitAccessMode ?? (hasRemoteQueuedRequest ? "remote_mcp" : null),
+    papernexusSharedCorpus:
+      pickString(manifest, ["papernexusSharedCorpus", "papernexus_shared_corpus"]) ??
+      pickString(paperIngestion, ["papernexusSharedCorpus", "papernexus_shared_corpus"]),
+    papernexusMcpUrl:
+      pickString(manifest, ["papernexusMcpUrl", "papernexus_mcp_url"]) ??
+      pickString(paperIngestion, ["papernexusMcpUrl", "papernexus_mcp_url"]),
+    papernexusApiBaseUrl:
+      pickString(manifest, ["papernexusApiBaseUrl", "papernexus_api_base_url"]) ??
+      pickString(paperIngestion, ["papernexusApiBaseUrl", "papernexus_api_base_url"]),
+  };
+}
+
+function resolveRemoteDiscoveryWorkflowPolicy(params: {
+  workflowPolicy?: RemoteDiscoveryWorkflowPolicy | null;
+  manifest: Record<string, unknown>;
+}): RemoteDiscoveryWorkflowPolicy {
+  const manifestPolicy = resolveManifestPapernexusPolicy(params.manifest);
+  const policy = params.workflowPolicy ?? {};
+  const policyAccessMode = normalizeStage(policy.papernexusAccessMode);
+  const manifestAccessMode = normalizeStage(manifestPolicy.papernexusAccessMode);
+  const papernexusAccessMode =
+    policyAccessMode === "remote_mcp" || manifestAccessMode === "remote_mcp"
+      ? "remote_mcp"
+      : policyAccessMode ?? manifestAccessMode ?? policy.papernexusAccessMode ?? null;
+  return {
+    ...policy,
+    papernexusAccessMode,
+    papernexusSharedCorpus:
+      policy.papernexusSharedCorpus ?? manifestPolicy.papernexusSharedCorpus ?? null,
+    papernexusMcpUrl: policy.papernexusMcpUrl ?? manifestPolicy.papernexusMcpUrl ?? null,
+    papernexusApiBaseUrl:
+      policy.papernexusApiBaseUrl ?? manifestPolicy.papernexusApiBaseUrl ?? null,
+  };
+}
+
+function isRemoteMcpDiscoveryConfigured(params: {
+  workflowPolicy?: RemoteDiscoveryWorkflowPolicy | null;
+}): boolean {
+  const accessMode = normalizeStage(params.workflowPolicy?.papernexusAccessMode);
+  if (accessMode === "local_mcp") {
+    return false;
+  }
+  return accessMode === "remote_mcp";
+}
+
+function buildRemoteImportTaskSummary(params: {
+  taskIds: string[];
+  queueProgressPayload: Record<string, unknown> | null;
+}): {
+  total: number;
+  pending: number;
+  running: number;
+  completed: number;
+  failed: number;
+  remaining: number;
+} {
+  const total =
+    getQueueProgressCount(params.queueProgressPayload, "total") || params.taskIds.length;
+  const completed = getQueueProgressCount(params.queueProgressPayload, "completed");
+  const failed = getQueueProgressCount(params.queueProgressPayload, "failed");
+  const pending = getQueueProgressCount(params.queueProgressPayload, "pending");
+  const running = getQueueProgressCount(params.queueProgressPayload, "running");
+  const remaining =
+    getQueueProgressRemaining(params.queueProgressPayload) ??
+    Math.max(0, total - completed - failed);
+  return {
+    total,
+    pending,
+    running,
+    completed,
+    failed,
+    remaining,
+  };
+}
+
+function isRemoteSourceEntrySourceBacked(entry: Record<string, unknown>): boolean {
+  const metadataGraphStatus = normalizeStage(
+    pickString(entry, ["metadata_graph_status", "metadataGraphStatus"])
+  );
+  const sourceKind = normalizeStage(pickString(entry, ["source_kind", "sourceKind"]));
+  const importStatus = normalizeStage(pickString(entry, ["import_status", "importStatus"]));
+  return (
+    metadataGraphStatus === "source_backed" ||
+    sourceKind === "markdown" ||
+    sourceKind === "pdf" ||
+    Boolean(pickString(entry, ["source_path", "sourcePath"])) ||
+    [
+      "submitted",
+      "running",
+      "completed",
+      "deduped",
+      "indexed",
+      "graph_synced",
+      "already_present",
+    ].includes(importStatus ?? "")
+  );
+}
+
+async function writeRemoteDiscoveryGraphBuildReceipt(params: {
+  projectRoot: string;
+  requestId: string | null;
+  runId?: string | null;
+  sharedCorpus?: string | null;
+  status: PapernexusGraphBuildReceiptStatus;
+  graphVisibility?: "verified" | "unverified" | "unavailable";
+  sourceEntries?: Record<string, unknown>[];
+  taskIds?: string[];
+  queueProgressPayload?: Record<string, unknown> | null;
+  checkedAt: string;
+  limitations?: string[];
+  repairHints?: string[];
+}): Promise<string> {
+  const sourceEntries = params.sourceEntries ?? [];
+  const sourceBackedEntries = sourceEntries.filter(isRemoteSourceEntrySourceBacked);
+  const canonicalIds = uniqueStrings(
+    sourceEntries
+      .map((entry) => pickString(entry, ["canonical_id", "canonicalId"]))
+      .filter((entry): entry is string => Boolean(entry))
+  );
+  return writePapernexusGraphBuildReceipt({
+    projectRoot: params.projectRoot,
+    receipt: {
+      schema_version: 1,
+      request_id: params.requestId,
+      run_id: params.runId ?? null,
+      corpus: params.sharedCorpus ?? null,
+      status: params.status,
+      graph_visibility: params.graphVisibility ?? "unverified",
+      graph_fingerprint: null,
+      checked_at: params.checkedAt,
+      canonical_ids_requested: canonicalIds,
+      canonical_ids_in_graph: [],
+      canonical_ids_missing: canonicalIds,
+      source_backed_count: sourceBackedEntries.length,
+      metadata_only_count: Math.max(0, sourceEntries.length - sourceBackedEntries.length),
+      source_backed_graph_claim: false,
+      active_in_graph_sources: [],
+      task_summary: buildRemoteImportTaskSummary({
+        taskIds: params.taskIds ?? [],
+        queueProgressPayload: params.queueProgressPayload ?? null,
+      }),
+      coverage: {
+        min_required_satisfied: false,
+        min_source_backed_papers: Math.max(1, sourceEntries.length > 0 ? 1 : 0),
+        notes: [
+          "Remote discovery/import receipt is not graph-ready until graph visibility is verified by PaperNexus.",
+        ],
+      },
+      evidence_packet_path: null,
+      limitations: params.limitations ?? [],
+      repair_hints: params.repairHints ?? [],
+    },
+  });
+}
+
+async function persistRemoteDiscoveryFailure(params: {
+  projectRoot: string;
+  reportPath: string;
+  now: string;
+  requestId: string;
+  skippedReason: string;
+  message: string;
+  mcpUrl?: string | null;
+  activeRequest?: NormalizedPaperIngestionQueuedRequest | null;
+  topic?: string | null;
+  seedPaperCount?: number | null;
+}): Promise<GraphBuildSourceCatchupResult> {
+  const result: GraphBuildSourceCatchupResult = {
+    attempted: true,
+    queued: false,
+    skippedReason: params.skippedReason,
+    sourceIndexPath: null,
+    materializedPaperCount: 0,
+    requestId: params.requestId,
+    batchManifestPath: null,
+    errors: [params.message],
+    attempts: [
+      buildFetchAttempt({
+        provider: REMOTE_LITERATURE_DISCOVERY_PROVIDER,
+        status: "failed",
+        detail: params.message,
+        at: params.now,
+        url: params.mcpUrl ?? null,
+      }),
+    ],
+  };
+  await writeJsonAtomicEnsured(params.reportPath, {
+    status: "failed",
+    updated_at: params.now,
+    remote_literature_discovery: {
+      request_id: params.requestId,
+      mcp_url: params.mcpUrl ?? null,
+      topic: params.topic ?? null,
+      seed_paper_count: params.seedPaperCount ?? null,
+    },
+    ...result,
+  });
+  await writeRemoteDiscoveryGraphBuildReceipt({
+    projectRoot: params.projectRoot,
+    requestId: params.requestId,
+    status: "failed",
+    graphVisibility: "unavailable",
+    checkedAt: params.now,
+    limitations: [params.message],
+    repairHints: [
+      "Repair the configured remote PaperNexus MCP access before rerunning graph-build.",
+    ],
+  });
+  const requestPatch = params.activeRequest
+    ? {
+        queued_requests: [
+          {
+            request_id: params.activeRequest.requestId,
+            status: "needs_repair",
+            wrapper: params.activeRequest.wrapper ?? "papernexus_remote_mcp",
+            args: params.activeRequest.args,
+            command_text: params.activeRequest.commandText,
+            manifest_path: params.activeRequest.manifestPath,
+            summary: params.activeRequest.summary,
+            detail: params.activeRequest.detail,
+            trigger_kind: params.activeRequest.triggerKind,
+            request_kind: params.activeRequest.requestKind,
+            last_error: params.message,
+            updated_at: params.now,
+            last_attempt_at: params.now,
+            attempt_count: params.activeRequest.attemptCount + 1,
+            max_attempts: params.activeRequest.maxAttempts,
+            validation_status: "invalid",
+            validation_summary: params.message,
+          },
+        ],
+      }
+    : {};
+  await setPaperIngestionState({
+    projectRoot: params.projectRoot,
+    paperIngestion: {
+      runtime_status: "blocked",
+      waiting_reason: "Remote PaperNexus literature discovery is unavailable.",
+      repair_required: true,
+      repair_reason: params.message,
+      ...requestPatch,
+      last_updated_at: params.now,
+    },
+  });
+  return result;
+}
+
 async function readLiteratureDiscoveryRequisition(params: {
   projectRoot: string;
   request: NormalizedPaperIngestionQueuedRequest | null;
@@ -2029,18 +2332,21 @@ function summarizeRemoteMetadataGraph(run: Record<string, unknown>): {
 async function fetchRemoteImportQueueProgress(params: {
   clientConfig: PapernexusMcpClientConfig;
   taskIds: string[];
-}): Promise<Record<string, unknown> | null> {
+}): Promise<RemoteImportQueueProgressResult> {
   if (params.taskIds.length === 0) {
-    return null;
+    return { payload: null, error: null };
   }
   const result = await callPapernexusMcpTool(params.clientConfig, "import_workflow", {
     operation: "queue_progress",
     taskIds: params.taskIds,
   });
   if (!result.ok) {
-    return null;
+    return {
+      payload: null,
+      error: result.error ?? "PaperNexus import_workflow queue_progress failed.",
+    };
   }
-  return parseMcpToolJsonPayload(result.data);
+  return { payload: parseMcpToolJsonPayload(result.data), error: null };
 }
 
 function getQueueProgressRemaining(queueProgressPayload: Record<string, unknown> | null): number | null {
@@ -2130,12 +2436,15 @@ async function refreshExistingRemoteLiteratureDiscovery(params: {
     clientConfig: params.clientConfig,
     taskIds,
   });
-  const remaining = getQueueProgressRemaining(queueProgressPayload);
-  const completedCount = getQueueProgressCount(queueProgressPayload, "completed");
-  const failedCount = getQueueProgressCount(queueProgressPayload, "failed");
+  const queueProgressError = queueProgressPayload.error;
+  const remaining = getQueueProgressRemaining(queueProgressPayload.payload);
+  const completedCount = getQueueProgressCount(queueProgressPayload.payload, "completed");
+  const failedCount = getQueueProgressCount(queueProgressPayload.payload, "failed");
   const hasRemoteImportWork = taskIds.length > 0;
   const requestStatus =
-    hasRemoteImportWork && remaining !== null && remaining > 0
+    queueProgressError
+      ? "needs_repair"
+      : hasRemoteImportWork && remaining !== null && remaining > 0
       ? "running"
       : failedCount > 0 && completedCount === 0
         ? "needs_repair"
@@ -2159,7 +2468,8 @@ async function refreshExistingRemoteLiteratureDiscovery(params: {
     });
   }
   const runId = pickString(params.run, ["runId", "run_id"]);
-  const firstError = getQueueProgressFirstError(queueProgressPayload);
+  const firstError =
+    queueProgressError ?? getQueueProgressFirstError(queueProgressPayload.payload);
   const completedPapers =
     requestStatus === "completed"
       ? sourceEntries.map((entry) => ({
@@ -2172,10 +2482,40 @@ async function refreshExistingRemoteLiteratureDiscovery(params: {
   await writeJsonAtomicEnsured(params.artifactPath, {
     ...params.run,
     remote_task_ids: taskIds,
-    remote_queue_progress: queueProgressPayload,
+    remote_queue_progress: queueProgressPayload.payload,
+    remote_queue_progress_error: queueProgressError,
     local_metadata_graph_summary: metadataGraphSummary,
     local_request_id: params.request.requestId,
     last_polled_at: params.now,
+  });
+  await writeRemoteDiscoveryGraphBuildReceipt({
+    projectRoot: params.projectRoot,
+    requestId: params.request.requestId,
+    runId,
+    sharedCorpus: params.sharedCorpus,
+    status:
+      requestStatus === "running"
+        ? "waiting_import"
+        : requestStatus === "completed"
+          ? "waiting_graph_commit"
+          : queueProgressError
+            ? "failed"
+            : "source_blocked",
+    graphVisibility: requestStatus === "needs_repair" ? "unavailable" : "unverified",
+    sourceEntries,
+    taskIds,
+    queueProgressPayload: queueProgressPayload.payload,
+    checkedAt: params.now,
+    limitations:
+      requestStatus === "completed"
+        ? ["Import queue is terminal; graph visibility still requires PaperNexus graph presence verification."]
+        : requestStatus === "running"
+          ? ["Import queue is still running; frontier, idea, and writing stages must wait."]
+          : [firstError ?? "PaperNexus import queue failed."],
+    repairHints:
+      requestStatus === "needs_repair"
+        ? ["Inspect PaperNexus import_workflow queue_progress and repair failed imports."]
+        : [],
   });
 
   await setPaperIngestionState({
@@ -2282,7 +2622,8 @@ async function refreshExistingRemoteLiteratureDiscovery(params: {
       artifact_path: params.artifactRelativePath,
       import_task_ids: taskIds,
       metadata_graph: metadataGraphSummary,
-      queue_progress: queueProgressPayload,
+      queue_progress: queueProgressPayload.payload,
+      queue_progress_error: queueProgressError,
     },
     ...result,
   });
@@ -2325,16 +2666,32 @@ async function maybeRunRemoteLiteratureDiscovery(params: {
   reportPath: string;
   now: string;
 }): Promise<GraphBuildSourceCatchupResult | null> {
-  const accessMode = normalizeStage(params.workflowPolicy?.papernexusAccessMode);
   const activeRequest = findActiveLiteratureDiscoveryRequest(params.manifest);
   const refreshableRequest =
     activeRequest ?? findRefreshableLiteratureDiscoveryRequest(params.manifest);
   const seedPapers = buildRemoteDiscoverySeedPapers(params.sourceIndexRaw);
-  if (accessMode !== "remote_mcp" || !params.workflowPolicy?.papernexusMcpUrl) {
+  if (!isRemoteMcpDiscoveryConfigured({ workflowPolicy: params.workflowPolicy })) {
     return null;
   }
   if (!refreshableRequest && hasActiveNonLiteraturePaperIngestionRequest(params.manifest)) {
     return null;
+  }
+
+  const requestId =
+    activeRequest?.requestId ??
+    `remote-literature-discovery-${sanitizeIdFragment(params.projectId ?? path.basename(params.projectRoot))}`;
+  if (!params.workflowPolicy?.papernexusMcpUrl) {
+    return persistRemoteDiscoveryFailure({
+      projectRoot: params.projectRoot,
+      reportPath: params.reportPath,
+      now: params.now,
+      requestId,
+      skippedReason: "remote_papernexus_mcp_unconfigured",
+      message: "Remote PaperNexus MCP URL is not configured.",
+      mcpUrl: null,
+      activeRequest,
+      seedPaperCount: seedPapers.length,
+    });
   }
 
   const client = await resolveRemoteDiscoveryClient({
@@ -2344,7 +2701,18 @@ async function maybeRunRemoteLiteratureDiscovery(params: {
     workflowPolicy: params.workflowPolicy,
   });
   if (!client) {
-    return null;
+    return persistRemoteDiscoveryFailure({
+      projectRoot: params.projectRoot,
+      reportPath: params.reportPath,
+      now: params.now,
+      requestId,
+      skippedReason: "remote_papernexus_mcp_unavailable",
+      message:
+        "Remote PaperNexus MCP client could not be resolved. Check papernexusMcpUrl and mcp transport configuration.",
+      mcpUrl: params.workflowPolicy.papernexusMcpUrl,
+      activeRequest,
+      seedPaperCount: seedPapers.length,
+    });
   }
   const requisition = await readLiteratureDiscoveryRequisition({
     projectRoot: params.projectRoot,
@@ -2383,12 +2751,20 @@ async function maybeRunRemoteLiteratureDiscovery(params: {
     sourceIndexRaw: params.sourceIndexRaw,
   });
   if (!topic && seedPapers.length === 0) {
-    return null;
+    return persistRemoteDiscoveryFailure({
+      projectRoot: params.projectRoot,
+      reportPath: params.reportPath,
+      now: params.now,
+      requestId,
+      skippedReason: "remote_literature_discovery_missing_topic",
+      message:
+        "Remote PaperNexus literature discovery requires a project topic or seed papers; local source bootstrap is disabled while remote_mcp is configured.",
+      mcpUrl: params.workflowPolicy.papernexusMcpUrl,
+      activeRequest,
+      seedPaperCount: seedPapers.length,
+    });
   }
 
-  const requestId =
-    activeRequest?.requestId ??
-    `remote-literature-discovery-${sanitizeIdFragment(params.projectId ?? path.basename(params.projectRoot))}`;
   const startedAt = params.now;
   const args = buildRemoteDiscoveryArgs({
     topic: topic ?? "Resolve and import the supplied seed papers for graph construction.",
@@ -2402,103 +2778,37 @@ async function maybeRunRemoteLiteratureDiscovery(params: {
     args
   );
   if (!discoveryResult.ok) {
-    const result: GraphBuildSourceCatchupResult = {
-      attempted: true,
-      queued: false,
-      skippedReason: "remote_literature_discovery_failed",
-      sourceIndexPath: null,
-      materializedPaperCount: 0,
+    return persistRemoteDiscoveryFailure({
+      projectRoot: params.projectRoot,
+      reportPath: params.reportPath,
+      now: params.now,
       requestId,
-      batchManifestPath: null,
-      errors: [
+      skippedReason: "remote_literature_discovery_failed",
+      message:
         discoveryResult.error ??
-          client.tokenError ??
-          "PaperNexus literature_discovery failed.",
-      ],
-      attempts: [
-        buildFetchAttempt({
-          provider: "papernexus-literature-discovery",
-          status: "failed",
-          detail:
-            discoveryResult.error ??
-            client.tokenError ??
-            "PaperNexus literature_discovery failed.",
-          at: params.now,
-          url: params.workflowPolicy?.papernexusMcpUrl ?? null,
-        }),
-      ],
-    };
-    await writeJsonAtomicEnsured(params.reportPath, {
-      status: "failed",
-      updated_at: params.now,
-      remote_literature_discovery: {
-        request_id: requestId,
-        mcp_url: params.workflowPolicy?.papernexusMcpUrl,
-        topic: topic ?? null,
-        seed_paper_count: seedPapers.length,
-      },
-      ...result,
+        client.tokenError ??
+        "PaperNexus literature_discovery failed.",
+      mcpUrl: params.workflowPolicy.papernexusMcpUrl,
+      activeRequest,
+      topic,
+      seedPaperCount: seedPapers.length,
     });
-    if (activeRequest) {
-      await setPaperIngestionState({
-        projectRoot: params.projectRoot,
-        paperIngestion: {
-          runtime_status: "blocked",
-          waiting_reason: "Remote PaperNexus literature discovery failed.",
-          repair_required: true,
-          repair_reason: discoveryResult.error ?? "Remote PaperNexus literature discovery failed.",
-          queued_requests: [
-            {
-              request_id: activeRequest.requestId,
-              status: "needs_repair",
-              wrapper: activeRequest.wrapper ?? "pn_batch_import.py",
-              manifest_path: activeRequest.manifestPath,
-              summary: activeRequest.summary,
-              detail: activeRequest.detail,
-              trigger_kind: activeRequest.triggerKind,
-              request_kind: activeRequest.requestKind,
-              last_error: discoveryResult.error,
-              updated_at: params.now,
-              last_attempt_at: params.now,
-              attempt_count: activeRequest.attemptCount + 1,
-              validation_status: "invalid",
-              validation_summary: discoveryResult.error,
-            },
-          ],
-          last_updated_at: params.now,
-        },
-      });
-    }
-    return result;
   }
 
   const run = parseMcpToolJsonPayload(discoveryResult.data);
   if (!run) {
-    const result: GraphBuildSourceCatchupResult = {
-      attempted: true,
-      queued: false,
-      skippedReason: "remote_literature_discovery_unreadable",
-      sourceIndexPath: null,
-      materializedPaperCount: 0,
+    return persistRemoteDiscoveryFailure({
+      projectRoot: params.projectRoot,
+      reportPath: params.reportPath,
+      now: params.now,
       requestId,
-      batchManifestPath: null,
-      errors: ["PaperNexus literature_discovery returned an unreadable payload."],
-      attempts: [
-        buildFetchAttempt({
-          provider: "papernexus-literature-discovery",
-          status: "failed",
-          detail: "PaperNexus literature_discovery returned an unreadable payload.",
-          at: params.now,
-          url: params.workflowPolicy?.papernexusMcpUrl ?? null,
-        }),
-      ],
-    };
-    await writeJsonAtomicEnsured(params.reportPath, {
-      status: "failed",
-      updated_at: params.now,
-      ...result,
+      skippedReason: "remote_literature_discovery_unreadable",
+      message: "PaperNexus literature_discovery returned an unreadable payload.",
+      mcpUrl: params.workflowPolicy.papernexusMcpUrl,
+      activeRequest,
+      topic,
+      seedPaperCount: seedPapers.length,
     });
-    return result;
   }
 
   const sourceEntries = buildSourceIndexEntriesFromRemoteDiscovery({
@@ -2516,18 +2826,23 @@ async function maybeRunRemoteLiteratureDiscovery(params: {
   }
 
   const taskIds = collectRemoteImportTaskIds(run);
-  const queueProgressPayload = await fetchRemoteImportQueueProgress({
+  const queueProgressResult = await fetchRemoteImportQueueProgress({
     clientConfig: client.clientConfig,
     taskIds,
   });
+  const queueProgressPayload = queueProgressResult.payload;
+  const queueProgressError = queueProgressResult.error;
   const importSummary = summarizeRemoteImportResults(run);
   const remaining = getQueueProgressRemaining(queueProgressPayload);
   const hasRemoteImportWork = taskIds.length > 0 || importSummary.submitted > 0;
   const importComplete =
-    !hasRemoteImportWork ||
-    (remaining !== null && remaining === 0 && importSummary.failed === 0);
+    !queueProgressError &&
+    (!hasRemoteImportWork ||
+      (remaining !== null && remaining === 0 && importSummary.failed === 0));
   const requestStatus =
-    sourceEntries.length === 0
+    queueProgressError
+      ? "needs_repair"
+      : sourceEntries.length === 0
       ? "needs_repair"
       : hasRemoteImportWork && !importComplete
         ? "running"
@@ -2554,6 +2869,7 @@ async function maybeRunRemoteLiteratureDiscovery(params: {
     local_metadata_graph_summary: metadataGraphSummary,
     remote_task_ids: taskIds,
     remote_queue_progress: queueProgressPayload,
+    remote_queue_progress_error: queueProgressError,
   });
   const reportRelativePath = path.join(
     "researcher",
@@ -2572,6 +2888,42 @@ async function maybeRunRemoteLiteratureDiscovery(params: {
       queueProgressPayload,
     })
   );
+  await writeRemoteDiscoveryGraphBuildReceipt({
+    projectRoot: params.projectRoot,
+    requestId,
+    runId,
+    sharedCorpus: client.sharedCorpus,
+    status:
+      requestStatus === "running"
+        ? "waiting_import"
+        : requestStatus === "completed"
+          ? "waiting_graph_commit"
+          : queueProgressError
+            ? "failed"
+            : "source_blocked",
+    graphVisibility: requestStatus === "needs_repair" ? "unavailable" : "unverified",
+    sourceEntries,
+    taskIds,
+    queueProgressPayload,
+    checkedAt: params.now,
+    limitations:
+      requestStatus === "completed"
+        ? ["PaperNexus discovery/import completed; graph visibility has not been verified yet."]
+        : requestStatus === "running"
+          ? ["PaperNexus import work remains in progress."]
+          : [
+              queueProgressError ??
+                "PaperNexus discovery returned no importable source-backed entries.",
+            ],
+    repairHints:
+      requestStatus === "needs_repair"
+        ? [
+            queueProgressError
+              ? "Inspect PaperNexus import_workflow queue_progress and retry after the remote queue is healthy."
+              : "Run PaperNexus literature_discovery supplement to resolve Markdown/PDF sources.",
+          ]
+        : [],
+  });
 
   const completedPapers =
     requestStatus === "completed"
@@ -2590,13 +2942,16 @@ async function maybeRunRemoteLiteratureDiscovery(params: {
           ? "PaperNexus remote literature discovery submitted imports; waiting for remote graph materialization."
           : requestStatus === "completed"
             ? "PaperNexus remote literature discovery completed; waiting for graph presence verification."
-            : "PaperNexus remote literature discovery did not resolve importable sources.",
+            : queueProgressError
+              ? "PaperNexus remote import queue progress could not be refreshed."
+              : "PaperNexus remote literature discovery did not resolve importable sources.",
       import_task_ids: taskIds,
       completed_papers: completedPapers,
       repair_required: requestStatus === "needs_repair",
       repair_reason:
         requestStatus === "needs_repair"
-          ? "PaperNexus literature_discovery returned no source-index entries."
+          ? queueProgressError ??
+            "PaperNexus literature_discovery returned no source-index entries."
           : null,
       repair_target_corpus: requestStatus === "needs_repair" ? client.sharedCorpus : null,
       queued_requests: [
@@ -2628,7 +2983,8 @@ async function maybeRunRemoteLiteratureDiscovery(params: {
           validation_status: requestStatus === "needs_repair" ? "warning" : "valid",
           validation_summary:
             requestStatus === "needs_repair"
-              ? "PaperNexus discovery completed but did not resolve importable sources."
+              ? queueProgressError ??
+                "PaperNexus discovery completed but did not resolve importable sources."
               : "PaperNexus discovery/import result was materialized into local graph-build artifacts.",
           validation_report_path: artifactRelativePath,
           attempt_count: (activeRequest?.attemptCount ?? 0) + 1,
@@ -2654,14 +3010,22 @@ async function maybeRunRemoteLiteratureDiscovery(params: {
     materializedPaperCount: sourceEntries.length,
     requestId,
     batchManifestPath: artifactRelativePath,
-    errors: [],
+    errors:
+      requestStatus === "needs_repair"
+        ? [queueProgressError ?? "PaperNexus literature_discovery returned no source-index entries."]
+        : [],
     attempts: [
       buildFetchAttempt({
         provider: "papernexus-literature-discovery",
-        status: requestStatus === "needs_repair" ? "skipped" : "success",
+        status:
+          requestStatus === "needs_repair"
+            ? queueProgressError
+              ? "failed"
+              : "skipped"
+            : "success",
         detail:
           requestStatus === "needs_repair"
-            ? "Remote discovery returned no source-index entries."
+            ? queueProgressError ?? "Remote discovery returned no source-index entries."
             : `Remote discovery run ${runId ?? requestId} returned ${sourceEntries.length} candidate source entry(s).`,
         at: params.now,
         url: params.workflowPolicy?.papernexusMcpUrl ?? null,
@@ -2688,6 +3052,7 @@ async function maybeRunRemoteLiteratureDiscovery(params: {
       metadata_graph: metadataGraphSummary,
       import_summary: importSummary,
       queue_progress: queueProgressPayload,
+      queue_progress_error: queueProgressError,
     },
     ...result,
   });
@@ -2966,6 +3331,11 @@ export async function maybeMaterializeGraphBuildPaperSources(params: {
   const manifest = (await readJsonIfExists<Record<string, unknown>>(manifestPath)) ?? {};
   const sourceIndexPath = resolvePaperSourceIndexPath(projectRoot);
   let sourceIndexRaw = await readJsonIfExists<unknown>(sourceIndexPath);
+  const workflowPolicy = resolveRemoteDiscoveryWorkflowPolicy({
+    workflowPolicy: params.workflowPolicy,
+    manifest,
+  });
+  const remoteMcpConfigured = isRemoteMcpDiscoveryConfigured({ workflowPolicy });
   const attempts: PaperSourceFetchAttempt[] = [];
   const reportPath = getCatchupReportPath(projectRoot);
   const errors: string[] = [];
@@ -3009,13 +3379,31 @@ export async function maybeMaterializeGraphBuildPaperSources(params: {
     projectRoot,
     projectId: params.projectId ?? pickString(manifest, ["project_id", "projectId"]),
     manifest,
-    workflowPolicy: params.workflowPolicy,
+    workflowPolicy,
     sourceIndexRaw,
     reportPath,
     now,
   });
   if (remoteDiscoveryResult) {
     return remoteDiscoveryResult;
+  }
+  if (remoteMcpConfigured) {
+    const result = buildResult({
+      skippedReason: "remote_papernexus_discovery_deferred",
+      sourceIndexPath: sourceIndexRaw ? sourceIndexPath : null,
+    });
+    await writeJsonAtomicEnsured(reportPath, {
+      status: "skipped",
+      updated_at: now,
+      remote_literature_discovery: {
+        mcp_url: workflowPolicy.papernexusMcpUrl ?? null,
+        shared_corpus: workflowPolicy.papernexusSharedCorpus ?? null,
+        reason:
+          "Remote PaperNexus is configured, so local literature/source bootstrap is disabled.",
+      },
+      ...result,
+    });
+    return result;
   }
 
   if (!sourceIndexRaw) {
@@ -3053,7 +3441,8 @@ export async function maybeMaterializeGraphBuildPaperSources(params: {
     return result;
   }
 
-  if (hasActivePaperIngestionRequest(manifest)) {
+  const hasBlockingActiveRequest = hasActivePaperIngestionRequest(manifest);
+  if (hasBlockingActiveRequest) {
     const result = buildResult({
       skippedReason: "active_paper_ingestion_request_exists",
       sourceIndexPath,
@@ -3219,11 +3608,11 @@ export async function maybeMaterializeGraphBuildPaperSources(params: {
     materialized,
     sourceIndexPath,
     now,
-    sharedCorpus: params.workflowPolicy?.papernexusSharedCorpus,
-    mcpUrl: params.workflowPolicy?.papernexusMcpUrl,
-    apiBaseUrl: params.workflowPolicy?.papernexusApiBaseUrl,
-    sshTarget: params.workflowPolicy?.papernexusSshTarget,
-    remoteStagingRoot: params.workflowPolicy?.papernexusRemoteStagingRoot,
+    sharedCorpus: workflowPolicy.papernexusSharedCorpus,
+    mcpUrl: workflowPolicy.papernexusMcpUrl,
+    apiBaseUrl: workflowPolicy.papernexusApiBaseUrl,
+    sshTarget: workflowPolicy.papernexusSshTarget,
+    remoteStagingRoot: workflowPolicy.papernexusRemoteStagingRoot,
   });
   const result = buildResult({
     attempted: true,

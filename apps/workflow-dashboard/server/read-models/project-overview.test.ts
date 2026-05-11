@@ -56,6 +56,36 @@ describe("readProjectOverviews", () => {
     );
   });
 
+  it("uses PaperNexus sync projection before stale manifest PaperNexus blockers", async () => {
+    const projectsRoot = await createProjectsRootFixture();
+    const projectRoot = path.join(projectsRoot, "gcd-confirmation-bias-mitigation");
+
+    await writeFile(
+      path.join(projectRoot, "graph", "PAPERNEXUS_SYNC_STATE.json"),
+      JSON.stringify(
+        {
+          schema_version: 1,
+          generated_at: "2026-05-11T09:00:00.000Z",
+          workflow_projection: {
+            blocking_reason: null,
+            next_action: "continue workflow",
+          },
+        },
+        null,
+        2,
+      ),
+    );
+
+    const result = await readProjectOverviews({ projectsRoot });
+
+    expect(result[0]).toMatchObject({
+      status: "active",
+      blockerReason: null,
+      nextAction: "continue workflow",
+      updatedAt: "2026-05-11T09:00:00.000Z",
+    });
+  });
+
   it("creates manifest_fallback entries only for directories that contain PROJECT_MANIFEST.json", async () => {
     const projectsRoot = await createProjectsRootFixture();
     const fallbackProjectRoot = path.join(projectsRoot, "latent-planning-sandbox");

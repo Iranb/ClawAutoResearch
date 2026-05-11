@@ -46,6 +46,7 @@ export type OpenClawMessagePresentation = {
 export type OpenClawPluginCommandResponse = {
   text?: string;
   presentation?: OpenClawMessagePresentation;
+  channelData?: Record<string, unknown>;
 };
 
 export type OpenClawPluginCommandDefinition = {

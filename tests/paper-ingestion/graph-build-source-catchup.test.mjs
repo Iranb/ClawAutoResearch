@@ -112,6 +112,18 @@ async function startFakeRemoteDiscoveryMcpServer(options = {}) {
     const args = body?.params?.arguments ?? {};
     let textPayload;
     if (toolName === "literature_discovery") {
+      if (options.literatureDiscoveryError) {
+        response.writeHead(200, { "Content-Type": "application/json" });
+        response.end(JSON.stringify({
+          jsonrpc: "2.0",
+          id: body?.id ?? 1,
+          error: {
+            code: -32011,
+            message: options.literatureDiscoveryError,
+          },
+        }));
+        return;
+      }
       textPayload = {
         contractVersion: "literature-discovery-v1",
         runId: "disc-remote-001",
@@ -256,6 +268,104 @@ async function startFakeRemoteDiscoveryMcpServer(options = {}) {
   };
 }
 
+test("graph-build source catch-up blocks instead of local fallback when remote discovery fails", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  const previousToken = process.env.PAPERNEXUS_TEST_TOKEN;
+  const server = await startFakeRemoteDiscoveryMcpServer({
+    literatureDiscoveryError: "Remote MCP request failed: fetch failed",
+  });
+  t.after(async () => {
+    if (previousToken === undefined) {
+      delete process.env.PAPERNEXUS_TEST_TOKEN;
+    } else {
+      process.env.PAPERNEXUS_TEST_TOKEN = previousToken;
+    }
+    await server.close();
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+  process.env.PAPERNEXUS_TEST_TOKEN = "remote-test-token";
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "source-catchup-demo",
+    current_stage: "graph_build",
+    owner_agent: "researcher",
+    research_program: {
+      goal:
+        "TOWARDS UNDERSTANDING WHY FIXMATCH GENERALIZES BETTER THAN SUPERVISED LEARNING 这篇论文里提到的方法改进GCD",
+    },
+    paper_ingestion: {
+      runtime_status: "waiting_import",
+      queued_requests: [
+        {
+          request_id: "idea-catalyst-req-computer-science-8-4",
+          request_kind: "requisition",
+          status: "queued",
+          wrapper: "pn_batch_import.py",
+          manifest_path: "researcher/idea-catalyst/requisition/req-computer-science-8-4/CATALYST_REQUISITION.json",
+          trigger_kind: "idea_catalyst_requisition",
+          summary: "IDEA-CATALYST requisition for remote coverage.",
+          detail: "Workflow-owned literature requisition must surface remote PaperNexus failures without local fallback.",
+          created_at: "2026-04-24T10:20:00.000Z",
+          updated_at: "2026-04-24T10:20:00.000Z",
+          attempt_count: 0,
+        },
+      ],
+    },
+  });
+
+  const result = await maybeMaterializeGraphBuildPaperSources({
+    projectRoot,
+    projectId: "source-catchup-demo",
+    workflowPolicy: {
+      papernexusAccessMode: "remote_mcp",
+      papernexusSharedCorpus: "GCD",
+      papernexusMcpUrl: server.url,
+      papernexusApiTokenSource: "env",
+      papernexusApiTokenEnv: "PAPERNEXUS_TEST_TOKEN",
+    },
+    now: "2026-04-24T10:30:00.000Z",
+    fetchImpl: async () => assert.fail("remote_mcp failure must not fetch literature locally"),
+  });
+
+  assert.equal(result.queued, false);
+  assert.equal(result.skippedReason, "remote_literature_discovery_failed");
+  assert.equal(result.materializedPaperCount, 0);
+  assert.match(result.errors.join("\n"), /Remote MCP request failed/);
+  assert.equal(
+    server.requests.filter((entry) => entry.body.params.name === "literature_discovery").length,
+    1
+  );
+
+  const manifest = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "PROJECT_MANIFEST.json"), "utf8")
+  );
+  assert.equal(manifest.paper_ingestion.runtime_status, "blocked");
+  assert.equal(manifest.paper_ingestion.repair_required, true);
+  assert.match(manifest.paper_ingestion.repair_reason, /Remote MCP request failed/);
+  const remoteRequest = manifest.paper_ingestion.queued_requests.find(
+    (request) => request.request_id === "idea-catalyst-req-computer-science-8-4"
+  );
+  assert.equal(remoteRequest.status, "needs_repair");
+  assert.match(remoteRequest.last_error, /Remote MCP request failed/);
+  await assert.rejects(
+    fs.readFile(path.join(projectRoot, "researcher", "PAPER_SOURCE_INDEX.json"), "utf8"),
+    /ENOENT/
+  );
+
+  const catchupReport = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "graph", "GRAPH_BUILD_SOURCE_CATCHUP.json"), "utf8")
+  );
+  assert.equal(catchupReport.status, "failed");
+  assert.equal(catchupReport.skippedReason, "remote_literature_discovery_failed");
+  assert.equal(catchupReport.remote_literature_discovery.request_id, result.requestId);
+
+  const receipt = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "graph", "PAPERNEXUS_GRAPH_BUILD_RECEIPT.json"), "utf8")
+  );
+  assert.equal(receipt.status, "failed");
+  assert.equal(receipt.graph_visibility, "unavailable");
+  assert.equal(receipt.source_backed_graph_claim, false);
+});
+
 test("graph-build source catch-up delegates missing research and import to remote PaperNexus literature_discovery", async (t) => {
   const projectRoot = await makeProjectRoot();
   const previousToken = process.env.PAPERNEXUS_TEST_TOKEN;
@@ -367,6 +477,108 @@ test("graph-build source catch-up delegates missing research and import to remot
     "task-remote-1",
   ]);
   assert.equal(catchupReport.remote_literature_discovery.metadata_graph.partialPaperCount, 1);
+
+  const receipt = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "graph", "PAPERNEXUS_GRAPH_BUILD_RECEIPT.json"), "utf8")
+  );
+  assert.equal(receipt.status, "waiting_import");
+  assert.equal(receipt.graph_visibility, "unverified");
+  assert.equal(receipt.source_backed_count, 1);
+  assert.equal(receipt.metadata_only_count, 1);
+  assert.equal(receipt.task_summary.remaining, 1);
+});
+
+test("graph-build source catch-up honors manifest remote_mcp config without local fallback", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  const server = await startFakeRemoteDiscoveryMcpServer();
+  t.after(async () => {
+    await server.close();
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "manifest-remote-source-catchup-demo",
+    current_stage: "graph_build",
+    owner_agent: "researcher",
+    research_program: {
+      goal: "Use PaperNexus to find source-backed papers for remote-only graph build.",
+    },
+    paper_ingestion: {
+      papernexus_access_mode: "remote_mcp",
+      papernexus_mcp_url: server.url,
+      papernexus_shared_corpus: "GCD",
+    },
+  });
+
+  const result = await maybeMaterializeGraphBuildPaperSources({
+    projectRoot,
+    projectId: "manifest-remote-source-catchup-demo",
+    now: "2026-04-24T10:00:00.000Z",
+    fetchImpl: async () => assert.fail("manifest remote_mcp config must not use local fetch fallback"),
+  });
+
+  assert.equal(result.queued, true);
+  assert.equal(
+    server.requests.filter((entry) => entry.body.params.name === "literature_discovery").length,
+    1
+  );
+  assert.equal(server.requests[0].body.params.arguments.corpus, "GCD");
+
+  const receipt = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "graph", "PAPERNEXUS_GRAPH_BUILD_RECEIPT.json"), "utf8")
+  );
+  assert.equal(receipt.status, "waiting_import");
+  assert.equal(receipt.corpus, "GCD");
+});
+
+test("graph-build source catch-up treats queued remote_mcp requests as remote-only", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+      project_id: "queued-remote-source-catchup-demo",
+      current_stage: "graph_build",
+      owner_agent: "researcher",
+      paper_ingestion: {
+        runtime_status: "blocked",
+        repair_required: true,
+        repair_reason: "socket.timeout",
+        queued_requests: [
+          {
+            request_id: "req-remote-upload",
+            request_kind: "upload_manifest",
+            status: "needs_repair",
+            wrapper: "papernexus_remote_mcp",
+            command_text:
+              "papernexus:remote_mcp:graph_build",
+            created_at: "2026-04-24T10:00:00.000Z",
+            updated_at: "2026-04-24T10:01:00.000Z",
+            last_error: "socket.timeout",
+            validation_status: "valid",
+          },
+      ],
+    },
+  });
+
+  const result = await maybeMaterializeGraphBuildPaperSources({
+    projectRoot,
+    projectId: "queued-remote-source-catchup-demo",
+    now: "2026-04-24T10:05:00.000Z",
+    fetchImpl: async () =>
+      assert.fail("queued remote PaperNexus requests must not use local fetch fallback"),
+  });
+
+  assert.equal(result.attempted, true);
+  assert.equal(result.queued, false);
+  assert.equal(result.skippedReason, "remote_papernexus_mcp_unconfigured");
+  assert.match(result.errors.join("\n"), /Remote PaperNexus MCP URL is not configured/);
+
+  const receipt = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "graph", "PAPERNEXUS_GRAPH_BUILD_RECEIPT.json"), "utf8")
+  );
+  assert.equal(receipt.status, "failed");
+  assert.equal(receipt.graph_visibility, "unavailable");
 });
 
 test("graph-build source catch-up sends source-index papers as remote discovery seeds", async (t) => {

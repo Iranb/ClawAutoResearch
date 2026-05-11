@@ -661,6 +661,12 @@ export type PaperIngestionWorkflowDecisionAction =
   | "wait"
   | "repair";
 
+export type PaperIngestionQueuedLaunchabilityStatus =
+  | "queued_but_dispatchable"
+  | "queued_but_no_runtime_capacity"
+  | "queued_but_missing_binding"
+  | "queued_but_registry_hidden";
+
 export type PaperIngestionWorkflowDecision = {
   action: PaperIngestionWorkflowDecisionAction;
   blocking: boolean;
@@ -677,6 +683,9 @@ export type PaperIngestionWorkflowDecision = {
   activeBatchCount: number;
   activeOperationCount: number;
   failedOperationCount: number;
+  hardActiveCount?: number;
+  queuedLaunchabilityStatus?: PaperIngestionQueuedLaunchabilityStatus | null;
+  queuedLaunchabilityReason?: string | null;
 };
 
 export type GraphBuildPartialReadiness = {
@@ -769,6 +778,40 @@ function allMissingGraphPapersHaveImportableLocalSources(
   );
 }
 
+function paperIngestionUsesRemotePapernexus(
+  record: Record<string, unknown> | null,
+  state: PaperIngestionState
+): boolean {
+  const accessMode = normalizeStage(
+    record ? pickString(record, ["papernexusAccessMode", "papernexus_access_mode"]) : null
+  );
+  if (accessMode === "remote_mcp") {
+    return true;
+  }
+  if (accessMode === "local_mcp") {
+    return false;
+  }
+  if (record && pickString(record, ["papernexusMcpUrl", "papernexus_mcp_url"])) {
+    return true;
+  }
+  return state.queuedRequests.some((request) => {
+    const wrapper = request.wrapper ?? "";
+    const lastSessionKey = request.lastSessionKey ?? "";
+    const commandText = request.commandText ?? "";
+    const argsText = request.args.join(" ");
+    return (
+      wrapper === "papernexus_remote_mcp" ||
+      /papernexus:remote_mcp:/i.test(lastSessionKey) ||
+      /(?:^|\s)--mcp-url(?:\s|=)|papernexus_remote_mcp|remote_mcp|\/mcp\b/i.test(
+        commandText
+      ) ||
+      /(?:^|\s)--mcp-url(?:\s|=)|papernexus_remote_mcp|remote_mcp|\/mcp\b/i.test(
+        argsText
+      )
+    );
+  });
+}
+
 function clampGraphCoverage(value: number | null | undefined): number {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return 0.5;
@@ -810,10 +853,12 @@ function countHardActivePaperIngestionWork(state: PaperIngestionState): number {
   const runtimeActive =
     runtimeStatus === "waiting_import" || runtimeStatus === "reconciling";
   const terminalManifestPaths = getTerminalPaperIngestionRequestManifestPaths(state);
-  const launchingOrRunningRequests = state.queuedRequests.filter(
+  const activeUploadRequests = state.queuedRequests.filter(
     (request) =>
       isPaperIngestionExecutableUploadRequest(request) &&
-      (request.status === "launching" || request.status === "running")
+      (request.status === "queued" ||
+        request.status === "launching" ||
+        request.status === "running")
   );
   const activeBatches = state.activeBatches.filter((batch) =>
     ["queued", "running"].includes(normalizeStage(batch.status) ?? "") &&
@@ -823,11 +868,11 @@ function countHardActivePaperIngestionWork(state: PaperIngestionState): number {
     ["queued", "running"].includes(normalizeStage(operation.status) ?? "")
   );
   const hasConcreteActiveWork =
-    launchingOrRunningRequests.length > 0 ||
+    activeUploadRequests.length > 0 ||
     activeBatches.length > 0 ||
     activeOperations.length > 0;
   return (
-    launchingOrRunningRequests.length +
+    activeUploadRequests.length +
     activeBatches.length +
     activeOperations.length +
     (runtimeActive && hasConcreteActiveWork ? 1 : 0)
@@ -893,7 +938,12 @@ export function deriveGraphBuildPartialReadiness(params: {
   const hardActiveCount = countHardActivePaperIngestionWork(state);
   const terminalFailureCount = countTerminalPaperIngestionFailures(state);
   const degradedImportAttempted = terminalFailureCount > 0;
+  const remotePapernexusConfigured = paperIngestionUsesRemotePapernexus(
+    paperIngestion,
+    state
+  );
   const partialCoverageReady =
+    !remotePapernexusConfigured &&
     graphPresenceStatus === "missing_papers" &&
     degradedImportAttempted &&
     expectedPaperCount !== null &&
@@ -904,6 +954,7 @@ export function deriveGraphBuildPartialReadiness(params: {
     coverage >= minCoverage &&
     hardActiveCount === 0;
   const localSourceFallbackReady =
+    !remotePapernexusConfigured &&
     (graphPresenceStatus === "missing_papers" || graphPresenceStatus === "missing_corpus") &&
     degradedImportAttempted &&
     expectedPaperCount !== null &&
@@ -1011,6 +1062,55 @@ function isIgnorableDormantRequisitionWhenGraphReady(
 
 export const INVALID_WORKFLOW_OWNED_LITERATURE_COMPLETION_REASON =
   "workflow-owned literature requisition was marked completed without durable import or requisition-satisfaction evidence; keep graph_build blocked and rerun bounded literature discovery before frontier mapping";
+
+function deriveQueuedLaunchabilityDiagnostic(params: {
+  state: PaperIngestionState;
+  queuedRequests: PaperIngestionQueuedRequest[];
+}): {
+  status: PaperIngestionQueuedLaunchabilityStatus | null;
+  reason: string | null;
+} {
+  if (params.queuedRequests.length === 0) {
+    return { status: null, reason: null };
+  }
+  const evidence = [
+    params.state.waitingReason,
+    ...params.queuedRequests.flatMap((request) => [
+      request.lastError,
+      request.detail,
+      request.summary,
+    ]),
+  ]
+    .filter((entry): entry is string => Boolean(entry && entry.trim()))
+    .join(" ")
+    .toLowerCase();
+  if (/projects_state|registry|hidden project|coordinator.*project/.test(evidence)) {
+    return {
+      status: "queued_but_registry_hidden",
+      reason:
+        "queued PaperNexus import is waiting, but coordinator registry/project visibility appears to be blocking dispatch",
+    };
+  }
+  if (/binding|channel|session key|project binding|not bound/.test(evidence)) {
+    return {
+      status: "queued_but_missing_binding",
+      reason:
+        "queued PaperNexus import is waiting for a usable project/channel runtime binding",
+    };
+  }
+  if (/capacity|quota|cooldown|rate limit|no available|provider/.test(evidence)) {
+    return {
+      status: "queued_but_no_runtime_capacity",
+      reason:
+        "queued PaperNexus import is waiting for runtime/provider capacity before launch",
+    };
+  }
+  return {
+    status: "queued_but_dispatchable",
+    reason:
+      "queued PaperNexus import is dispatchable and should be launched by the background import worker or runtime coordinator",
+  };
+}
 
 function hasDurableCompletedImportEvidence(state: PaperIngestionState): boolean {
   if (
@@ -1167,12 +1267,25 @@ export function derivePaperIngestionWorkflowDecision(params: {
     failedBatchItems.length +
     needsRepairRequests.length +
     invalidCompletedRequisitionRequests.length;
+  const blockingQueuedRequests = graphPresenceReady
+    ? queuedRequests.filter(
+        (request) =>
+          !isDormantQueuedRequest(request) &&
+          !isIgnorableGraphReadyQueuedUploadRequest(request)
+      )
+    : queuedRequests;
+  const queuedLaunchability = deriveQueuedLaunchabilityDiagnostic({
+    state: params.state,
+    queuedRequests: blockingQueuedRequests,
+  });
   const blockingActiveBatches = graphPresenceReady ? [] : activeBatches;
   const hasConcreteActiveWork =
+    blockingQueuedRequests.length > 0 ||
     launchingOrRunningRequests.length > 0 ||
     blockingActiveBatches.length > 0 ||
     activeOperations.length > 0;
   const hardActiveCount =
+    blockingQueuedRequests.length +
     launchingOrRunningRequests.length +
     blockingActiveBatches.length +
     activeOperations.length +
@@ -1247,11 +1360,18 @@ export function derivePaperIngestionWorkflowDecision(params: {
   }
 
   if (hardActiveCount > 0) {
+    const waitingForQueuedLaunch =
+      blockingQueuedRequests.length > 0 &&
+      launchingOrRunningRequests.length === 0 &&
+      blockingActiveBatches.length === 0 &&
+      activeOperations.length === 0;
     return {
       action: "wait",
       blocking: true,
       reason:
-        "workflow-owned PaperNexus ingestion is running; wait for upload / graph sync completion before frontier mapping",
+        waitingForQueuedLaunch
+          ? `${queuedLaunchability.reason}; keep graph_build waiting until launch/replay succeeds or maintenance marks the request needs_repair`
+          : "workflow-owned PaperNexus ingestion is running; wait for upload / graph sync completion before frontier mapping",
       graphPresenceReady,
       requisitionRequestCount: requisitionRequests.length,
       invalidCompletedRequisitionRequestCount:
@@ -1265,6 +1385,9 @@ export function derivePaperIngestionWorkflowDecision(params: {
       activeBatchCount: activeBatches.length,
       activeOperationCount: activeOperations.length,
       failedOperationCount: failedOperations.length + failedBatchItems.length,
+      hardActiveCount,
+      queuedLaunchabilityStatus: queuedLaunchability.status,
+      queuedLaunchabilityReason: queuedLaunchability.reason,
     };
   }
 

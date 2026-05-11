@@ -44,6 +44,10 @@ import {
   readWorkflowHandoffIntentStore,
   transitionWorkflowHandoffIntent,
 } from "../../../tools/workflow-handoff/handoff-store.ts";
+import {
+  buildPapernexusSyncStateFromGraphPresence,
+  writePapernexusSyncState,
+} from "../../../tools/papernexus-sync-state.ts";
 
 async function makeTempProject() {
   const projectRoot = await fs.mkdtemp(
@@ -61,6 +65,363 @@ async function writeJson(filePath, value) {
 async function writeText(filePath, text = "ok\n") {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
   await fs.writeFile(filePath, text, "utf8");
+}
+
+async function seedVerifiedGraphBuildReceipt(projectRoot, now) {
+  await writeJson(path.join(projectRoot, "graph", "PAPERNEXUS_GRAPH_BUILD_RECEIPT.json"), {
+    schema_version: 1,
+    request_id: "req-upload-ready",
+    run_id: "run-upload-ready",
+    corpus: "GCD",
+    status: "graph_ready",
+    graph_visibility: "verified",
+    graph_fingerprint: `GCD:${now}:arxiv:2501.00001`,
+    checked_at: now,
+    canonical_ids_requested: ["arxiv:2501.00001"],
+    canonical_ids_in_graph: ["arxiv:2501.00001"],
+    canonical_ids_missing: [],
+    source_backed_count: 1,
+    metadata_only_count: 0,
+    source_backed_graph_claim: true,
+    active_in_graph_sources: ["paper:alpha"],
+    task_summary: {
+      total: 1,
+      pending: 0,
+      running: 0,
+      completed: 1,
+      failed: 0,
+      remaining: 0,
+    },
+    coverage: {
+      min_required_satisfied: true,
+      min_source_backed_papers: 1,
+      notes: [],
+    },
+    evidence_packet_path: null,
+    limitations: [],
+    repair_hints: [],
+  });
+}
+
+function readPositiveInteger(value, fallback = 0) {
+  return typeof value === "number" && Number.isFinite(value)
+    ? Math.max(0, Math.floor(value))
+    : fallback;
+}
+
+function generatedCanonicalIds(count) {
+  return Array.from({ length: count }, (_unused, index) => {
+    const suffix = String(index + 1).padStart(5, "0");
+    return `arxiv:2604.${suffix}`;
+  });
+}
+
+async function seedSourceBackedPapernexusSyncState(projectRoot, now, options = {}) {
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  const paperIngestion = manifest.paper_ingestion ?? {};
+  const missingPapers =
+    options.missingPapers ??
+    (Array.isArray(paperIngestion.graph_presence_missing_papers)
+      ? paperIngestion.graph_presence_missing_papers
+      : []);
+  const expectedPaperCount = readPositiveInteger(
+    options.expectedPaperCount,
+    readPositiveInteger(paperIngestion.graph_presence_expected_papers, 1)
+  );
+  const presentPaperCount = readPositiveInteger(
+    options.presentPaperCount,
+    readPositiveInteger(
+      paperIngestion.graph_presence_present_papers,
+      Math.max(0, expectedPaperCount - missingPapers.length)
+    )
+  );
+  const completedPaperIds = Array.isArray(paperIngestion.completed_papers)
+    ? paperIngestion.completed_papers
+        .map((paper) => paper?.canonical_id ?? paper?.canonicalId)
+        .filter(Boolean)
+    : [];
+  const seedCanonicalIds = options.canonicalIds ?? completedPaperIds;
+  const canonicalIds = [
+    ...seedCanonicalIds,
+    ...generatedCanonicalIds(
+      Math.max(0, presentPaperCount - seedCanonicalIds.length)
+    ),
+  ].slice(0, presentPaperCount);
+  const corpus = options.corpus ?? paperIngestion.papernexus_shared_corpus ?? "GCD";
+  const receiptPath = "graph/PAPERNEXUS_GRAPH_BUILD_RECEIPT.json";
+  const certificationPath = "graph/PAPERNEXUS_TASK_CERTIFICATION.json";
+  const reportPath = "graph/GRAPH_PRESENCE_CHECK.json";
+  const presentPapers = canonicalIds.map((canonicalId, index) => ({
+    canonical_id: canonicalId,
+    title: `Seeded Source Backed Paper ${index + 1}`,
+    corpusPaperId: `paper:seeded-${index + 1}`,
+    corpusSourceKey: `seeded-source-${index + 1}.md`,
+    matchedBy: "paper_source_index",
+    graphIndexEvidence: {
+      source_key: `seeded-source-${index + 1}.md`,
+    },
+    sourceSpanEvidence: {
+      source_key: `seeded-source-${index + 1}.md`,
+      span_count: 1,
+    },
+  }));
+  const receipt = {
+    schema_version: 1,
+    request_id: options.requestId ?? "req-source-backed-ready",
+    run_id: options.runId ?? "run-source-backed-ready",
+    corpus,
+    status: "graph_ready",
+    graph_visibility: "verified",
+    graph_fingerprint: `${corpus}:${now}:${canonicalIds.join(",")}`,
+    checked_at: now,
+    canonical_ids_requested: canonicalIds,
+    canonical_ids_in_graph: canonicalIds,
+    canonical_ids_missing: [],
+    source_backed_count: presentPaperCount,
+    metadata_only_count: 0,
+    source_backed_graph_claim: true,
+    active_in_graph_sources: presentPapers.map((paper) => paper.corpusSourceKey),
+    task_summary: {
+      total: expectedPaperCount,
+      pending: 0,
+      running: 0,
+      completed: expectedPaperCount,
+      failed: 0,
+      remaining: 0,
+    },
+    coverage: {
+      min_required_satisfied: true,
+      min_source_backed_papers: 1,
+      notes: [],
+    },
+    evidence_packet_path: null,
+    limitations: [],
+    repair_hints: [],
+  };
+  await writeJson(path.join(projectRoot, receiptPath), receipt);
+  await writeJson(path.join(projectRoot, reportPath), {
+    schema_version: 1,
+    project_id: manifest.project_id ?? null,
+    checked_at: now,
+    status: "ready",
+    verification_mode: options.verificationMode ?? "remote_source_span",
+    corpus_name: corpus,
+    expected_paper_count: expectedPaperCount,
+    present_paper_count: presentPaperCount,
+    missing_paper_count: 0,
+    present_papers: presentPapers,
+    missing_papers: [],
+    ready_proof_level: "source_span",
+    source_backed_present_count: presentPaperCount,
+    paper_index_present_count: presentPaperCount,
+    graph_build_workflow_status: "ready",
+    graph_build_can_continue: true,
+    graph_build_requires_import: false,
+    graph_build_status_reason: null,
+    refresh_required: false,
+    repair_required: false,
+  });
+  await writeJson(path.join(projectRoot, certificationPath), {
+    schema_version: 1,
+    status: "ready",
+    claim_level: "source_backed_graph",
+    source_backed_graph_claim: true,
+    source_index: {
+      metadata_only_paper_count: 0,
+      source_backed_paper_count: presentPaperCount,
+    },
+    upload: {
+      queue_remaining: 0,
+      import_tasks: {
+        task_count: expectedPaperCount,
+        completed_task_count: expectedPaperCount,
+        failed_task_count: 0,
+        items: [],
+      },
+    },
+    limitations: [],
+    report_path: certificationPath,
+  });
+  const state = buildPapernexusSyncStateFromGraphPresence({
+    projectId: manifest.project_id ?? null,
+    authorityMode: options.authorityMode ?? "remote_mcp",
+    corpus,
+    graphPresence: {
+      projectId: manifest.project_id ?? null,
+      checkedAt: now,
+      status: "ready",
+      verificationMode: options.verificationMode ?? "remote_source_span",
+      reportPath,
+      paperSourceIndexPath: "researcher/PAPER_SOURCE_INDEX.json",
+      expectedPaperCount,
+      presentPaperCount,
+      missingPaperCount: 0,
+      readyProofLevel: "source_span",
+      sourceBackedPresentCount: presentPaperCount,
+      paperIndexPresentCount: presentPaperCount,
+      corpusName: corpus,
+      refreshRequired: false,
+      refreshReason: null,
+      repairRequired: false,
+      repairReason: null,
+      presentPapers,
+      missingPapers: [],
+      graphBuildWorkflowStatus: "ready",
+      graphBuildCanContinue: true,
+      graphBuildRequiresImport: false,
+      graphBuildStatusReason: null,
+    },
+    certificationSummary: {
+      sourceBackedGraphClaim: true,
+      reportPath: certificationPath,
+      limitations: [],
+      taskCount: expectedPaperCount,
+      completedTaskCount: expectedPaperCount,
+      failedTaskCount: 0,
+      queueRemaining: 0,
+      metadataOnlyPaperCount: 0,
+      sourceBackedPaperCount: presentPaperCount,
+      tasks: [],
+    },
+    receiptPath,
+    receipt,
+    graphFingerprint: receipt.graph_fingerprint,
+  });
+  const syncStatePath = await writePapernexusSyncState({ projectRoot, state });
+  manifest.paper_ingestion = {
+    ...paperIngestion,
+    graph_presence_checked_at: now,
+    graph_presence_status: "ready",
+    graph_presence_report_path: reportPath,
+    graph_presence_expected_papers: expectedPaperCount,
+    graph_presence_present_papers: presentPaperCount,
+    graph_presence_missing_papers: [],
+    graph_presence_ready_proof_level: "source_span",
+    graph_presence_source_backed_present_count: presentPaperCount,
+    graph_presence_paper_index_present_count: presentPaperCount,
+    graph_build_workflow_status: "ready",
+    graph_build_can_continue: true,
+    graph_build_requires_import: false,
+    graph_build_status_reason: null,
+    papernexus_certification_status: "ready",
+    papernexus_claim_level: "source_backed_graph",
+    papernexus_source_backed_graph_claim: true,
+    papernexus_sync_state_path: syncStatePath,
+    papernexus_sync_runtime_status: state.workflow_projection.runtime_status,
+    papernexus_sync_can_continue: state.workflow_projection.can_continue,
+    papernexus_sync_next_action: state.workflow_projection.next_action,
+    papernexus_sync_blocking_reason: state.workflow_projection.blocking_reason,
+    refresh_required: false,
+    repair_required: options.preserveRepair ? paperIngestion.repair_required : false,
+    repair_reason: options.preserveRepair ? paperIngestion.repair_reason : null,
+  };
+  await writeJson(manifestPath, manifest);
+  return state;
+}
+
+async function seedMissingPapernexusSyncState(projectRoot, now) {
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  const paperIngestion = manifest.paper_ingestion ?? {};
+  const missingPapers = Array.isArray(paperIngestion.graph_presence_missing_papers)
+    ? paperIngestion.graph_presence_missing_papers
+    : [];
+  const expectedPaperCount = readPositiveInteger(
+    paperIngestion.graph_presence_expected_papers,
+    1
+  );
+  const presentPaperCount = readPositiveInteger(
+    paperIngestion.graph_presence_present_papers,
+    Math.max(0, expectedPaperCount - missingPapers.length)
+  );
+  const presentPapers = generatedCanonicalIds(presentPaperCount).map(
+    (canonicalId, index) => ({
+      canonical_id: canonicalId,
+      title: `Seeded Present Paper ${index + 1}`,
+      corpusPaperId: `paper:present-${index + 1}`,
+      corpusSourceKey: `present-source-${index + 1}.md`,
+      matchedBy: "paper_source_index",
+      graphIndexEvidence: {
+        source_key: `present-source-${index + 1}.md`,
+      },
+    })
+  );
+  const reportPath = "graph/GRAPH_PRESENCE_CHECK.json";
+  const state = buildPapernexusSyncStateFromGraphPresence({
+    projectId: manifest.project_id ?? null,
+    authorityMode: "remote_mcp",
+    corpus: paperIngestion.papernexus_shared_corpus ?? "GCD",
+    graphPresence: {
+      projectId: manifest.project_id ?? null,
+      checkedAt: now,
+      status: "missing_papers",
+      verificationMode: "remote_source_span",
+      reportPath,
+      paperSourceIndexPath: "researcher/PAPER_SOURCE_INDEX.json",
+      expectedPaperCount,
+      presentPaperCount,
+      missingPaperCount: missingPapers.length,
+      readyProofLevel: "paper_index",
+      sourceBackedPresentCount: 0,
+      paperIndexPresentCount: presentPaperCount,
+      corpusName: paperIngestion.papernexus_shared_corpus ?? "GCD",
+      refreshRequired: true,
+      refreshReason: "Graph is missing canonical papers.",
+      repairRequired: true,
+      repairReason: paperIngestion.repair_reason ?? "Graph is missing canonical papers.",
+      presentPapers,
+      missingPapers,
+      graphBuildWorkflowStatus: "waiting",
+      graphBuildCanContinue: false,
+      graphBuildRequiresImport: true,
+      graphBuildStatusReason: "Graph is missing canonical papers.",
+    },
+    certificationSummary: {
+      sourceBackedGraphClaim: false,
+      reportPath: null,
+      limitations: ["Graph is missing canonical papers."],
+      taskCount: expectedPaperCount,
+      completedTaskCount: presentPaperCount,
+      failedTaskCount: 0,
+      queueRemaining: Math.max(0, expectedPaperCount - presentPaperCount),
+      metadataOnlyPaperCount: 0,
+      sourceBackedPaperCount: 0,
+      tasks: [],
+    },
+    receiptPath: null,
+    receipt: null,
+    graphFingerprint: null,
+  });
+  await writeJson(path.join(projectRoot, reportPath), {
+    schema_version: 1,
+    checked_at: now,
+    status: "missing_papers",
+    expected_paper_count: expectedPaperCount,
+    present_paper_count: presentPaperCount,
+    missing_paper_count: missingPapers.length,
+    present_papers: presentPapers,
+    missing_papers: missingPapers,
+    ready_proof_level: "paper_index",
+    source_backed_present_count: 0,
+    paper_index_present_count: presentPaperCount,
+    graph_build_workflow_status: "waiting",
+    graph_build_can_continue: false,
+    graph_build_requires_import: true,
+    refresh_required: true,
+    repair_required: true,
+  });
+  const syncStatePath = await writePapernexusSyncState({ projectRoot, state });
+  manifest.paper_ingestion = {
+    ...paperIngestion,
+    papernexus_sync_state_path: syncStatePath,
+    papernexus_sync_runtime_status: state.workflow_projection.runtime_status,
+    papernexus_sync_can_continue: state.workflow_projection.can_continue,
+    papernexus_sync_next_action: state.workflow_projection.next_action,
+    papernexus_sync_blocking_reason: state.workflow_projection.blocking_reason,
+  };
+  await writeJson(manifestPath, manifest);
+  return state;
 }
 
 function makePaperMarkdownFetch(markdown) {
@@ -262,6 +623,10 @@ async function seedRemoteGraphStatus(
     expectedPaperCount = 0,
     presentPaperCount = 0,
     missingPapers = [],
+    presentPapers = [],
+    readyProofLevel = null,
+    sourceBackedPresentCount = null,
+    paperIndexPresentCount = null,
   } = {}
 ) {
   await writeJson(path.join(projectRoot, "graph", "PAPERNEXUS_STATUS.json"), {
@@ -275,6 +640,10 @@ async function seedRemoteGraphStatus(
     present_paper_count: presentPaperCount,
     missing_paper_count: missingPapers.length,
     missing_papers: missingPapers,
+    present_papers: presentPapers,
+    ready_proof_level: readyProofLevel,
+    source_backed_present_count: sourceBackedPresentCount,
+    paper_index_present_count: paperIndexPresentCount,
     refresh_required: missingPapers.length > 0 || status !== "ready",
     refresh_reason:
       missingPapers.length > 0 || status !== "ready"
@@ -3366,7 +3735,7 @@ test("graph presence check parses object-shaped PAPER_SOURCE_INDEX papers maps w
   assert.equal(report.missing_paper_count, 0);
 });
 
-test("remote graph presence accepts summary-only remote corpus PAPER_SOURCE_INDEX metadata when remote counts match", async (t) => {
+test("remote graph presence rejects summary-only remote corpus PAPER_SOURCE_INDEX metadata without per-paper proof", async (t) => {
   const projectRoot = await makeTempProject();
   const previousToken = process.env.PAPERNEXUS_API_TOKEN;
   const requests = [];
@@ -3450,10 +3819,12 @@ test("remote graph presence accepts summary-only remote corpus PAPER_SOURCE_INDE
     },
   });
 
-  assert.equal(result.status, "ready");
+  assert.equal(result.status, "missing_papers");
   assert.equal(result.expectedPaperCount, 198);
-  assert.equal(result.presentPaperCount, 198);
-  assert.equal(result.missingPaperCount, 0);
+  assert.equal(result.presentPaperCount, 0);
+  assert.equal(result.missingPaperCount, 198);
+  assert.equal(result.readyProofLevel, "none");
+  assert.equal(result.graphBuildCanContinue, false);
   assert.equal(result.usedPaperSourceIndex, true);
   assert.equal(result.corpusName, "GCD");
   assert.equal(requests.length, 1);
@@ -3467,16 +3838,18 @@ test("remote graph presence accepts summary-only remote corpus PAPER_SOURCE_INDE
   const report = JSON.parse(
     await fs.readFile(path.join(projectRoot, "graph", "GRAPH_PRESENCE_CHECK.json"), "utf8")
   );
-  assert.equal(report.status, "ready");
+  assert.equal(report.status, "missing_papers");
   assert.equal(report.expected_paper_count, 198);
-  assert.equal(report.present_paper_count, 198);
+  assert.equal(report.present_paper_count, 0);
+  assert.equal(report.ready_proof_level, "none");
 
   const refreshedStatus = JSON.parse(
     await fs.readFile(path.join(projectRoot, "graph", "PAPERNEXUS_STATUS.json"), "utf8")
   );
-  assert.equal(refreshedStatus.status, "ready");
+  assert.equal(refreshedStatus.status, "missing_papers");
   assert.equal(refreshedStatus.expected_paper_count, 198);
-  assert.equal(refreshedStatus.present_paper_count, 198);
+  assert.equal(refreshedStatus.present_paper_count, 0);
+  assert.equal(refreshedStatus.ready_proof_level, "none");
 
   const certification = JSON.parse(
     await fs.readFile(
@@ -3484,8 +3857,8 @@ test("remote graph presence accepts summary-only remote corpus PAPER_SOURCE_INDE
       "utf8"
     )
   );
-  assert.equal(certification.status, "partial");
-  assert.equal(certification.claim_level, "remote_corpus_summary");
+  assert.equal(certification.status, "blocked");
+  assert.equal(certification.claim_level, "connectivity_only");
   assert.equal(certification.source_backed_graph_claim, false);
   assert.equal(certification.graph.verification_mode, "remote_corpus_summary");
   assert.equal(certification.mcp_contract.remote_api_fallback, true);
@@ -3496,18 +3869,33 @@ test("remote graph presence accepts summary-only remote corpus PAPER_SOURCE_INDE
   );
   assert.ok(certification.limitations.includes("paper_source_index_summary_only"));
 
+  const syncState = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "graph", "PAPERNEXUS_SYNC_STATE.json"), "utf8")
+  );
+  assert.equal(syncState.schema_version, 1);
+  assert.equal(syncState.authority.mode, "remote_api");
+  assert.equal(syncState.authority.api_fallback_used, true);
+  assert.equal(syncState.graph_presence.ready_proof_level, "none");
+  assert.equal(syncState.graph_presence.expected_paper_count, 198);
+  assert.equal(syncState.workflow_projection.can_continue, false);
+  assert.equal(syncState.proof.source_backed_graph_claim, false);
+
   const refreshedManifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
   assert.equal(
     refreshedManifest.paper_ingestion.papernexus_certification_status,
-    "partial"
+    "blocked"
   );
   assert.equal(
     refreshedManifest.paper_ingestion.papernexus_source_backed_graph_claim,
     false
   );
+  assert.equal(
+    refreshedManifest.paper_ingestion.papernexus_sync_state_path,
+    "graph/PAPERNEXUS_SYNC_STATE.json"
+  );
 });
 
-test("remote graph presence trusts a healthy remote corpus when no local source index exists", async (t) => {
+test("remote graph presence does not trust aggregate-only remote corpus counts without per-paper proof", async (t) => {
   const projectRoot = await makeTempProject();
   const previousToken = process.env.PAPERNEXUS_API_TOKEN;
   const requests = [];
@@ -3568,9 +3956,10 @@ test("remote graph presence trusts a healthy remote corpus when no local source 
     },
   });
 
-  assert.equal(result.status, "ready");
+  assert.equal(result.status, "missing_papers");
   assert.equal(result.expectedPaperCount, 112);
-  assert.equal(result.presentPaperCount, 112);
+  assert.equal(result.presentPaperCount, 0);
+  assert.equal(result.readyProofLevel, "none");
   assert.equal(result.usedPaperSourceIndex, false);
   assert.equal(requests.length, 1);
 
@@ -3578,10 +3967,11 @@ test("remote graph presence trusts a healthy remote corpus when no local source 
     await fs.readFile(path.join(projectRoot, "graph", "PAPERNEXUS_STATUS.json"), "utf8")
   );
   assert.equal(refreshedStatus.verification_mode, "remote_corpus_summary");
-  assert.equal(refreshedStatus.status, "ready");
+  assert.equal(refreshedStatus.status, "missing_papers");
+  assert.equal(refreshedStatus.present_paper_count, 0);
 });
 
-test("remote graph presence preserves a prior ready remote summary across zero-count endpoint anomalies", async (t) => {
+test("remote graph presence does not preserve prior summary-only ready across zero-count endpoint anomalies", async (t) => {
   const projectRoot = await makeTempProject();
   const previousToken = process.env.PAPERNEXUS_API_TOKEN;
   const server = http.createServer(async (_request, response) => {
@@ -3651,9 +4041,10 @@ test("remote graph presence preserves a prior ready remote summary across zero-c
     },
   });
 
-  assert.equal(result.status, "ready");
+  assert.equal(result.status, "missing_papers");
   assert.equal(result.expectedPaperCount, 111);
-  assert.equal(result.presentPaperCount, 111);
+  assert.equal(result.presentPaperCount, 0);
+  assert.equal(result.readyProofLevel, "none");
 });
 
 test("graph presence check does not fall back to local corpus files when remote PaperNexus access is configured", async (t) => {
@@ -3949,6 +4340,17 @@ test("graph presence check refreshes remote status metadata through remote_mcp",
   assert.equal(certification.graph.source_backed_present_count, 1);
   assert.equal(certification.mcp_contract.remote_mcp_evidence, true);
   assert.equal(certification.mcp_contract.skill_aligned_graph_claim, true);
+
+  const receipt = JSON.parse(
+    await fs.readFile(
+      path.join(projectRoot, "graph", "PAPERNEXUS_GRAPH_BUILD_RECEIPT.json"),
+      "utf8"
+    )
+  );
+  assert.equal(receipt.status, "graph_ready");
+  assert.equal(receipt.graph_visibility, "verified");
+  assert.equal(receipt.source_backed_graph_claim, true);
+  assert.equal(receipt.coverage.min_required_satisfied, true);
 });
 
 test("graph presence check ignores stale cached corpus names during remote_mcp autodiscovery", async (t) => {
@@ -4381,6 +4783,23 @@ test("auto iterator uses remote graph status for graph_build when remote PaperNe
     corpusRoot: "https://papernexus.example/corpora/GCD",
     expectedPaperCount: 1,
     presentPaperCount: 1,
+    presentPapers: [
+      {
+        canonical_id: "2501.00031",
+        title: "Remote Frontier Paper",
+        source_kind: "markdown",
+        source_provider: "arxiv2md-api",
+        retrieval_providers: ["papers-cool"],
+        matched_by: "arxiv",
+        corpus_paper_id: "paper:remote-frontier",
+        corpus_source_key: "remote://GCD/md/2501.00031--remote-frontier-paper.md",
+        graph_index_evidence: { node_id: "paper:remote-frontier" },
+        source_span_evidence: { source_key: "remote://GCD/md/2501.00031--remote-frontier-paper.md" },
+      },
+    ],
+    readyProofLevel: "source_span",
+    sourceBackedPresentCount: 1,
+    paperIndexPresentCount: 1,
   });
   await seedReadyBrainstormCycle(projectRoot);
 
@@ -4938,6 +5357,80 @@ test("auto iterator advances graph_build to frontier_mapping when graph is ready
   assert.equal(manifest.current_micro_stage, "frontier_mapping_requested");
 });
 
+test("auto iterator keeps graph_build blocked when a stale ready report has zero papers", async (t) => {
+  const projectRoot = await makeTempProject();
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  const now = await seedSetupCompleteProject(projectRoot, "graph_build");
+  await writeText(path.join(projectRoot, "graph", "GRAPH_BUILD_REPORT.md"));
+  await writeJson(path.join(projectRoot, "graph", "GRAPH_PRESENCE_CHECK.json"), {
+    project_id: "demo-project",
+    checked_at: now,
+    status: "ready",
+    expected_paper_count: 0,
+    present_paper_count: 0,
+    missing_paper_count: 0,
+    refresh_required: false,
+    repair_required: false,
+  });
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.paper_ingestion = {
+    runtime_status: "idle",
+    waiting_reason: null,
+    graph_presence_checked_at: now,
+    graph_presence_status: "missing_sources",
+    graph_presence_report_path: "graph/GRAPH_PRESENCE_CHECK.json",
+    graph_presence_expected_papers: 0,
+    graph_presence_present_papers: 0,
+    graph_presence_missing_papers: [],
+    graph_build_workflow_status: "blocked",
+    graph_build_can_continue: false,
+    graph_build_requires_import: false,
+    graph_build_requires_source_repair: true,
+    refresh_required: false,
+    repair_required: false,
+  };
+  await writeJson(manifestPath, manifest);
+
+  const result = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+    now,
+    policy: {
+      autoMode: "aggressive",
+      autoGate: {
+        ...defaultAutoGateConfig(),
+        enabled: true,
+      },
+    },
+  });
+
+  const updatedManifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+
+  assert.equal(result.stageBefore, "graph_build");
+  assert.equal(result.stageAfter, "graph_build");
+  assert.equal(updatedManifest.current_stage, "graph_build");
+  assert.equal(updatedManifest.paper_ingestion.graph_presence_status, "missing_sources");
+  assert.ok(
+    result.missingStageSignals.some((signal) =>
+      /graph_presence_status = ready \(current: missing_sources\)/i.test(signal)
+    )
+  );
+
+  const diagnostics = await readWorkflowDiagnosticEvents(projectRoot);
+  assert.ok(
+    diagnostics.some(
+      (event) =>
+        event.component === "graph_build_source_catchup" &&
+        event.details?.skippedReason === "missing_paper_source_index"
+    )
+  );
+});
+
 test("auto iterator repairs a missing IDEA_REPORT and advances when IDEA-CATALYST is ready", async (t) => {
   const projectRoot = await makeTempProject();
   t.after(async () => {
@@ -5186,13 +5679,21 @@ test("auto iterator completes the IDEA-CATALYST requisition rerun loop back into
       ),
     },
   ]);
+  await seedSourceBackedPapernexusSyncState(
+    projectRoot,
+    "2026-04-03T00:00:00.000Z"
+  );
 
   const second = await runWorkflowAutoIterator({
     projectRoot,
     mode: "test",
     queueMailbox: false,
   });
-  assert.equal(second.stageAfter, "frontier_mapping");
+  assert.equal(
+    second.stageAfter,
+    "frontier_mapping",
+    `stageAfter=${second.stageAfter}; missing=${JSON.stringify(second.missingStageSignals)}; blocking=${second.blockingReason ?? ""}`
+  );
 
   const third = await runWorkflowAutoIterator({
     projectRoot,
@@ -5323,13 +5824,18 @@ test("auto iterator does not reopen a degradably satisfied IDEA-CATALYST requisi
   queuedManifest.paper_ingestion.batch_items = [];
   queuedManifest.paper_ingestion.active_batches = [];
   await writeJson(manifestPath, queuedManifest);
+  await seedSourceBackedPapernexusSyncState(projectRoot, now);
 
   const second = await runWorkflowAutoIterator({
     projectRoot,
     mode: "test",
     queueMailbox: false,
   });
-  assert.equal(second.stageAfter, "frontier_mapping");
+  assert.equal(
+    second.stageAfter,
+    "frontier_mapping",
+    `stageAfter=${second.stageAfter}; missing=${JSON.stringify(second.missingStageSignals)}; blocking=${second.blockingReason ?? ""}`
+  );
 
   const third = await runWorkflowAutoIterator({
     projectRoot,
@@ -5468,6 +5974,10 @@ test("auto iterator reconciles completed literature requisitions once source-bac
     limitations: [],
     report_path: "graph/PAPERNEXUS_TASK_CERTIFICATION.json",
   });
+  await seedSourceBackedPapernexusSyncState(
+    projectRoot,
+    "2026-04-03T00:00:00.000Z"
+  );
 
   const second = await runWorkflowAutoIterator({
     projectRoot,
@@ -5729,6 +6239,9 @@ test("auto iterator waits on fresh queued literature discovery requisitions afte
     refresh_required: false,
   };
   await writeJson(manifestPath, manifest);
+  await seedSourceBackedPapernexusSyncState(projectRoot, now, {
+    preserveRepair: true,
+  });
 
   const result = await runWorkflowAutoIterator({
     projectRoot,
@@ -5843,6 +6356,9 @@ test("auto iterator degrades stale queued literature discovery requisitions once
     refresh_required: false,
   };
   await writeJson(manifestPath, manifest);
+  await seedSourceBackedPapernexusSyncState(projectRoot, now, {
+    preserveRepair: true,
+  });
 
   const result = await runWorkflowAutoIterator({
     projectRoot,
@@ -6011,6 +6527,7 @@ test("auto iterator degrades terminal PaperNexus upload failures once graph pres
     present_paper_count: 1,
     missing_paper_count: 0,
   });
+  await seedVerifiedGraphBuildReceipt(projectRoot, now);
   await seedPaperSourceIndex(projectRoot, [
     {
       canonical_id: "arxiv:2501.00001",
@@ -6051,6 +6568,7 @@ test("auto iterator degrades terminal PaperNexus upload failures once graph pres
   const batchManifestPath =
     "researcher/paper-staging/queued-imports/req-upload-ready/batch-import.json";
   manifest.paper_ingestion = {
+    papernexus_access_mode: "remote_mcp",
     runtime_status: "blocked",
     waiting_reason: "PaperNexus batch import failed: socket.timeout",
     repair_required: true,
@@ -6107,6 +6625,9 @@ test("auto iterator degrades terminal PaperNexus upload failures once graph pres
     refresh_required: false,
   };
   await writeJson(manifestPath, manifest);
+  await seedSourceBackedPapernexusSyncState(projectRoot, now, {
+    preserveRepair: true,
+  });
 
   const result = await runWorkflowAutoIterator({
     projectRoot,
@@ -6129,6 +6650,111 @@ test("auto iterator degrades terminal PaperNexus upload failures once graph pres
   await fs.access(path.join(projectRoot, request.validation_report_path));
   assert.equal(result.stageBefore, "graph_build");
   assert.equal(result.stageAfter, "frontier_mapping");
+});
+
+test("auto iterator keeps remote terminal PaperNexus upload failures blocked without a verified graph receipt", async (t) => {
+  const projectRoot = await makeTempProject();
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  const now = await seedSetupCompleteProject(projectRoot, "graph_build");
+  await writeText(path.join(projectRoot, "graph", "GRAPH_BUILD_REPORT.md"));
+  await writeJson(path.join(projectRoot, "graph", "PAPERNEXUS_STATUS.json"), {
+    status: "ready",
+    corpus_name: "GCD",
+    expected_paper_count: 1,
+    present_paper_count: 1,
+  });
+  await writeJson(path.join(projectRoot, "graph", "GRAPH_PRESENCE_CHECK.json"), {
+    status: "ready",
+    expected_paper_count: 1,
+    present_paper_count: 1,
+    missing_paper_count: 0,
+  });
+  await seedReadyBrainstormCycle(projectRoot);
+
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  const batchManifestPath =
+    "researcher/paper-staging/queued-imports/req-upload-no-receipt/batch-import.json";
+  manifest.paper_ingestion = {
+    papernexus_access_mode: "remote_mcp",
+    runtime_status: "blocked",
+    waiting_reason: "PaperNexus batch import failed: socket.timeout",
+    repair_required: true,
+    repair_reason: "socket.timeout",
+    queued_requests: [
+      {
+        request_id: "req-upload-no-receipt",
+        request_kind: "upload_manifest",
+        status: "needs_repair",
+        wrapper: "pn_batch_import.py",
+        command_text:
+          `python3 skills/researcher/papernexus/scripts/pn_batch_import.py --mcp-url http://papernexus.test/mcp --corpus GCD --manifest ${batchManifestPath} wait`,
+        manifest_path: batchManifestPath,
+        shared_corpus: "GCD",
+        paper_count: 1,
+        summary: "Upload timed out before a graph receipt was verified",
+        created_at: "2026-04-28T00:00:00.000Z",
+        updated_at: "2026-04-28T00:01:00.000Z",
+        finished_at: "2026-04-28T00:01:00.000Z",
+        last_error: "socket.timeout",
+        validation_status: "valid",
+        attempt_count: 1,
+        max_attempts: 3,
+      },
+    ],
+    active_batches: [
+      {
+        manifest_path: batchManifestPath,
+        status: "failed",
+        total: 1,
+        failed: 1,
+        started_at: "2026-04-28T00:00:00.000Z",
+        updated_at: "2026-04-28T00:01:00.000Z",
+        finished_at: "2026-04-28T00:01:00.000Z",
+        detail: "socket.timeout",
+      },
+    ],
+    batch_items: [
+      {
+        manifest_path: batchManifestPath,
+        paper_id: "paper-a",
+        canonical_id: "paper-a",
+        status: "failed",
+        error: "socket.timeout",
+        updated_at: "2026-04-28T00:01:00.000Z",
+      },
+    ],
+    graph_presence_checked_at: now,
+    graph_presence_status: "ready",
+    graph_presence_report_path: "graph/GRAPH_PRESENCE_CHECK.json",
+    graph_presence_expected_papers: 1,
+    graph_presence_present_papers: 1,
+    graph_presence_missing_papers: [],
+    refresh_required: false,
+  };
+  await writeJson(manifestPath, manifest);
+
+  const result = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+  });
+
+  const updatedManifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  const request = updatedManifest.paper_ingestion.queued_requests[0];
+  assert.equal(result.stageBefore, "graph_build");
+  assert.equal(result.stageAfter, "graph_build");
+  assert.equal(request.status, "needs_repair");
+  assert.equal(request.last_error, "socket.timeout");
+  assert.equal(updatedManifest.paper_ingestion.runtime_status, "blocked");
+  assert.equal(updatedManifest.paper_ingestion.repair_required, true);
+  assert.match(
+    [...result.missingStageSignals, result.blockingReason ?? ""].join("\n"),
+    /PAPERNEXUS_SYNC_STATE\.json|PAPERNEXUS_GRAPH_BUILD_RECEIPT\.json|graph presence|source-backed|missing_papers/i
+  );
 });
 
 test("auto iterator degrades literature requisitions from creation time despite recent launch retries", async (t) => {
@@ -7528,6 +8154,7 @@ test("auto iterator routes idea back to graph_build when graph loses canonical p
     refresh_required: true,
   };
   await writeJson(manifestPath, manifest);
+  await seedMissingPapernexusSyncState(projectRoot, now);
 
   const result = await runWorkflowAutoIterator({
     projectRoot,
@@ -7545,7 +8172,14 @@ test("auto iterator routes idea back to graph_build when graph loses canonical p
   assert.equal(result.stageBefore, "idea");
   assert.equal(result.stageEffective, "graph_build");
   assert.equal(result.stageAfter, "graph_build");
-  assert.equal(result.graphPresenceCheck?.status, "missing_papers");
+  const syncState = JSON.parse(
+    await fs.readFile(
+      path.join(projectRoot, "graph", "PAPERNEXUS_SYNC_STATE.json"),
+      "utf8"
+    )
+  );
+  assert.equal(syncState.graph_presence.missing_paper_count, 1);
+  assert.equal(syncState.workflow_projection.runtime_status, "waiting_import");
   assert.match(result.blockingReason ?? "", /graph_presence_status = ready/);
 });
 

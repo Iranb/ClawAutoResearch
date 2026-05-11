@@ -103,7 +103,7 @@ export type ProjectDetailSummary = {
     topTierVerdict: string | null;
     evidenceCloseoutStatus: string | null;
   };
-  source: Array<"manifest" | "papernexus_progress" | "fallback">;
+  source: Array<"manifest" | "papernexus_sync_state" | "papernexus_progress" | "fallback">;
 };
 
 export type ArtifactDescriptor = {

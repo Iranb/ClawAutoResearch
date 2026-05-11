@@ -149,6 +149,7 @@ test("materializeSurveyReviewState builds survey artifacts from a PaperNexus dis
   );
   const candidates = Array.from({ length: 12 }, (_unused, index) => {
     const sourceBacked = index % 2 === 0;
+    const pendingImport = index === 1;
     return {
       canonicalId: `pn:graph-survey-${index + 1}`,
       title: `Graph survey method ${index + 1}`,
@@ -168,16 +169,21 @@ test("materializeSurveyReviewState builds survey artifacts from a PaperNexus dis
             fullTextStatus: "open_pdf",
           }
         : {
-            sourceKind: "metadata_only",
-            resolutionStatus: "metadata_only",
-            fullTextStatus: "unknown",
+            sourceKind: pendingImport ? "metadata_only" : "metadata_only",
+            resolutionStatus: pendingImport ? "metadata_only" : "metadata_only",
+            fullTextStatus: pendingImport ? "unknown" : "unknown",
           },
       import: sourceBacked
         ? {
             status: index < 4 ? "completed" : "submitted",
             taskId: `task-${index + 1}`,
           }
-        : {
+        : pendingImport
+          ? {
+              status: "submitted",
+              taskId: `task-${index + 1}`,
+            }
+          : {
             status: "not_submitted",
           },
     };
@@ -242,6 +248,9 @@ test("materializeSurveyReviewState builds survey artifacts from a PaperNexus dis
   );
   assert.ok(
     included.papers.some((paper) => paper.evidence_level === "metadata_supported")
+  );
+  assert.ok(
+    included.papers.some((paper) => paper.evidence_level === "import_pending")
   );
   const coverageSummary = await fs.readFile(
     path.join(projectRoot, DEFAULT_SURVEY_COVERAGE_SUMMARY_PATH),

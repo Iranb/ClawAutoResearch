@@ -721,6 +721,277 @@ test("stage preflight recovers frontier from local paper sources when PaperNexus
   assert.equal(manifest.graph_reasoning.frontier_recovery.status, "ready");
 });
 
+test("stage preflight refuses local frontier recovery when remote PaperNexus is configured but missing", async (t) => {
+  const projectRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "openclaw-frontier-materializer-remote-missing-")
+  );
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await Promise.all([
+    writeJson(path.join(projectRoot, "graph", "GRAPH_PRESENCE_CHECK.json"), {
+      status: "missing_corpus",
+      expected_paper_count: 1,
+      present_paper_count: 0,
+      missing_paper_count: 1,
+      missing_papers: [
+        {
+          canonical_id: "arxiv:2410.11206",
+          title: "Towards Understanding Why FixMatch Generalizes Better Than Supervised Learning",
+        },
+      ],
+    }),
+    writeText(
+      path.join(projectRoot, "graph", "GRAPH_BUILD_REPORT.md"),
+      "# Graph Build Report\nGraph Presence Status: missing_corpus\nExpected Papers: 1\nPresent Papers: 0\n"
+    ),
+    writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+      project_id: "remote-missing-frontier-materializer-demo",
+      title:
+        "TOWARDS UNDERSTANDING WHY FIXMATCH GENERALIZES BETTER THAN SUPERVISED LEARNING methods for improving GCD",
+      current_stage: "frontier_mapping",
+      current_micro_stage: "frontier_mapping_requested",
+      owner_agent: "researcher",
+      paper_ingestion: {
+        papernexus_access_mode: "remote_mcp",
+        graph_presence_status: "missing_corpus",
+        graph_presence_expected_papers: 1,
+        graph_presence_present_papers: 0,
+        queued_requests: [
+          {
+            request_id: "remote-import-queued",
+            request_kind: "upload_manifest",
+            status: "queued",
+            wrapper: "pn_batch_import.py",
+            command_text:
+              "python3 skills/researcher/papernexus/scripts/pn_batch_import.py --mcp-url http://papernexus.example/mcp --manifest researcher/paper-staging/queued-imports/demo/batch-import.json submit",
+          },
+        ],
+      },
+      graph_reasoning: {
+        required: true,
+        stop_status: "unknown",
+      },
+    }),
+  ]);
+
+  const result = await maybePrepareWorkflowStageContracts({
+    projectRoot,
+    stage: "frontier_mapping",
+    deps: makeNoopPreflightDeps(),
+  });
+
+  assert.equal(result.materializedContracts.includes("frontier_mapping_state"), false);
+  await assert.rejects(
+    fs.readFile(path.join(projectRoot, "researcher", "FRONTIER_REPORT.md"), "utf8"),
+    /ENOENT/
+  );
+  const manifest = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "PROJECT_MANIFEST.json"), "utf8")
+  );
+  assert.equal(manifest.current_micro_stage, "frontier_mapping_requested");
+  assert.equal(manifest.graph_reasoning.stop_status, "unknown");
+});
+
+test("stage preflight refuses remote frontier recovery from partial graph presence", async (t) => {
+  const projectRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "openclaw-frontier-materializer-remote-partial-")
+  );
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await Promise.all([
+    writeJson(path.join(projectRoot, "graph", "GRAPH_PRESENCE_CHECK.json"), {
+      status: "partial",
+      expected_paper_count: 2,
+      present_paper_count: 1,
+      missing_paper_count: 1,
+      all_canonical_papers_present: false,
+    }),
+    writeText(
+      path.join(projectRoot, "graph", "GRAPH_BUILD_REPORT.md"),
+      "# Graph Build Report\nGraph Presence Status: partial\nExpected Papers: 2\nPresent Papers: 1\n"
+    ),
+    writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+      project_id: "remote-partial-frontier-materializer-demo",
+      title: "FixMatch consistency for generalized category discovery",
+      current_stage: "frontier_mapping",
+      current_micro_stage: "frontier_mapping_requested",
+      owner_agent: "researcher",
+      paper_ingestion: {
+        papernexus_access_mode: "remote_mcp",
+        papernexus_mcp_url: "http://papernexus.example/mcp",
+        graph_presence_status: "partial",
+        graph_presence_expected_papers: 2,
+        graph_presence_present_papers: 1,
+      },
+      graph_reasoning: {
+        required: true,
+        stop_status: "unknown",
+      },
+    }),
+  ]);
+
+  const result = await maybePrepareWorkflowStageContracts({
+    projectRoot,
+    stage: "frontier_mapping",
+    deps: makeNoopPreflightDeps(),
+  });
+
+  assert.equal(result.materializedContracts.includes("frontier_mapping_state"), false);
+  await assert.rejects(
+    fs.readFile(path.join(projectRoot, "researcher", "FRONTIER_REPORT.md"), "utf8"),
+    /ENOENT/
+  );
+  const manifest = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "PROJECT_MANIFEST.json"), "utf8")
+  );
+  assert.equal(manifest.current_micro_stage, "frontier_mapping_requested");
+  assert.equal(manifest.graph_reasoning.stop_status, "unknown");
+});
+
+test("stage preflight still allows explicit local_mcp frontier recovery with an MCP URL", async (t) => {
+  const projectRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "openclaw-frontier-materializer-local-mcp-")
+  );
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await Promise.all([
+    writeJson(path.join(projectRoot, "graph", "GRAPH_PRESENCE_CHECK.json"), {
+      status: "partial",
+      expected_paper_count: 2,
+      present_paper_count: 1,
+      missing_paper_count: 1,
+      all_canonical_papers_present: false,
+    }),
+    writeText(
+      path.join(projectRoot, "graph", "GRAPH_BUILD_REPORT.md"),
+      "# Graph Build Report\nGraph Presence Status: partial\nExpected Papers: 2\nPresent Papers: 1\n"
+    ),
+    writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+      project_id: "local-mcp-frontier-materializer-demo",
+      title: "FixMatch consistency for generalized category discovery",
+      current_stage: "frontier_mapping",
+      current_micro_stage: "frontier_mapping_requested",
+      owner_agent: "researcher",
+      paper_ingestion: {
+        papernexus_access_mode: "local_mcp",
+        papernexus_mcp_url: "http://localhost:4821/mcp",
+        graph_presence_status: "partial",
+        graph_presence_expected_papers: 2,
+        graph_presence_present_papers: 1,
+      },
+      graph_reasoning: {
+        required: true,
+        stop_status: "unknown",
+      },
+    }),
+  ]);
+
+  const result = await maybePrepareWorkflowStageContracts({
+    projectRoot,
+    stage: "frontier_mapping",
+    deps: makeNoopPreflightDeps(),
+  });
+
+  assert.equal(result.materializedContracts.includes("frontier_mapping_state"), true);
+  const report = await fs.readFile(
+    path.join(projectRoot, "researcher", "FRONTIER_REPORT.md"),
+    "utf8"
+  );
+  assert.equal(auditFrontierReportText(report).ok, true);
+});
+
+test("stage preflight keeps stale remote literature discovery requisitions open", async (t) => {
+  const projectRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "openclaw-frontier-materializer-remote-requisition-")
+  );
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  const staleQueuedAt = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+  const requisitionPath =
+    "researcher/literature-discovery/requisition/review-story-support-gap/DISCOVERY_REQUISITION.json";
+  const reportPath =
+    "researcher/literature-discovery/requisition/review-story-support-gap/REQUISITION_SATISFACTION_REPORT.json";
+  await Promise.all([
+    writeJson(path.join(projectRoot, "graph", "GRAPH_PRESENCE_CHECK.json"), {
+      status: "ready",
+      expected_paper_count: 1,
+      present_paper_count: 1,
+      missing_paper_count: 0,
+    }),
+    writeText(
+      path.join(projectRoot, "graph", "GRAPH_BUILD_REPORT.md"),
+      "# Graph Build Report\nGraph Presence Status: ready\nExpected Papers: 1\nPresent Papers: 1\n"
+    ),
+    writeJson(path.join(projectRoot, requisitionPath), {
+      version: 1,
+      literature_discovery: {
+        discovery_id: "review-story-support-gap",
+        trigger_kind: "review_literature_discovery",
+        origin_stage: "review",
+        required_stage_reentry: ["graph_build", "review"],
+      },
+    }),
+    writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+      project_id: "remote-stale-literature-requisition-demo",
+      title: "FixMatch consistency for generalized category discovery",
+      current_stage: "graph_build",
+      current_micro_stage: "graph_build_requested",
+      owner_agent: "researcher",
+      paper_ingestion: {
+        papernexus_access_mode: "remote_mcp",
+        papernexus_mcp_url: "http://papernexus.example/mcp",
+        runtime_status: "idle",
+        graph_presence_checked_at: new Date().toISOString(),
+        graph_presence_status: "ready",
+        graph_presence_report_path: "graph/GRAPH_PRESENCE_CHECK.json",
+        graph_presence_expected_papers: 1,
+        graph_presence_present_papers: 1,
+        graph_presence_missing_papers: [],
+        queued_requests: [
+          {
+            request_id: "review-story-support-gap-review-story-support-gap",
+            request_kind: "requisition",
+            status: "queued",
+            wrapper: "papernexus_remote_mcp",
+            args: ["--mcp-url", "http://papernexus.example/mcp"],
+            trigger_kind: "review_literature_discovery",
+            manifest_path: requisitionPath,
+            summary: "review_story_support_gap",
+            created_at: staleQueuedAt,
+            updated_at: staleQueuedAt,
+            attempt_count: 0,
+          },
+        ],
+      },
+    }),
+  ]);
+
+  const result = await maybePrepareWorkflowStageContracts({
+    projectRoot,
+    stage: "graph_build",
+    deps: makeNoopPreflightDeps(),
+  });
+
+  assert.equal(
+    result.materializedContracts.includes("literature_discovery_requisition_degraded"),
+    false
+  );
+  await assert.rejects(fs.access(path.join(projectRoot, reportPath)), /ENOENT/);
+  const manifest = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "PROJECT_MANIFEST.json"), "utf8")
+  );
+  assert.equal(manifest.paper_ingestion.queued_requests[0].status, "queued");
+  assert.equal(manifest.paper_ingestion.queued_requests[0].validation_report_path, undefined);
+});
+
 test("stage preflight materializes frontier from a ready graph presence check without provider failure", async (t) => {
   const projectRoot = await fs.mkdtemp(
     path.join(os.tmpdir(), "openclaw-frontier-materializer-ready-presence-")

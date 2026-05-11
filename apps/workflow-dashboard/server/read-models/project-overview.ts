@@ -43,6 +43,14 @@ type PapernexusProgressFile = {
   updated_at?: string | null;
 };
 
+type PapernexusSyncStateFile = {
+  generated_at?: string | null;
+  workflow_projection?: {
+    blocking_reason?: string | null;
+    next_action?: string | null;
+  } | null;
+};
+
 export type ProjectOverview = {
   id: string;
   title: string | null;
@@ -86,6 +94,9 @@ export async function readProjectOverviews(params: {
       const progress = await readJsonFileSafe<PapernexusProgressFile>(
         path.join(project.projectRoot, "graph", "PAPERNEXUS_PROGRESS.json"),
       );
+      const papernexusSyncState = await readJsonFileSafe<PapernexusSyncStateFile>(
+        path.join(project.projectRoot, "graph", "PAPERNEXUS_SYNC_STATE.json"),
+      );
       const stateEntry = stateEntries.get(project.id);
       if (!manifest && !progress && !stateEntry) {
         return null;
@@ -100,11 +111,25 @@ export async function readProjectOverviews(params: {
         paperMode,
         surveyStatus,
       });
+      const manifestBlockerReason = asString(manifest?.blocking_reason);
+      const stateEntryBlockerReason = asString(stateEntry?.blocked_by);
+      const progressBlockerReason = asString(progress?.blocking_reason);
+      const syncBlockerReason = asString(
+        papernexusSyncState?.workflow_projection?.blocking_reason,
+      );
       const blockerReason =
-        asString(manifest?.blocking_reason) ??
-        asString(stateEntry?.blocked_by) ??
-        asString(progress?.blocking_reason);
+        syncBlockerReason ??
+        (papernexusSyncState && isPapernexusBlockingReason(manifestBlockerReason)
+          ? null
+          : manifestBlockerReason) ??
+        (papernexusSyncState && isPapernexusBlockingReason(stateEntryBlockerReason)
+          ? null
+          : stateEntryBlockerReason) ??
+        (papernexusSyncState && isPapernexusBlockingReason(progressBlockerReason)
+          ? null
+          : progressBlockerReason);
       const nextAction =
+        asString(papernexusSyncState?.workflow_projection?.next_action) ??
         asString(manifest?.next_action) ??
         asString(stateEntry?.next_action) ??
         asString(progress?.next_action);
@@ -127,6 +152,7 @@ export async function readProjectOverviews(params: {
         blockerReason,
         nextAction,
         updatedAt:
+          asString(papernexusSyncState?.generated_at) ??
           asString(manifest?.updated_at) ??
           asString(stateEntry?.updated) ??
           asString(progress?.updated_at),
@@ -175,6 +201,15 @@ function deriveStatus(params: {
   }
 
   return "active";
+}
+
+function isPapernexusBlockingReason(value: string | null): boolean {
+  return Boolean(
+    value &&
+      /papernexus|graph presence|graph_presence|graph build|missing_sources|missing papers|missing_papers/i.test(
+        value,
+      ),
+  );
 }
 
 function asString(value: unknown): string | null {
