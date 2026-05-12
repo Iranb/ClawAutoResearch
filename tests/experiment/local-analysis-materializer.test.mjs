@@ -14,7 +14,31 @@ async function writeJson(targetPath, value) {
   await fs.writeFile(targetPath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
 }
 
-async function seedExperimentReadyProject() {
+function buildEvaluationResult(metrics) {
+  return {
+    schema_version: 1,
+    generated_at: "2026-04-28T00:00:00.000Z",
+    experiment_id: "exp-1",
+    status: "ready",
+    metrics,
+    baseline: {
+      known_accuracy: metrics.baseline_known_accuracy ?? 1,
+      novel_accuracy: metrics.baseline_novel_accuracy ?? 0,
+      h_score: metrics.baseline_h_score,
+    },
+    proposed: {
+      known_accuracy: metrics.known_accuracy,
+      novel_accuracy: metrics.novel_accuracy,
+      h_score: metrics.h_score,
+    },
+    ablations: {
+      minus_class_balance_debiasing: { h_score: metrics.h_score },
+      minus_consistency_filtering: { h_score: metrics.h_score },
+    },
+  };
+}
+
+async function seedExperimentReadyProject(metrics = null) {
   const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-local-analysis-"));
   await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
     project_id: "local-analysis",
@@ -64,6 +88,19 @@ async function seedExperimentReadyProject() {
     trigger: "test",
     agentId: "coder",
   });
+  if (metrics) {
+    await writeJson(
+      path.join(
+        projectRoot,
+        "coder",
+        "experiments",
+        "track-main",
+        "exp-1__fixmatch_gcd_consistency_debiasing",
+        "RESULT_SUMMARY.json"
+      ),
+      buildEvaluationResult(metrics)
+    );
+  }
   await materializeLocalExperimentExecutionImpl({
     projectRoot,
     trigger: "test",
@@ -73,27 +110,7 @@ async function seedExperimentReadyProject() {
 }
 
 async function overwriteEvaluationMetrics(projectRoot, metrics) {
-  const result = {
-    schema_version: 1,
-    generated_at: "2026-04-28T00:00:00.000Z",
-    experiment_id: "exp-1",
-    status: "ready",
-    metrics,
-    baseline: {
-      known_accuracy: metrics.baseline_known_accuracy ?? 1,
-      novel_accuracy: metrics.baseline_novel_accuracy ?? 0,
-      h_score: metrics.baseline_h_score,
-    },
-    proposed: {
-      known_accuracy: metrics.known_accuracy,
-      novel_accuracy: metrics.novel_accuracy,
-      h_score: metrics.h_score,
-    },
-    ablations: {
-      minus_class_balance_debiasing: { h_score: metrics.h_score },
-      minus_consistency_filtering: { h_score: metrics.h_score },
-    },
-  };
+  const result = buildEvaluationResult(metrics);
   await writeJson(path.join(projectRoot, "researcher", "evaluation_summary.json"), result);
   await writeJson(
     path.join(projectRoot, "researcher", "artifacts", "results", "exp-1", "RESULT_SUMMARY.json"),
@@ -101,17 +118,29 @@ async function overwriteEvaluationMetrics(projectRoot, metrics) {
   );
 }
 
+async function forceExperimentReadyForAnalysis(projectRoot) {
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.experiment_search = {
+    ...(manifest.experiment_search ?? {}),
+    status: "ready_for_analysis",
+    evaluation_summary_path: "researcher/evaluation_summary.json",
+    plot_pack_status: "complete",
+    plot_pack_path: "researcher/plot_pack.json",
+  };
+  await writeJson(manifestPath, manifest);
+}
+
 test("local analysis materializer writes analyzer contracts and manifest support state", async (t) => {
-  const projectRoot = await seedExperimentReadyProject();
-  t.after(async () => {
-    await fs.rm(projectRoot, { recursive: true, force: true });
-  });
-  await overwriteEvaluationMetrics(projectRoot, {
+  const projectRoot = await seedExperimentReadyProject({
     h_score: 0.3404,
     known_accuracy: 0.8778,
     novel_accuracy: 0.2111,
     baseline_h_score: 0,
     delta_h_score: 0.3404,
+  });
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
   });
 
   const result = await materializeAnalysisArtifactsImpl({
@@ -150,6 +179,7 @@ test("local analysis materializer scopes zero-delta results as partial, not supp
     baseline_h_score: 0,
     delta_h_score: 0,
   });
+  await forceExperimentReadyForAnalysis(projectRoot);
 
   const result = await materializeAnalysisArtifactsImpl({
     projectRoot,
@@ -181,16 +211,15 @@ test("local analysis materializer scopes zero-delta results as partial, not supp
 });
 
 test("auto iterator commits experiment to analyze after local analysis target preflight", async (t) => {
-  const projectRoot = await seedExperimentReadyProject();
-  t.after(async () => {
-    await fs.rm(projectRoot, { recursive: true, force: true });
-  });
-  await overwriteEvaluationMetrics(projectRoot, {
+  const projectRoot = await seedExperimentReadyProject({
     h_score: 0.3404,
     known_accuracy: 0.8778,
     novel_accuracy: 0.2111,
     baseline_h_score: 0,
     delta_h_score: 0.3404,
+  });
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
   });
 
   const result = await runWorkflowAutoIterator({

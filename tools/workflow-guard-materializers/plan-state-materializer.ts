@@ -3,6 +3,7 @@ import {
   asStringArray,
   asRecord,
   normalizeStage,
+  pickNumber,
   pickString,
   uniqueStrings,
 } from "../workflow-guard-core/coercion";
@@ -22,6 +23,10 @@ import {
   normalizeResearchProgramTrack,
   serializeResearchProgramState,
 } from "../workflow-guard-state/research-program";
+import {
+  AUTORESEARCH_LOOP_STATE_PATH,
+  loadOrHydrateAutoResearchLoopState,
+} from "../autoresearch-loop-state";
 
 type ResearchProgramState = ReturnType<typeof normalizeResearchProgramState>;
 type ResearchProgramTask = ReturnType<typeof normalizeResearchProgramTask>;
@@ -39,6 +44,11 @@ const REQUIRED_PLAN_EXPERIMENT_STAGES = [
   "creative_research",
   "ablation_studies",
 ];
+
+const DEFAULT_IDEA_FRAGMENTS_PATH = "researcher/idea-catalyst/IDEA_FRAGMENTS.json";
+const DEFAULT_RANKED_FRAGMENTS_PATH = "researcher/idea-catalyst/RANKED_FRAGMENTS.json";
+const DEFAULT_SELECTED_IDEAS_PATH = "researcher/idea-catalyst/SELECTED_IDEAS.json";
+const DEFAULT_IDEA_TO_CLAIM_MAP_PATH = "researcher/idea-catalyst/IDEA_TO_CLAIM_MAP.json";
 
 function nonMissingStage(value: string | null | undefined): string | null {
   const normalized = normalizeStage(value);
@@ -107,6 +117,227 @@ function sanitizeTopicCompatibleValue(value: unknown, topic: string): unknown {
       .map(([key, entry]) => [key, sanitizeTopicCompatibleValue(entry, topic)] as const)
       .filter(([, entry]) => entry !== undefined)
   );
+}
+
+function resolveProjectArtifactPath(projectRoot: string, artifactPath: string | null): string | null {
+  if (!artifactPath) {
+    return null;
+  }
+  return path.isAbsolute(artifactPath) ? artifactPath : path.join(projectRoot, artifactPath);
+}
+
+function recordList(value: unknown): Record<string, unknown>[] {
+  return Array.isArray(value)
+    ? value
+        .map((entry) => asRecord(entry))
+        .filter((entry): entry is Record<string, unknown> => Boolean(entry))
+    : [];
+}
+
+function firstRecordList(record: Record<string, unknown> | null, keys: string[]): Record<string, unknown>[] {
+  for (const key of keys) {
+    const values = recordList(record?.[key]);
+    if (values.length > 0) {
+      return values;
+    }
+  }
+  return [];
+}
+
+function upsertRecordListById(
+  entries: Record<string, unknown>[],
+  candidate: Record<string, unknown> | null,
+  idKeys: string[]
+): Record<string, unknown>[] {
+  if (!candidate) {
+    return entries;
+  }
+  const candidateId = pickString(candidate, idKeys);
+  if (!candidateId) {
+    return [...entries, candidate];
+  }
+  let replaced = false;
+  const next = entries.map((entry) => {
+    if (pickString(entry, idKeys) !== candidateId) {
+      return entry;
+    }
+    replaced = true;
+    return {
+      ...entry,
+      ...candidate,
+    };
+  });
+  return replaced ? next : [...next, candidate];
+}
+
+function collectSpanIds(values: unknown[], keys: string[]): string[] {
+  return uniqueStrings(
+    values.flatMap((entry) => {
+      const record = asRecord(entry);
+      if (!record) {
+        return [];
+      }
+      return keys.map((key) => pickString(record, [key])).filter(Boolean) as string[];
+    })
+  );
+}
+
+function mergeFragmentWithRank(params: {
+  rank: Record<string, unknown> | null;
+  fragment: Record<string, unknown> | null;
+  index: number;
+}): Record<string, unknown> {
+  const sourceSpans = recordList(params.fragment?.source_spans);
+  const evidenceChainRefs = recordList(params.fragment?.evidence_chain_refs);
+  return {
+    fragment_id:
+      pickString(params.rank ?? {}, ["fragment_id", "fragmentId"]) ??
+      pickString(params.fragment ?? {}, ["fragment_id", "fragmentId"]) ??
+      `fragment-${params.index + 1}`,
+    rank: pickNumber(params.rank ?? {}, ["rank"]) ?? params.index + 1,
+    title:
+      pickString(params.rank ?? {}, ["title"]) ??
+      pickString(params.fragment ?? {}, ["title"]) ??
+      `Idea Fragment ${params.index + 1}`,
+    source_domain:
+      pickString(params.rank ?? {}, ["source_domain", "sourceDomain"]) ??
+      pickString(params.fragment ?? {}, ["source_domain", "sourceDomain"]) ??
+      "unknown",
+    transferred_mechanism:
+      pickString(params.fragment ?? {}, ["transferred_mechanism", "transferredMechanism"]) ??
+      null,
+    claim_cap: pickString(params.fragment ?? {}, ["claim_cap", "claimCap"]) ?? null,
+    evidence_tier:
+      pickString(params.fragment ?? {}, ["evidence_tier", "evidenceTier"]) ??
+      pickString(params.rank ?? {}, ["evidence_tier", "evidenceTier"]) ??
+      null,
+    bridge_path_ids: uniqueStrings([
+      ...asStringArray(params.fragment?.bridge_path_ids ?? params.fragment?.bridgePathIds),
+      ...collectSpanIds(evidenceChainRefs, ["bridge_path_id", "bridgePathId"]),
+    ]),
+    paper_ids: uniqueStrings([
+      ...collectSpanIds(sourceSpans, [
+        "paper_id",
+        "paperId",
+        "canonical_paper_id",
+        "canonicalPaperId",
+      ]),
+      ...collectSpanIds(evidenceChainRefs, ["paper_id", "paperId"]),
+    ]),
+    paragraph_ids: uniqueStrings([
+      ...collectSpanIds(sourceSpans, ["paragraph_id", "paragraphId", "chunk_id", "chunkId"]),
+      ...collectSpanIds(evidenceChainRefs, ["paragraph_id", "paragraphId", "chunk_id", "chunkId"]),
+    ]),
+    candidate_envelope: {
+      baseline_to_compare:
+        pickString(params.fragment ?? {}, ["baseline_to_compare", "baselineToCompare"]) ??
+        null,
+      primary_metric:
+        pickString(params.fragment ?? {}, ["primary_metric", "primaryMetric"]) ?? null,
+      falsifier_pilot:
+        pickString(params.fragment ?? {}, ["falsifier_pilot", "falsifierPilot"]) ?? null,
+      weakest_assumption:
+        pickString(params.fragment ?? {}, ["weakest_assumption", "weakestAssumption"]) ??
+        null,
+    },
+  };
+}
+
+async function buildPlannerIdeaCatalystBridge(params: {
+  projectRoot: string;
+  manifest: Record<string, unknown>;
+  selectedTrackId: string | null;
+  primaryMetric: string;
+  baselineReference: string;
+}): Promise<Record<string, unknown> | null> {
+  const ideaCatalyst = asRecord(params.manifest.idea_catalyst) ?? {};
+  const ideaFragmentsPath =
+    pickString(ideaCatalyst, ["ideaFragmentsPath", "idea_fragments_path"]) ??
+    DEFAULT_IDEA_FRAGMENTS_PATH;
+  const rankedFragmentsPath =
+    pickString(ideaCatalyst, ["rankedFragmentsPath", "ranked_fragments_path"]) ??
+    DEFAULT_RANKED_FRAGMENTS_PATH;
+  const selectedIdeasPath =
+    pickString(ideaCatalyst, ["selectedIdeasPath", "selected_ideas_path"]) ??
+    DEFAULT_SELECTED_IDEAS_PATH;
+  const ideaToClaimMapPath =
+    pickString(ideaCatalyst, ["ideaToClaimMapPath", "idea_to_claim_map_path"]) ??
+    DEFAULT_IDEA_TO_CLAIM_MAP_PATH;
+  const [ideaFragmentsPacket, rankedFragmentsPacket, selectedIdeasPacket, ideaToClaimMap] =
+    await Promise.all([
+      readJsonIfExists<Record<string, unknown>>(
+        resolveProjectArtifactPath(params.projectRoot, ideaFragmentsPath)
+      ),
+      readJsonIfExists<Record<string, unknown>>(
+        resolveProjectArtifactPath(params.projectRoot, rankedFragmentsPath)
+      ),
+      readJsonIfExists<Record<string, unknown>>(
+        resolveProjectArtifactPath(params.projectRoot, selectedIdeasPath)
+      ),
+      readJsonIfExists<Record<string, unknown>>(
+        resolveProjectArtifactPath(params.projectRoot, ideaToClaimMapPath)
+      ),
+    ]);
+  const fragments = firstRecordList(ideaFragmentsPacket, ["fragments", "idea_fragments"]);
+  const fragmentsById = new Map(
+    fragments.map((entry, index) => [
+      pickString(entry, ["fragment_id", "fragmentId"]) ?? `fragment-${index + 1}`,
+      entry,
+    ])
+  );
+  const ranking = firstRecordList(rankedFragmentsPacket, ["ranking", "ranked_fragments"]);
+  const selectedIdeas = firstRecordList(selectedIdeasPacket, ["selected_ideas", "selectedIdeas"]);
+  const rankedBridgeFragments =
+    ranking.length > 0
+      ? ranking.slice(0, 6).map((entry, index) => {
+          const fragmentId = pickString(entry, ["fragment_id", "fragmentId"]);
+          return mergeFragmentWithRank({
+            rank: entry,
+            fragment: fragmentId ? fragmentsById.get(fragmentId) ?? null : null,
+            index,
+          });
+        })
+      : fragments.slice(0, 6).map((entry, index) =>
+          mergeFragmentWithRank({ rank: null, fragment: entry, index })
+        );
+  const selectedBridgeFragments =
+    rankedBridgeFragments.length > 0
+      ? rankedBridgeFragments
+      : selectedIdeas.slice(0, 6).map((entry, index) =>
+          mergeFragmentWithRank({ rank: null, fragment: entry, index })
+        );
+  if (
+    selectedBridgeFragments.length === 0 &&
+    normalizeStage(ideaCatalyst.status) !== "ready"
+  ) {
+    return null;
+  }
+  return {
+    schema_version: 1,
+    status: selectedBridgeFragments.length > 0 ? "ready" : "missing",
+    selected_track_id: params.selectedTrackId,
+    primary_metric: params.primaryMetric,
+    baseline_reference: params.baselineReference,
+    source_paths: {
+      idea_fragments_path: ideaFragmentsPath,
+      ranked_fragments_path: rankedFragmentsPath,
+      selected_ideas_path: selectedIdeasPath,
+      idea_to_claim_map_path: ideaToClaimMapPath,
+    },
+    fragments: selectedBridgeFragments,
+    claim_mappings: firstRecordList(ideaToClaimMap, [
+      "mappings",
+      "claim_mappings",
+      "claims",
+    ]),
+    gap_count:
+      selectedBridgeFragments.filter(
+        (entry) =>
+          asStringArray(entry.paper_ids).length === 0 ||
+          asStringArray(entry.paragraph_ids).length === 0
+      ).length,
+    updated_at: new Date().toISOString(),
+  };
 }
 
 function firstTopicCompatible(
@@ -1018,6 +1249,45 @@ export async function materializePlanStateImpl(params: {
     last_updated_at: new Date().toISOString(),
   });
 
+  const ideaCatalystBridge = await buildPlannerIdeaCatalystBridge({
+    projectRoot,
+    manifest,
+    selectedTrackId,
+    primaryMetric,
+    baselineReference,
+  });
+  if (ideaCatalystBridge) {
+    const currentPlannerPlan = asRecord(manifest.planner_plan) ?? {};
+    manifest.planner_plan = {
+      ...currentPlannerPlan,
+      idea_catalyst_bridge: ideaCatalystBridge,
+    };
+    const referenceContext = asRecord(manifest.reference_context) ?? {};
+    const articleEvidenceContract =
+      asRecord(referenceContext.article_evidence_contract) ?? {};
+    const missingParagraphGap =
+      (pickNumber(ideaCatalystBridge, ["gap_count"]) ?? 0) > 0
+        ? {
+            gap_id: "planner_idea_catalyst_missing_paragraphs",
+            source: "planner_plan.idea_catalyst_bridge",
+            status: "open",
+            summary:
+              "Some Idea-Catalyst fragments do not yet expose paragraph-level anchors.",
+          }
+        : null;
+    manifest.reference_context = {
+      ...referenceContext,
+      article_evidence_contract: {
+        ...articleEvidenceContract,
+        gaps: upsertRecordListById(
+          recordList(articleEvidenceContract.gaps),
+          missingParagraphGap,
+          ["gap_id", "gapId", "id"]
+        ),
+      },
+    };
+  }
+
   manifest.research_program = serializeResearchProgramState(next);
   const currentOrchestration = normalizeOrchestrationState(manifest.orchestration_state);
   const now = new Date().toISOString();
@@ -1040,6 +1310,12 @@ export async function materializePlanStateImpl(params: {
   });
   manifest.owner_agent = pickString(manifest, ["owner_agent", "ownerAgent"]) ?? "orchestrator";
   await writeJsonEnsured(manifestPath, manifest);
+  await loadOrHydrateAutoResearchLoopState({
+    projectRoot,
+    manifest,
+    operationId: `plan_state:${now}`,
+    agentId: params.agentId ?? "orchestrator",
+  });
   const nextTrackRegistry = syncTrackRegistryWithResearchProgram(trackRegistry, next);
   if (JSON.stringify(nextTrackRegistry) !== JSON.stringify(trackRegistry)) {
     await writeJsonEnsured(trackRegistryPath, nextTrackRegistry);
@@ -1087,6 +1363,7 @@ export async function materializePlanStateImpl(params: {
     }),
   });
   generatedFiles.push("PROJECT_MANIFEST.json");
+  generatedFiles.push(AUTORESEARCH_LOOP_STATE_PATH);
   return {
     state: next,
     generatedDefaults: uniqueStrings(generatedDefaults),

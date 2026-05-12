@@ -58,7 +58,14 @@ import { recordWorkflowAnnounceEvent } from "../../../tools/workflow-session-orc
 import { readGateReviewStore } from "../../../tools/workflow-auto-gate.ts";
 import { defaultAutoGateConfig } from "../../../tools/workflow-auto-gate.ts";
 import { readCodeReviewStore } from "../../../tools/workflow-code-review.ts";
-import { readAutoModeDiscussionStore } from "../../../tools/workflow-auto-discussion.ts";
+import {
+  aggregateAutoModeDiscussionRound,
+  createAutoModeDiscussionRound,
+  materializeAutoModeDiscussionPacket,
+  parseAutoModeDiscussionResult,
+  readAutoModeDiscussionStore,
+  saveAutoModeDiscussionStore,
+} from "../../../tools/workflow-auto-discussion.ts";
 import { readWorkflowHandoffIntentStore } from "../../../tools/workflow-handoff/handoff-store.ts";
 import { readWorkflowArtifactReceiptStore } from "../../../tools/workflow-handoff/artifact-receipts.ts";
 import { readWorkflowHooksStateStore } from "../../../tools/workflow-hooks/state.ts";
@@ -2903,6 +2910,134 @@ test("maybeAdvanceAutoModeDiscussionForProject replaces stale runtime discussion
   assert.equal(store.currentRound?.status, "resolved");
   assert.equal(store.currentRound?.aggregate?.reviewCount, 3);
   assert.equal(store.roundsStartedByFingerprint[store.currentRound?.packetFingerprint], 1);
+});
+
+test("maybeAdvanceAutoModeDiscussionForProject converts persisted token auth runtime failures to local fallback", async (t) => {
+  const projectRoot = await makeProject(await makeProjectsRoot(), "alpha", "experiment");
+
+  t.after(async () => {
+    await fs.rm(path.dirname(projectRoot), { recursive: true, force: true });
+  });
+
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "alpha",
+    current_stage: "experiment",
+    citation_integrity: {
+      verification_status: "ready",
+    },
+    writing_contract: {
+      template_status: "ready",
+    },
+    innovation_reflection: {
+      status: "missing",
+    },
+  });
+
+  const policy = {
+    autoMode: "aggressive",
+    autoGate: {
+      ...defaultAutoGateConfig(),
+      enabled: true,
+    },
+    enableChannelProjectBindings: true,
+    projectsRoot: path.dirname(projectRoot),
+    heartbeatBackgroundChecks: true,
+    agentContactCooldownSeconds: 300,
+    enableWorkflowMailbox: true,
+  };
+  const deps = {
+    listChannelProjectBindingsForWorkflow() {
+      return {
+        enabled: true,
+        storePath: path.dirname(projectRoot),
+        bindings: [makeWorkflowProjectBinding(projectRoot, "alpha")],
+      };
+    },
+  };
+  const autoIteratorResult = {
+    configuredAutoMode: "aggressive",
+    autoModeRiskLevel: "caution",
+    autoModeRiskFingerprint: "risk-fingerprint-token-auth",
+    autoModeReasons: ["Innovation reflection is missing."],
+    stageAfter: "experiment",
+    ownerAfter: "researcher",
+    nextAction: "/monitor-experiment",
+    blockingReason: null,
+    missingStageSignals: [],
+  };
+  const packet = await materializeAutoModeDiscussionPacket({
+    projectRoot,
+    projectId: "alpha",
+    stage: autoIteratorResult.stageAfter,
+    riskLevel: "caution",
+    riskReasons: autoIteratorResult.autoModeReasons,
+    missingStageSignals: [],
+    ownerAfter: autoIteratorResult.ownerAfter,
+    nextAction: autoIteratorResult.nextAction,
+    blockingReason: null,
+  });
+  const attempts = ["researcher", "analyzer", "reviewer"].map((reviewerRole) => ({
+    reviewerRole,
+    sessionKey: `agent:${reviewerRole}:local:conversation:token-auth`,
+    runId: `run-${reviewerRole}`,
+    queueKey: `queue-${reviewerRole}`,
+    status: "error",
+    launchedAt: "2026-05-11T00:00:00.000Z",
+    completedAt: "2026-05-11T00:01:00.000Z",
+    error: "Failed to extract accountId from token",
+    result: parseAutoModeDiscussionResult(
+      JSON.stringify({
+        riskAssessment: "blocked",
+        confidence: 0,
+        recommendedOwner: "researcher",
+        blockers: ["Failed to extract accountId from token"],
+        summary: "Auto discussion run failed before returning a valid response.",
+      }),
+      reviewerRole
+    ),
+  }));
+  const round = createAutoModeDiscussionRound({
+    stage: "experiment",
+    riskLevel: "caution",
+    packetPath: packet.packetPath,
+    packetJsonPath: packet.packetJsonPath,
+    packetFingerprint: packet.packetFingerprint,
+    attempts,
+  });
+  round.aggregate = aggregateAutoModeDiscussionRound(round, policy.autoGate.quorum);
+  round.status = round.aggregate.status;
+  await saveAutoModeDiscussionStore(projectRoot, {
+    schemaVersion: 1,
+    updatedAt: "2026-05-11T00:01:00.000Z",
+    roundsStartedByFingerprint: {
+      [packet.packetFingerprint]: 1,
+    },
+    currentRound: round,
+  });
+
+  const fallback = await maybeAdvanceAutoModeDiscussionForProject({
+    workflowRuntime: {
+      async run() {
+        throw new Error("should not relaunch a token-auth-failed discussion");
+      },
+    },
+    workflowPolicy: policy,
+    projectRoot,
+    projectId: "alpha",
+    autoIteratorResult,
+    deps,
+  });
+
+  assert.equal(fallback.reason, "local_static_discussion_runtime_stale");
+  assert.equal(fallback.resolved, true);
+  const store = await readAutoModeDiscussionStore(projectRoot);
+  assert.equal(store.currentRound?.status, "resolved");
+  assert.equal(
+    store.currentRound?.attempts.every((attempt) =>
+      attempt.runId?.startsWith("local-auto-discussion:")
+    ),
+    true
+  );
 });
 
 test("maybeAdvanceAutoModeDiscussionForProject retires superseded runtime state when risk fingerprint changes", async (t) => {

@@ -8763,7 +8763,7 @@ test("auto iterator accepts mixed peripheral citation coverage when unrelated ci
   );
 });
 
-test("auto iterator keeps submit blocked until required five-pass scientific editing is ready", async (t) => {
+test("auto iterator keeps submit blocked until required six-pass scientific editing is ready", async (t) => {
   const projectRoot = await makeTempProject();
   t.after(async () => {
     await fs.rm(projectRoot, { recursive: true, force: true });
@@ -8778,11 +8778,12 @@ test("auto iterator keeps submit blocked until required five-pass scientific edi
     scientific_editing_required: true,
     scientific_editing_status: "pending",
     scientific_editing_passes: [
-      "clutter_reduction",
-      "agency_active_voice",
-      "logical_flow",
-      "terminology_consistency",
-      "numerical_consistency",
+      "pass_1_structure",
+      "pass_2_argumentation",
+      "pass_3_sentence_precision",
+      "pass_4_grammar_terminology",
+      "pass_5_typography_latex",
+      "pass_6_integrity_audit",
     ],
     scientific_editing_ledger_path: "academic_writer/SCIENTIFIC_EDIT_LEDGER.json",
     scientific_editing_report_path: "academic_writer/SCIENTIFIC_EDIT_REPORT.md",
@@ -8800,6 +8801,59 @@ test("auto iterator keeps submit blocked until required five-pass scientific edi
     result.missingStageSignals.some((signal) =>
       /scientific_editing_status/i.test(signal)
     ),
+    result.missingStageSignals.join("\n")
+  );
+});
+
+test("auto iterator keeps submit blocked when PaperGuru six-pass receipts are incomplete", async (t) => {
+  const projectRoot = await makeTempProject();
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await seedProjectReadyForSubmit(projectRoot);
+
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.writing_contract = {
+    ...(manifest.writing_contract ?? {}),
+    scientific_editing_required: true,
+    scientific_editing_status: "ready",
+    scientific_editing_passes: [
+      "pass_1_structure",
+      "pass_2_argumentation",
+      "pass_3_sentence_precision",
+      "pass_4_grammar_terminology",
+      "pass_5_typography_latex",
+      "pass_6_integrity_audit",
+    ],
+    scientific_editing_ledger_path: "academic_writer/SCIENTIFIC_EDIT_LEDGER.json",
+    scientific_editing_report_path: "academic_writer/SCIENTIFIC_EDIT_REPORT.md",
+  };
+  await writeJson(manifestPath, manifest);
+  await writeJson(path.join(projectRoot, "academic_writer", "SCIENTIFIC_EDIT_LEDGER.json"), {
+    pass_results: [
+      { pass_id: "pass_1_structure", status: "completed" },
+      { pass_id: "pass_2_argumentation", status: "completed" },
+    ],
+  });
+  await writeText(path.join(projectRoot, "academic_writer", "SCIENTIFIC_EDIT_REPORT.md"), "# report\n");
+
+  const result = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+  });
+
+  assert.equal(result.stageBefore, "submit");
+  assert.ok(
+    result.missingStageSignals.some((signal) =>
+      /PaperGuru six-pass ledger must contain completed pass_results/i.test(signal)
+    ),
+    result.missingStageSignals.join("\n")
+  );
+  assert.ok(
+    result.missingStageSignals.some((signal) => /compile receipt/i.test(signal)),
     result.missingStageSignals.join("\n")
   );
 });
@@ -9363,6 +9417,120 @@ test("auto iterator downgrades only after mitigation rounds are exhausted for th
       /Auto discussion rounds were exhausted without resolving the current risk/i.test(
         reason
       )
+    )
+  );
+});
+
+test("auto iterator honors resolved auto-mode discussions after risk fingerprint normalization changes", async (t) => {
+  const projectRoot = await makeTempProject();
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await seedProjectReadyForCode(projectRoot);
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.current_stage = "experiment";
+  manifest.current_micro_stage = "experiment_launch_requested";
+  manifest.owner_agent = "researcher";
+  manifest.innovation_reflection = {
+    required_after_experiments: true,
+    status: "missing",
+    last_reflection_at: null,
+    last_reflection_path: null,
+    reflected_through_experiment_update_at: null,
+    reflected_experiment_ids: [],
+  };
+  manifest.experiment_search = {
+    status: "searching",
+    current_main_stage: "local_execution_reconciled",
+    current_substage: "candidate_discarded",
+    last_decision: "continue_tuning",
+    multi_seed_status: "pending",
+    baseline_fairness_status: "ready",
+    implementation_confidence: "trusted",
+    search_exhaustion_status: "unknown",
+    ablation_status: "pending",
+    plot_pack_status: "complete",
+  };
+  await writeJson(manifestPath, manifest);
+
+  const firstResult = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+    policy: {
+      autoMode: "aggressive",
+      autoGate: {
+        ...defaultAutoGateConfig(),
+        enabled: true,
+      },
+    },
+  });
+  assert.equal(firstResult.stageAfter, "experiment");
+  assert.equal(firstResult.autoModeRiskLevel, "caution");
+  assert.ok(firstResult.autoModeRiskFingerprint);
+  assert.equal(firstResult.autoModeMitigationStatus, null);
+
+  const legacyFingerprint = "legacy-risk-fingerprint";
+  const packetJsonPath = path.join(
+    projectRoot,
+    "reviewer",
+    "auto-mode-discussion",
+    "AUTO_MODE_DISCUSSION_PACKET.json"
+  );
+  const packetPath = path.join(
+    projectRoot,
+    "reviewer",
+    "auto-mode-discussion",
+    "AUTO_MODE_DISCUSSION_PACKET.md"
+  );
+  await writeJson(packetJsonPath, {
+    stage: "experiment",
+    riskLevel: "caution",
+    riskFingerprint: legacyFingerprint,
+    riskReasons: ["Innovation reflection is missing."],
+    missingStageSignals: [],
+  });
+  await writeText(packetPath, "# Auto Mode Discussion\n");
+  const round = createAutoModeDiscussionRound({
+    stage: "experiment",
+    riskLevel: "caution",
+    packetPath,
+    packetJsonPath,
+    packetFingerprint: legacyFingerprint,
+    attempts: [],
+  });
+  round.status = "resolved";
+  await saveAutoModeDiscussionStore(projectRoot, {
+    schemaVersion: 1,
+    updatedAt: "2026-05-11T16:20:00.000Z",
+    roundsStartedByFingerprint: {
+      [legacyFingerprint]: 1,
+    },
+    currentRound: round,
+  });
+
+  const secondResult = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+    policy: {
+      autoMode: "aggressive",
+      autoGate: {
+        ...defaultAutoGateConfig(),
+        enabled: true,
+      },
+    },
+  });
+
+  assert.equal(secondResult.autoModeRiskFingerprint, firstResult.autoModeRiskFingerprint);
+  assert.equal(secondResult.autoModeMitigationStatus, "resolved");
+  assert.equal(secondResult.autoModeMitigationRoundsStarted, 1);
+  assert.equal(secondResult.effectiveAutoMode, "aggressive");
+  assert.ok(
+    secondResult.autoModeReasons.some((reason) =>
+      /Auto discussion panel resolved the current risk/i.test(reason)
     )
   );
 });
@@ -10199,6 +10367,76 @@ test("auto iterator uses local static code review fallback when configured for n
   assert.equal(store.currentRound?.status, "approved");
   assert.equal(store.currentRound?.aggregate?.approved, true);
   assert.equal(store.currentRound?.aggregate?.reviewCount, 3);
+});
+
+test("auto iterator uses local static code review fallback when no runtime review ever starts", async (t) => {
+  const projectRoot = await makeTempProject();
+  const previousFallback = process.env.OPENCLAW_CODE_REVIEW_LOCAL_FALLBACK_AFTER_MS;
+  process.env.OPENCLAW_CODE_REVIEW_LOCAL_FALLBACK_AFTER_MS = "15000";
+  t.after(async () => {
+    if (previousFallback == null) {
+      delete process.env.OPENCLAW_CODE_REVIEW_LOCAL_FALLBACK_AFTER_MS;
+    } else {
+      process.env.OPENCLAW_CODE_REVIEW_LOCAL_FALLBACK_AFTER_MS = previousFallback;
+    }
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  const { trackId } = await seedProjectReadyForCode(projectRoot);
+  await writeText(path.join(projectRoot, "coder", "EXPERIMENT_INDEX.md"));
+  await writeText(
+    path.join(
+      projectRoot,
+      "coder",
+      "experiments",
+      trackId,
+      "exp-1__baseline",
+      "train.py"
+    ),
+    "print('ok')\n"
+  );
+  await writeText(
+    path.join(
+      projectRoot,
+      "coder",
+      "experiments",
+      trackId,
+      "exp-1__baseline",
+      "README.md"
+    )
+  );
+  await writeJson(
+    path.join(
+      projectRoot,
+      "coder",
+      "experiments",
+      trackId,
+      "exp-1__baseline",
+      "EXPERIMENT_MANIFEST.json"
+    ),
+    buildAlignedExperimentManifest(trackId)
+  );
+
+  const autoGate = {
+    ...defaultAutoGateConfig(),
+    enabled: true,
+  };
+  const result = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+    policy: {
+      autoMode: "aggressive",
+      autoGate,
+    },
+  });
+
+  assert.equal(result.stageBefore, "code");
+  assert.equal(result.stageAfter, "experiment");
+  assert.equal(result.gateBlocking, false);
+  const store = await readCodeReviewStore(projectRoot);
+  assert.equal(store.currentRound?.status, "approved");
+  assert.equal(store.currentRound?.aggregate?.approved, true);
 });
 
 test("auto iterator advances code to experiment when aggressive code innovation review is approved", async (t) => {

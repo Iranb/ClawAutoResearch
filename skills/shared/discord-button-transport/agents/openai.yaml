@@ -1,0 +1,4 @@
+interface:
+  display_name: "Discord Button Transport"
+  short_description: "Route Discord buttons and selects safely"
+  default_prompt: "Use $discord-button-transport to present safe Discord buttons or dropdown choices for AutoResearch."

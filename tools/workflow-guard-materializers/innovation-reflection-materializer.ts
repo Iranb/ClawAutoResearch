@@ -209,7 +209,10 @@ export async function shouldMaterializeInnovationReflection(params: {
   manifest: ManifestLike;
   stage: string | null;
 }): Promise<boolean> {
-  if (!params.stage || !["idea", "plan", "review", "write", "submit"].includes(params.stage)) {
+  if (
+    !params.stage ||
+    !["frontier_mapping", "idea", "plan", "review", "write", "submit"].includes(params.stage)
+  ) {
     return false;
   }
   const ledger = await readJsonIfExists<Record<string, unknown>>(

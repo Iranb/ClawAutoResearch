@@ -42,6 +42,10 @@ import {
   DEFAULT_EXPERIMENT_SEARCH_SPEC_PATH,
   normalizeExperimentSearchSpec,
 } from "../workflow-guard-state/experiment-search-spec";
+import {
+  AUTORESEARCH_LOOP_STATE_PATH,
+  recordAutoResearchAdvanceDecision,
+} from "../autoresearch-loop-state";
 
 type ManifestLike = Record<string, unknown>;
 
@@ -684,7 +688,8 @@ export async function materializeLocalExperimentExecutionImpl(params: {
     asRecord(rawSummary.keyMetric);
   const primaryMetricName = pickString(rawPrimaryMetric ?? {}, ["name"]) ?? "h_score";
   const primaryMetricValue = pickNumber(rawPrimaryMetric ?? {}, ["value"]) ?? metrics.h_score;
-  const lastTrialOutcome = metrics.delta_h_score >= 0 ? "keep" : "discard";
+  const candidatePromoted = metrics.delta_h_score > 0;
+  const lastTrialOutcome = candidatePromoted ? "keep" : "discard";
   const measuredTrialDurationMinutes =
     deriveMeasuredTrialDurationMinutes({
       ledgerLike: {
@@ -837,9 +842,9 @@ export async function materializeLocalExperimentExecutionImpl(params: {
     proposed: asRecord(enrichedSummary.proposed) ?? null,
     ablations: asRecord(enrichedSummary.ablations) ?? {},
     conclusion:
-      metrics.delta_h_score >= 0
+      candidatePromoted
         ? "The local reference GCD benchmark supports advancing the FixMatch-inspired consistency bundle to analysis."
-        : "The local reference GCD benchmark completed but does not support a positive claim without more repair.",
+        : "The local reference GCD benchmark completed without a positive primary-metric improvement; discard this candidate and continue bounded search.",
     result_summary_path: toRelativeProjectPath(projectRoot, researcherResultPath),
   };
   await writeJsonEnsured(evaluationSummaryPath, evaluationSummary);
@@ -880,7 +885,7 @@ export async function materializeLocalExperimentExecutionImpl(params: {
   await writeJsonEnsured(karpathyLoopPath, {
     schema_version: 1,
     generated_at: now,
-    status: "completed",
+    status: candidatePromoted ? "completed" : "running",
     mode: innerLoop.mode,
     search_spec_path: searchSpec.relativePath,
     search_session_id: normalizedSpec.searchSessionId,
@@ -904,7 +909,7 @@ export async function materializeLocalExperimentExecutionImpl(params: {
     innovation_deviation: innovationDeviation,
     result_summary_path: toRelativeProjectPath(projectRoot, researcherResultPath),
     next_action:
-      lastTrialOutcome === "keep"
+      candidatePromoted
         ? "Promote this candidate to analysis evidence."
         : "Discard this candidate and keep searching inside the bounded envelope.",
   });
@@ -913,18 +918,28 @@ export async function materializeLocalExperimentExecutionImpl(params: {
   await writeJsonEnsured(stageProgressPath, {
     schema_version: 1,
     generated_at: now,
-    status: "ready_for_analysis",
+    status: candidatePromoted ? "ready_for_analysis" : "continue_tuning",
     experiment_id: experimentId,
     bundle: bundle.bundleRelativeDir,
-    completed_steps: [
-      "local_train_script_completed",
-      "result_summary_recorded",
-      "ledger_reconciled",
-      "karpathy_inner_loop_completed",
-      "keep_discard_decision_recorded",
-      "experiment_search_ready_for_analysis",
-    ],
-    next_action: "Run /analyze using the reconciled local experiment evidence.",
+    completed_steps: candidatePromoted
+      ? [
+          "local_train_script_completed",
+          "result_summary_recorded",
+          "ledger_reconciled",
+          "karpathy_inner_loop_completed",
+          "keep_discard_decision_recorded",
+          "experiment_search_ready_for_analysis",
+        ]
+      : [
+          "local_train_script_completed",
+          "result_summary_recorded",
+          "ledger_reconciled",
+          "keep_discard_decision_recorded",
+          "candidate_discarded_without_metric_gain",
+        ],
+    next_action: candidatePromoted
+      ? "Run /analyze using the reconciled local experiment evidence."
+      : "Run /search-experiment or /experiment-phase to try the next graph-grounded candidate.",
   });
   generatedFiles.push(DEFAULT_STAGE_PROGRESS_PATH);
 
@@ -1011,7 +1026,7 @@ export async function materializeLocalExperimentExecutionImpl(params: {
       completed_at: now,
       updated_at: now,
       last_updated_by: params.agentId ?? "workflow_local_experiment_materializer",
-      decision: metrics.delta_h_score >= 0 ? "advance" : "needs_repair",
+      decision: candidatePromoted ? "advance" : "discard",
       key_metric: {
         name: primaryMetricName,
         value: primaryMetricValue,
@@ -1095,12 +1110,12 @@ export async function materializeLocalExperimentExecutionImpl(params: {
   ]);
   const nextSearch = normalizeExperimentSearchState({
     ...previousSearchRecord,
-    status: "ready_for_analysis",
+    status: candidatePromoted ? "ready_for_analysis" : "searching",
     project_id: projectId,
     track_id: trackId ?? searchState.trackId,
     current_main_stage: "local_execution_reconciled",
-    current_substage: "analysis_ready",
-    validation_stage: "analysis_ready",
+    current_substage: candidatePromoted ? "analysis_ready" : "candidate_discarded",
+    validation_stage: candidatePromoted ? "analysis_ready" : "local_hparam_search",
     inner_loop_mode: innerLoop.mode,
     trial_time_budget_minutes: innerLoop.trialTimeBudgetMinutes,
     strict_comparable_budget: innerLoop.strictComparableBudget,
@@ -1113,16 +1128,21 @@ export async function materializeLocalExperimentExecutionImpl(params: {
     search_session_id: searchState.searchSessionId ?? normalizedSpec.searchSessionId,
     search_spec_path: searchState.searchSpecPath ?? searchSpec.relativePath,
     search_state_path: searchState.searchStatePath ?? DEFAULT_EXPERIMENT_SEARCH_PATH,
-    incumbent_experiment_id: searchState.incumbentExperimentId ?? experimentId,
+    incumbent_experiment_id: candidatePromoted
+      ? searchState.incumbentExperimentId ?? experimentId
+      : searchState.incumbentExperimentId,
     last_candidate_experiment_id: experimentId,
     completed_experiment_ids: completedExperimentIds,
+    discarded_experiment_ids: candidatePromoted
+      ? searchState.discardedExperimentIds
+      : uniqueStrings([...searchState.discardedExperimentIds, experimentId]),
     completed_ablations: completedAblations,
-    multi_seed_status: "complete",
+    multi_seed_status: candidatePromoted ? "complete" : searchState.multiSeedStatus,
     baseline_fairness_status: "ready",
     implementation_confidence: "trusted",
-    ablation_status: "ready",
-    innovation_status: metrics.delta_h_score >= 0 ? "supported" : "fragile",
-    decision_confidence: "local_reference",
+    ablation_status: candidatePromoted ? "ready" : searchState.ablationStatus,
+    innovation_status: candidatePromoted ? "supported" : "unsupported",
+    decision_confidence: candidatePromoted ? "local_reference" : "primary_metric_no_gain",
     evidence_cleanliness_status: "ready",
     baseline_dataset_envelope: baselineDatasetEnvelope,
     validated_dataset_envelope: validatedDatasetEnvelope,
@@ -1142,7 +1162,7 @@ export async function materializeLocalExperimentExecutionImpl(params: {
     plot_pack_status: "complete",
     plot_pack_path: DEFAULT_PLOT_PACK_PATH,
     stage_progress_path: DEFAULT_STAGE_PROGRESS_PATH,
-    last_decision: metrics.delta_h_score >= 0 ? "advance" : "needs_repair",
+    last_decision: candidatePromoted ? "advance" : "continue_tuning",
     last_updated_at: now,
   });
   const serializedSearch = serializeExperimentSearchState(nextSearch);
@@ -1154,10 +1174,15 @@ export async function materializeLocalExperimentExecutionImpl(params: {
     ledger_path: "researcher/EXPERIMENT_LEDGER.json",
     last_ledger_update_at: now,
     last_completed_experiment_id: experimentId,
-    best_known_config_ref: bundle.bundleRelativeDir,
-    last_decision_summary: `${experimentId}: ${metrics.delta_h_score >= 0 ? "advance" : "needs_repair"}`,
+    best_known_config_ref: candidatePromoted
+      ? bundle.bundleRelativeDir
+      : pickString(asRecord(manifest.experiment_memory) ?? {}, [
+          "best_known_config_ref",
+          "bestKnownConfigRef",
+        ]),
+    last_decision_summary: `${experimentId}: ${candidatePromoted ? "advance" : "discard_no_metric_gain"}`,
     karpathy_inner_loop_path: DEFAULT_KARPATHY_LOOP_PATH,
-    karpathy_inner_loop_status: "completed",
+    karpathy_inner_loop_status: candidatePromoted ? "completed" : "running",
     karpathy_keep_discard_decision: lastTrialOutcome,
     papernexus_sync_status: "not_required",
     papernexus_sync_required: false,
@@ -1165,7 +1190,7 @@ export async function materializeLocalExperimentExecutionImpl(params: {
   const isTopTierBet =
     normalizeStage(pickString(asRecord(manifest.opportunity_scorecard) ?? {}, ["verdict"])) ===
     "worth_top_tier_bet";
-  if (!isTopTierBet) {
+  if (!isTopTierBet && candidatePromoted) {
     manifest.benchmark_protocol = {
       ...(asRecord(manifest.benchmark_protocol) ?? {}),
       status: "ready",
@@ -1195,6 +1220,14 @@ export async function materializeLocalExperimentExecutionImpl(params: {
   manifest.updated_at = now;
   await writeJsonEnsured(manifestPath, manifest);
   generatedFiles.push("PROJECT_MANIFEST.json");
+  await recordAutoResearchAdvanceDecision({
+    projectRoot,
+    targetStage: "analyze",
+    manifest,
+    operationId: `local_experiment:${experimentId}:${now}`,
+    agentId: params.agentId ?? "workflow_local_experiment_materializer",
+  });
+  generatedFiles.push(AUTORESEARCH_LOOP_STATE_PATH);
 
   const proof = await materializeExecutionProofState({ projectRoot });
   generatedFiles.push(...proof.generatedFiles);

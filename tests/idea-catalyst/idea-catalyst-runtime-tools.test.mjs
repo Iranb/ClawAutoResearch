@@ -1349,6 +1349,99 @@ test("stage preflight materializes idea_catalyst after ideation_contract becomes
   assert.ok(result.materializedContracts.includes("idea_catalyst"));
 });
 
+test("stage preflight queues an IDEA-CATALYST requisition materialized in the same pass", async (t) => {
+  const projectRoot = await makeCatalystProjectRoot();
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  delete manifest.idea_catalyst;
+  await writeJson(manifestPath, manifest);
+
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  let materialized = 0;
+  let queued = 0;
+  const result = await maybePrepareWorkflowStageContracts({
+    projectRoot,
+    manifest,
+    stage: "idea",
+    agentId: "researcher",
+    trigger: "test",
+    deps: {
+      materializeIdeationContract: async () => ({ ok: true }),
+      materializePaperStoryState: async () => ({ ok: true }),
+      materializeReviewPressurePacket: async () => ({ ok: true }),
+      materializeLiteratureDiscoveryPacket: async () => ({ ok: true }),
+      queueLiteratureDiscoveryRequisition: async () => ({ ok: true }),
+      materializeIdeaCatalystState: async () => {
+        materialized += 1;
+        const nextManifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+        nextManifest.idea_catalyst = {
+          status: "requisition",
+          micro_stage: "gatekeeping",
+          requisition_required: true,
+          investigation_requisition_path:
+            "researcher/idea-catalyst/INVESTIGATION_REQUISITION.json",
+          pending_reason:
+            "Cross-domain bridge evidence needs a bounded graph reentry pass.",
+        };
+        await writeJson(manifestPath, nextManifest);
+        await writeJson(
+          path.join(
+            projectRoot,
+            "researcher",
+            "idea-catalyst",
+            "INVESTIGATION_REQUISITION.json"
+          ),
+          {
+            requisition_id: "req-same-pass",
+            actionable: true,
+            target_domain: "Computer Science",
+            missing_domains: ["Control Theory"],
+            challenge_clusters: ["threshold stability"],
+            coverage_gap_questions: [
+              {
+                question_id: "q1",
+                question: "How should adaptive thresholds avoid confirmation bias?",
+                coverage_status: "partial",
+                required_domain_evidence: ["Control Theory"],
+              },
+            ],
+            search_queries: [
+              {
+                domain: "Control Theory",
+                query: "adaptive threshold stability transferable principle",
+              },
+            ],
+            minimum_bridge_nodes: 1,
+            retry_budget: 1,
+            required_stage_reentry: ["graph_build", "frontier_mapping", "idea"],
+          }
+        );
+        return {
+          generatedFiles: [
+            "researcher/idea-catalyst/INVESTIGATION_REQUISITION.json",
+          ],
+        };
+      },
+      queueIdeaCatalystRequisition: async () => {
+        queued += 1;
+        return {
+          generatedFiles: [
+            "researcher/idea-catalyst/requisition/req-same-pass/CATALYST_REQUISITION.json",
+          ],
+        };
+      },
+    },
+  });
+
+  assert.equal(materialized, 1);
+  assert.equal(queued, 1);
+  assert.ok(result.materializedContracts.includes("idea_catalyst"));
+  assert.ok(result.materializedContracts.includes("idea_catalyst_requisition"));
+});
+
 test("stage preflight reconciles a satisfied IDEA-CATALYST requisition before deciding whether to requeue or block idea", async (t) => {
   const projectRoot = await makeCatalystProjectRoot();
   const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");

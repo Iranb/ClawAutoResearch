@@ -38,6 +38,10 @@ import { summarizeEvidenceCloseoutState } from "../workflow-evidence/closeout-su
 import { evaluateExperimentSearchDecision } from "../workflow-experiment-decision";
 import { normalizeWritingContractState } from "../workflow-guard-state/writing-contract";
 import {
+  buildWorkflowAutoModeRiskFingerprint,
+  type WorkflowAutoModeRiskLevel,
+} from "../workflow-auto-mode";
+import {
   getWorkflowTaskGraphPath,
   materializeWorkflowTaskGraph,
   readWorkflowTaskGraphStore,
@@ -82,6 +86,9 @@ type AutoModeRiskEvaluationLike = {
 type AutoModeDiscussionStoreLike = {
   currentRound?: {
     packetFingerprint?: string | null;
+    packetJsonPath?: string | null;
+    stage?: string | null;
+    riskLevel?: string | null;
     status?: string | null;
   } | null;
   roundsStartedByFingerprint?: Record<string, number>;
@@ -103,6 +110,66 @@ type GateEvaluationLike = {
   reason: string | null;
   timedDefaultTriggered: boolean;
 };
+
+function normalizeAutoModeRiskLevel(
+  value: unknown
+): WorkflowAutoModeRiskLevel | null {
+  const riskLevel = normalizeStage(value);
+  return riskLevel === "stable" || riskLevel === "caution" || riskLevel === "severe"
+    ? riskLevel
+    : null;
+}
+
+function collectStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.filter(
+    (entry): entry is string => typeof entry === "string" && Boolean(entry.trim())
+  );
+}
+
+async function isSemanticallyEquivalentAutoModeDiscussionRound(params: {
+  projectRoot: string;
+  round: NonNullable<NonNullable<AutoModeDiscussionStoreLike>["currentRound"]>;
+  riskEvaluation: AutoModeRiskEvaluationLike;
+  stage: string | null;
+}): Promise<boolean> {
+  if (!params.riskEvaluation.riskFingerprint) {
+    return false;
+  }
+  const packetJsonPath = asString(params.round.packetJsonPath);
+  if (packetJsonPath) {
+    const resolvedPacketPath = path.isAbsolute(packetJsonPath)
+      ? packetJsonPath
+      : resolveProjectArtifactPath(params.projectRoot, packetJsonPath) ??
+        path.resolve(params.projectRoot, packetJsonPath);
+    const packet = asRecord(
+      await readJsonIfExists<Record<string, unknown>>(resolvedPacketPath)
+    );
+    const packetRiskLevel = packet
+      ? normalizeAutoModeRiskLevel(packet.riskLevel)
+      : null;
+    if (packet && packetRiskLevel) {
+      const packetFingerprint = buildWorkflowAutoModeRiskFingerprint({
+        stage: asString(packet.stage) ?? params.stage,
+        riskLevel: packetRiskLevel,
+        reasons: collectStringArray(packet.riskReasons),
+        missingStageSignals: collectStringArray(packet.missingStageSignals),
+      });
+      if (packetFingerprint === params.riskEvaluation.riskFingerprint) {
+        return true;
+      }
+    }
+  }
+
+  const roundRiskLevel = normalizeAutoModeRiskLevel(params.round.riskLevel);
+  return (
+    normalizeStage(params.round.stage) === normalizeStage(params.stage) &&
+    roundRiskLevel === params.riskEvaluation.riskLevel &&
+    params.round.status === "resolved"
+  );
+}
 
 function hasOutstandingGraphBuildIngestionWork(
   manifest: ManifestLike | null | undefined
@@ -1746,15 +1813,39 @@ export async function runWorkflowAutoIteratorImpl(
     autoModeRiskEvaluation.riskFingerprint && autoModeRiskEvaluation.riskLevel !== "stable"
       ? await deps.readAutoModeDiscussionStore(projectRoot)
       : null;
-  const autoModeDiscussionRound =
+  let autoModeDiscussionRound =
     autoModeDiscussionStore?.currentRound?.packetFingerprint ===
     autoModeRiskEvaluation.riskFingerprint
       ? autoModeDiscussionStore.currentRound
       : null;
+  let autoModeDiscussionRoundsFingerprint =
+    autoModeDiscussionRound?.packetFingerprint ?? autoModeRiskEvaluation.riskFingerprint;
+  if (
+    !autoModeDiscussionRound &&
+    autoModeDiscussionStore?.currentRound &&
+    (await isSemanticallyEquivalentAutoModeDiscussionRound({
+      projectRoot,
+      round: autoModeDiscussionStore.currentRound,
+      riskEvaluation: autoModeRiskEvaluation,
+      stage: stageEffective,
+    }))
+  ) {
+    autoModeDiscussionRound = autoModeDiscussionStore.currentRound;
+    autoModeDiscussionRoundsFingerprint =
+      autoModeDiscussionRound.packetFingerprint ?? autoModeRiskEvaluation.riskFingerprint;
+  }
   const autoModeMitigationRoundsStarted = autoModeRiskEvaluation.riskFingerprint
-    ? autoModeDiscussionStore?.roundsStartedByFingerprint?.[
-        autoModeRiskEvaluation.riskFingerprint
-      ] ?? 0
+    ? Math.max(
+        autoModeDiscussionStore?.roundsStartedByFingerprint?.[
+          autoModeRiskEvaluation.riskFingerprint
+        ] ?? 0,
+        autoModeDiscussionRoundsFingerprint &&
+          autoModeDiscussionRoundsFingerprint !== autoModeRiskEvaluation.riskFingerprint
+          ? autoModeDiscussionStore?.roundsStartedByFingerprint?.[
+              autoModeDiscussionRoundsFingerprint
+            ] ?? 0
+          : 0
+      )
     : 0;
   const autoModeEvaluation = deps.resolveEffectiveWorkflowAutoMode({
     configuredMode: configuredAutoMode,

@@ -3525,6 +3525,22 @@ export async function maybePrepareWorkflowStageContracts(params: {
       errors.push({ contract, message });
     }
   };
+  let ideaCatalystRequisitionQueuedThisPreflight = false;
+  const runIdeaCatalystRequisitionStep = () =>
+    runStep(
+      "idea_catalyst_requisition",
+      async (input) =>
+        !ideaCatalystRequisitionQueuedThisPreflight &&
+        (await shouldQueueIdeaCatalystRequisition(input)),
+      async () => {
+        ideaCatalystRequisitionQueuedThisPreflight = true;
+        return params.deps.queueIdeaCatalystRequisition({
+          projectRoot,
+          trigger,
+          agentId: params.agentId ?? null,
+        });
+      }
+    );
 
   await runStep("papernexus_packet_contracts", shouldMaterializePapernexusPacketContracts, () =>
     (params.deps.materializePapernexusPacketContracts ?? materializePapernexusPacketContracts)({
@@ -3564,13 +3580,7 @@ export async function maybePrepareWorkflowStageContracts(params: {
       agentId: params.agentId ?? null,
     })
   );
-  await runStep("idea_catalyst_requisition", shouldQueueIdeaCatalystRequisition, () =>
-    params.deps.queueIdeaCatalystRequisition({
-      projectRoot,
-      trigger,
-      agentId: params.agentId ?? null,
-    })
-  );
+  await runIdeaCatalystRequisitionStep();
   await runStep("idea_catalyst", shouldMaterializeIdeaCatalyst, () =>
     params.deps.materializeIdeaCatalystState({
       projectRoot,
@@ -3581,6 +3591,7 @@ export async function maybePrepareWorkflowStageContracts(params: {
       },
     })
   );
+  await runIdeaCatalystRequisitionStep();
   await runStep("plan_state", shouldMaterializePlanState, () =>
     (params.deps.materializePlanState ?? materializePlanStateImpl)({
       projectRoot,

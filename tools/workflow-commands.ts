@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import type {
   OpenClawPluginCommandDefinition,
   PluginCommandContext,
@@ -116,6 +117,8 @@ import {
 import { buildWorkflowStatusPresentation } from "./workflow-commands/presentation.js";
 import { defaultResearchProgramZoteroProjectPath } from "./workflow-guard-project-state";
 import { sanitizeProjectIdFragment } from "./workflow-guard-project/project-context";
+
+const nodeRequire = createRequire(import.meta.url);
 
 // Re-export public APIs from submodules
 export {
@@ -332,8 +335,7 @@ function getConversationRuntime() {
     return cachedConversationRuntime;
   }
   try {
-    const require = createRequire(import.meta.url);
-    cachedConversationRuntime = require("openclaw/plugin-sdk/conversation-runtime");
+    cachedConversationRuntime = nodeRequire("openclaw/plugin-sdk/conversation-runtime");
   } catch {
     cachedConversationRuntime = null;
   }
@@ -544,6 +546,10 @@ const SHOW_COMMANDS_ENTRIES: readonly ShowCommandsEntry[] = [
     intro: "列出当前可用的 slash commands 和用途说明。",
   },
   {
+    label: COMMAND_LABELS.autoresearch_panel,
+    intro: "发送固定频道控制面板：Status、Resume、Graph、Handoff、Commands。",
+  },
+  {
     label: COMMAND_LABELS.discord_buttons_test,
     intro: "发送一条 Discord-native reusable 测试面板；按钮只回发测试消息，不推进 workflow。",
   },
@@ -584,10 +590,330 @@ function formatShowCommandsText(): string {
   return lines.join("\n");
 }
 
+function buildUnauthorizedDiscordActionText(commandLabel: string): string {
+  return (
+    `⛔ ${commandLabel} 是 workflow 控制操作，当前 Discord 用户没有执行权限。\n` +
+    "你仍然可以使用 /workflow-status 查看当前状态；需要推进 workflow 时请让频道 operator 点击控制按钮。"
+  );
+}
+
+function ensureAuthorizedDiscordWorkflowAction(
+  ctx: Pick<PluginCommandContext, "channel" | "isAuthorizedSender">,
+  commandLabel: string
+) {
+  if (ctx.channel === "discord" && ctx.isAuthorizedSender === false) {
+    return {
+      text: buildUnauthorizedDiscordActionText(commandLabel),
+    };
+  }
+  return null;
+}
+
+type DiscordNativeButtonStyle = "primary" | "secondary" | "success" | "danger";
+
+type DiscordNativeButtonSpec = {
+  id: string;
+  label: string;
+  style?: DiscordNativeButtonStyle;
+  callbackData: string;
+};
+
+type DiscordSerializableComponent = {
+  isV2?: boolean;
+  serialize: () => unknown;
+};
+
+type DiscordComponentRegistryEntry = {
+  id: string;
+  kind: "button";
+  label: string;
+  callbackData: string;
+  reusable?: boolean;
+  sessionKey?: string;
+  accountId?: string;
+  createdAt?: number;
+  expiresAt?: number;
+};
+
+type DiscordComponentBuildResult = {
+  components: DiscordSerializableComponent[];
+  entries: DiscordComponentRegistryEntry[];
+  modals: [];
+};
+
+type DiscordComponentRegistrationFacade = {
+  registerBuiltDiscordComponentMessage?: (params: {
+    buildResult: DiscordComponentBuildResult;
+    messageId?: string;
+  }) => void;
+};
+
+const DISCORD_COMPONENT_TYPE_ACTION_ROW = 1;
+const DISCORD_COMPONENT_TYPE_BUTTON = 2;
+const DISCORD_BUTTON_STYLE_VALUES: Record<DiscordNativeButtonStyle, number> = {
+  primary: 1,
+  secondary: 2,
+  success: 3,
+  danger: 4,
+};
+
+let cachedDiscordComponentRegistrationFacade:
+  | Promise<DiscordComponentRegistrationFacade | null>
+  | null
+  | undefined;
+
+const runtimeImport = new Function("specifier", "return import(specifier)") as (
+  specifier: string
+) => Promise<unknown>;
+
+export const AUTORESEARCH_DISCORD_PANEL_COMPONENT_REFRESH_INTERVAL_MS = 20 * 60 * 1000;
+const AUTORESEARCH_DISCORD_PANEL_COMPONENT_REGISTRY_TTL_MS = 24 * 60 * 60 * 1000;
+
+function resolveDiscordFacadeImportSpecifiers(): string[] {
+  const specifiers = ["openclaw/plugin-sdk/discord"];
+  const openclawDistEntry = process.argv.find((entry) =>
+    /(?:^|[/\\])openclaw[/\\]dist[/\\]index\.js$/i.test(entry)
+  );
+  if (openclawDistEntry) {
+    const openclawRoot = path.dirname(path.dirname(openclawDistEntry));
+    specifiers.push(
+      pathToFileURL(path.join(openclawRoot, "dist", "plugin-sdk", "discord.js")).href
+    );
+  }
+  return Array.from(new Set(specifiers));
+}
+
+async function importDiscordComponentRegistrationFacade(): Promise<DiscordComponentRegistrationFacade | null> {
+  for (const specifier of resolveDiscordFacadeImportSpecifiers()) {
+    try {
+      return (await runtimeImport(specifier)) as DiscordComponentRegistrationFacade;
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
+
+async function getDiscordComponentRegistrationFacade(): Promise<DiscordComponentRegistrationFacade | null> {
+  if (cachedDiscordComponentRegistrationFacade !== undefined) {
+    return cachedDiscordComponentRegistrationFacade;
+  }
+  cachedDiscordComponentRegistrationFacade = importDiscordComponentRegistrationFacade();
+  return cachedDiscordComponentRegistrationFacade;
+}
+
+function buildDiscordComponentCustomId(componentId: string): string {
+  return `occomp:cid=${componentId}`;
+}
+
+function createDiscordActionRowComponent(
+  buttons: DiscordNativeButtonSpec[]
+): DiscordSerializableComponent {
+  return {
+    isV2: false,
+    serialize: () => ({
+      type: DISCORD_COMPONENT_TYPE_ACTION_ROW,
+      components: buttons.map((button) => ({
+        type: DISCORD_COMPONENT_TYPE_BUTTON,
+        style: DISCORD_BUTTON_STYLE_VALUES[button.style ?? "secondary"],
+        label: button.label,
+        custom_id: buildDiscordComponentCustomId(button.id),
+      })),
+    }),
+  };
+}
+
+function readOptionalDiscordRouteValue(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+async function registerDiscordNativeButtonComponents(params: {
+  components: DiscordSerializableComponent[];
+  entries: DiscordComponentRegistryEntry[];
+  logger?: Pick<WorkflowCommandApi["logger"], "debug" | "warn">;
+}): Promise<boolean> {
+  const register =
+    (await getDiscordComponentRegistrationFacade())?.registerBuiltDiscordComponentMessage;
+  if (!register) {
+    params.logger?.warn?.("Discord component registry facade is unavailable.", {
+      componentIds: params.entries.map((entry) => entry.id),
+    });
+    return false;
+  }
+  try {
+    register({
+      buildResult: {
+        components: params.components,
+        entries: params.entries,
+        modals: [],
+      },
+    });
+    return true;
+  } catch {
+    // Local unit tests often run outside the OpenClaw runtime bundle. In the
+    // Gateway process this registration is what keeps clicks from expiring.
+    params.logger?.warn?.("Discord component registry registration failed.", {
+      componentIds: params.entries.map((entry) => entry.id),
+    });
+    return false;
+  }
+}
+
+function buildDiscordNativeButtonRegistryPayload(params: {
+  ctx: PluginCommandContext;
+  reusable: true;
+  buttons: DiscordNativeButtonSpec[];
+  ttlMs?: number;
+}): {
+  components: DiscordSerializableComponent[];
+  entries: DiscordComponentRegistryEntry[];
+} {
+  const routeCtx = params.ctx as PluginCommandContext & {
+    sessionKey?: string;
+  };
+  const sessionKey = readOptionalDiscordRouteValue(routeCtx.sessionKey);
+  const accountId = readOptionalDiscordRouteValue(params.ctx.accountId);
+  const components = [createDiscordActionRowComponent(params.buttons)];
+  const now = Date.now();
+  const expiresAt =
+    now + (params.ttlMs ?? AUTORESEARCH_DISCORD_PANEL_COMPONENT_REGISTRY_TTL_MS);
+  const entries: DiscordComponentRegistryEntry[] = params.buttons.map((button) => ({
+    id: button.id,
+    kind: "button",
+    label: button.label,
+    callbackData: button.callbackData,
+    reusable: params.reusable,
+    createdAt: now,
+    expiresAt,
+    ...(sessionKey ? { sessionKey } : {}),
+    ...(accountId ? { accountId } : {}),
+  }));
+
+  return { components, entries };
+}
+
+async function buildDiscordNativeButtonChannelData(params: {
+  ctx: PluginCommandContext;
+  reusable: true;
+  buttons: DiscordNativeButtonSpec[];
+  logger?: Pick<WorkflowCommandApi["logger"], "debug" | "warn">;
+}): Promise<Record<string, unknown>> {
+  const { components, entries } = buildDiscordNativeButtonRegistryPayload(params);
+
+  await registerDiscordNativeButtonComponents({
+    components,
+    entries,
+    logger: params.logger,
+  });
+
+  return {
+    components,
+    reusable: params.reusable,
+    componentEntries: entries.map(({ id, label, callbackData, reusable }) => ({
+      id,
+      label,
+      callbackData,
+      reusable,
+    })),
+  };
+}
+
+function createAutoresearchPanelButtonSpecs(): DiscordNativeButtonSpec[] {
+  return [
+    {
+      id: "autoresearch_panel_status",
+      label: "Status",
+      style: "primary",
+      callbackData: COMMAND_LABELS.workflow_status,
+    },
+    {
+      id: "autoresearch_panel_resume",
+      label: "Resume",
+      style: "secondary",
+      callbackData: COMMAND_LABELS.resume_pipeline,
+    },
+    {
+      id: "autoresearch_panel_graph",
+      label: "Graph",
+      style: "secondary",
+      callbackData: COMMAND_LABELS.graph_build,
+    },
+    {
+      id: "autoresearch_panel_handoff",
+      label: "Handoff",
+      style: "secondary",
+      callbackData: COMMAND_LABELS.handoff_status,
+    },
+    {
+      id: "autoresearch_panel_commands",
+      label: "Commands",
+      style: "secondary",
+      callbackData: COMMAND_LABELS.show_commands,
+    },
+  ];
+}
+
+export async function refreshAutoresearchDiscordPanelComponentRegistry(params: {
+  logger?: Pick<WorkflowCommandApi["logger"], "debug" | "warn">;
+  reason?: string;
+} = {}): Promise<boolean> {
+  const { components, entries } = buildDiscordNativeButtonRegistryPayload({
+    ctx: {
+      channel: "discord",
+      isAuthorizedSender: true,
+      commandBody: COMMAND_LABELS.autoresearch_panel,
+      config: {},
+      requestConversationBinding: async () => ({ status: "error" }),
+      detachConversationBinding: async () => ({ removed: false }),
+      getCurrentConversationBinding: async () => null,
+    },
+    reusable: true,
+    buttons: createAutoresearchPanelButtonSpecs(),
+  });
+  const registered = await registerDiscordNativeButtonComponents({
+    components,
+    entries,
+    logger: params.logger,
+  });
+  params.logger?.debug?.("AutoResearch Discord panel component registry refreshed.", {
+    reason: params.reason ?? "manual",
+    registered,
+    componentIds: entries.map((entry) => entry.id),
+  });
+  return registered;
+}
+
+function createAutoresearchPanelCommandHandler() {
+  return async (ctx: PluginCommandContext) => {
+    const unauthorized = ensureAuthorizedDiscordWorkflowAction(
+      ctx,
+      COMMAND_LABELS.autoresearch_panel
+    );
+    if (unauthorized) {
+      return unauthorized;
+    }
+
+    const text =
+      "AutoResearch 控制面板\n" +
+      "这个频道建议保持只读：普通成员查看状态，operator 使用按钮推进 workflow。";
+
+    return {
+      text,
+      channelData: {
+        discord: await buildDiscordNativeButtonChannelData({
+          ctx,
+          reusable: true,
+          buttons: createAutoresearchPanelButtonSpecs(),
+        }),
+      },
+    };
+  };
+}
+
 const DISCORD_BUTTON_TEST_PING_RE = /^--ping\s+([A-D])$/i;
 
 function createDiscordButtonsTestCommandHandler() {
-  return (ctx: PluginCommandContext) => {
+  return async (ctx: PluginCommandContext) => {
     const pingMatch = (ctx.args ?? "").trim().match(DISCORD_BUTTON_TEST_PING_RE);
     if (pingMatch) {
       return {
@@ -603,47 +929,36 @@ function createDiscordButtonsTestCommandHandler() {
     return {
       text,
       channelData: {
-        discord: {
-          components: {
-            reusable: true,
-            container: {
-              accentColor: 0x2f80ed,
+        discord: await buildDiscordNativeButtonChannelData({
+          ctx,
+          reusable: true,
+          buttons: [
+            {
+              id: "autoresearch_buttons_test_a",
+              label: "测试 A",
+              style: "primary",
+              callbackData: `${buttonCommand} --ping A`,
             },
-            blocks: [
-              {
-                type: "text",
-                text:
-                  "**AutoResearch Discord 按钮测试**\n" +
-                  "按钮只会在本频道发送测试消息，不会启动或推进 workflow。",
-              },
-              {
-                type: "actions",
-                buttons: [
-                  {
-                    label: "测试 A",
-                    style: "primary",
-                    callbackData: `${buttonCommand} --ping A`,
-                  },
-                  {
-                    label: "测试 B",
-                    style: "secondary",
-                    callbackData: `${buttonCommand} --ping B`,
-                  },
-                  {
-                    label: "测试 C",
-                    style: "secondary",
-                    callbackData: `${buttonCommand} --ping C`,
-                  },
-                  {
-                    label: "测试 D",
-                    style: "success",
-                    callbackData: `${buttonCommand} --ping D`,
-                  },
-                ],
-              },
-            ],
-          },
-        },
+            {
+              id: "autoresearch_buttons_test_b",
+              label: "测试 B",
+              style: "secondary",
+              callbackData: `${buttonCommand} --ping B`,
+            },
+            {
+              id: "autoresearch_buttons_test_c",
+              label: "测试 C",
+              style: "secondary",
+              callbackData: `${buttonCommand} --ping C`,
+            },
+            {
+              id: "autoresearch_buttons_test_d",
+              label: "测试 D",
+              style: "success",
+              callbackData: `${buttonCommand} --ping D`,
+            },
+          ],
+        }),
       },
     };
   };
@@ -958,6 +1273,10 @@ function createBackgroundWorkflowCommandHandler(
 ) {
   return async (ctx: PluginCommandContext) => {
     const commandLabel = COMMAND_LABELS[kind];
+    const unauthorized = ensureAuthorizedDiscordWorkflowAction(ctx, commandLabel);
+    if (unauthorized) {
+      return unauthorized;
+    }
     try {
       const workflowPolicy = getWorkflowGuardPolicy(resolvePluginConfig(api));
       await maybeReplayQueuedWorkflowRunsFromCommandRuntime(api, workflowPolicy, ctx.channel);
@@ -2852,6 +3171,13 @@ export function createResearchWorkflowCommands(
         "List the available workflow slash commands and when to use them.",
       acceptsArgs: false,
       handler: createShowCommandsCommandHandler(),
+    },
+    {
+      name: "autoresearch-panel",
+      description:
+        "Post a reusable Discord-native channel control panel with the five stable workflow buttons.",
+      acceptsArgs: false,
+      handler: createAutoresearchPanelCommandHandler(),
     },
   ];
 }

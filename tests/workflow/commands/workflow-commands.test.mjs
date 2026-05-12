@@ -820,9 +820,78 @@ test("show-commands command lists the available slash commands and when to use t
   assert.match(result.text, /\/papernexus-stage-remote/);
   assert.match(result.text, /\/authoring-closeout/);
   assert.match(result.text, /\/capture-diagnostics/);
+  assert.match(result.text, /\/autoresearch-panel/);
   assert.match(result.text, /\/autoresearch-buttons-test/);
   assert.match(result.text, /\/show-commands/);
   assert.match(result.text, /普通论文从 \/project-init 或 \/research-pipeline 开始/);
+});
+
+test("autoresearch-panel command returns a reusable fixed Discord control panel", async () => {
+  const api = makeApi();
+  const command = getCommand(createResearchWorkflowCommands(api), "autoresearch-panel");
+
+  const result = await command.handler({
+    channel: "discord",
+    isAuthorizedSender: true,
+    commandBody: "/autoresearch-panel",
+    args: undefined,
+    config: {},
+    from: "discord:channel:paper-lab",
+    to: undefined,
+    accountId: "default",
+    requestConversationBinding: async () => ({ status: "error" }),
+    detachConversationBinding: async () => ({ removed: false }),
+    getCurrentConversationBinding: async () => null,
+  });
+
+  const discordData = result.channelData?.discord;
+  const components = discordData?.components;
+  assert.equal(discordData?.reusable, true);
+  assert.ok(Array.isArray(components));
+  assert.match(result.text, /控制面板/);
+
+  const actionRow = components[0].serialize();
+  assert.equal(actionRow.type, 1);
+  assert.deepEqual(
+    actionRow.components.map((button) => button.label),
+    ["Status", "Resume", "Graph", "Handoff", "Commands"]
+  );
+  assert.deepEqual(
+    actionRow.components.map((button) => button.custom_id),
+    [
+      "occomp:cid=autoresearch_panel_status",
+      "occomp:cid=autoresearch_panel_resume",
+      "occomp:cid=autoresearch_panel_graph",
+      "occomp:cid=autoresearch_panel_handoff",
+      "occomp:cid=autoresearch_panel_commands",
+    ]
+  );
+  assert.deepEqual(
+    discordData.componentEntries.map((entry) => entry.callbackData),
+    ["/workflow-status", "/resume-pipeline", "/graph-build", "/handoff-status", "/show-commands"]
+  );
+});
+
+test("autoresearch-panel command requires an authorized Discord operator", async () => {
+  const api = makeApi();
+  const command = getCommand(createResearchWorkflowCommands(api), "autoresearch-panel");
+
+  const result = await command.handler({
+    channel: "discord",
+    isAuthorizedSender: false,
+    commandBody: "/autoresearch-panel",
+    args: undefined,
+    config: {},
+    from: "discord:channel:paper-lab",
+    to: undefined,
+    accountId: "default",
+    requestConversationBinding: async () => ({ status: "error" }),
+    detachConversationBinding: async () => ({ removed: false }),
+    getCurrentConversationBinding: async () => null,
+  });
+
+  assert.match(result.text, /没有执行权限/);
+  assert.equal(result.channelData, undefined);
 });
 
 test("autoresearch-buttons-test command returns reusable Discord-native test buttons", async () => {
@@ -843,18 +912,29 @@ test("autoresearch-buttons-test command returns reusable Discord-native test but
     getCurrentConversationBinding: async () => null,
   });
 
-  const components = result.channelData?.discord?.components;
-  assert.equal(components?.reusable, true);
+  const discordData = result.channelData?.discord;
+  const components = discordData?.components;
+  assert.equal(discordData?.reusable, true);
+  assert.ok(Array.isArray(components));
   assert.match(result.text, /按钮测试/);
 
-  const actionsBlock = components?.blocks?.find((block) => block.type === "actions");
-  assert.ok(actionsBlock);
+  const actionRow = components[0].serialize();
+  assert.equal(actionRow.type, 1);
   assert.deepEqual(
-    actionsBlock.buttons.map((button) => button.label),
+    actionRow.components.map((button) => button.label),
     ["测试 A", "测试 B", "测试 C", "测试 D"]
   );
   assert.deepEqual(
-    actionsBlock.buttons.map((button) => button.callbackData),
+    actionRow.components.map((button) => button.custom_id),
+    [
+      "occomp:cid=autoresearch_buttons_test_a",
+      "occomp:cid=autoresearch_buttons_test_b",
+      "occomp:cid=autoresearch_buttons_test_c",
+      "occomp:cid=autoresearch_buttons_test_d",
+    ]
+  );
+  assert.deepEqual(
+    discordData.componentEntries.map((entry) => entry.callbackData),
     [
       "/autoresearch-buttons-test --ping A",
       "/autoresearch-buttons-test --ping B",
@@ -884,6 +964,30 @@ test("autoresearch-buttons-test ping only posts a test message", async () => {
 
   assert.equal(result.text, "AutoResearch 按钮 C 测试通过。");
   assert.equal(result.channelData, undefined);
+});
+
+test("Discord background workflow buttons require an authorized operator", async () => {
+  const api = makeApi();
+  const commands = createResearchWorkflowCommands(api);
+
+  for (const commandName of ["resume-pipeline", "graph-build"]) {
+    const command = getCommand(commands, commandName);
+    const result = await command.handler({
+      channel: "discord",
+      isAuthorizedSender: false,
+      commandBody: `/${commandName}`,
+      args: undefined,
+      config: {},
+      from: "discord:channel:paper-lab",
+      to: undefined,
+      accountId: "default",
+      requestConversationBinding: async () => ({ status: "error" }),
+      detachConversationBinding: async () => ({ removed: false }),
+      getCurrentConversationBinding: async () => null,
+    });
+
+    assert.match(result.text, /没有执行权限/);
+  }
 });
 
 test("clear-projects-state command clears only PROJECTS_STATE project entries", async (t) => {

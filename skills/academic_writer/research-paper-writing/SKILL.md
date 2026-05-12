@@ -32,13 +32,14 @@ Prioritize first-impression quality (figures/tables/layout), logical flow, and e
 7. Treat visual quality as core content, not decoration.
 8. Use a clean teaser and pipeline figure.
 9. Use readable, minimal-ink tables.
-10. Keep formatting consistent and tidy.
-11. Use formal academic tone and precise terminology throughout.
-12. Keep terminology consistent and define new terms before reuse.
-13. Final manuscript sections should be proper paragraphs, not bullet dumps, unless the user explicitly asks for outline form.
-14. Apply the Clarity Test: identify load-bearing paragraphs and rewrite them more carefully than supporting paragraphs.
-15. Keep the Reader's Journey visible: the reader should know where they are, why they are here, what to take away, and what comes next.
-16. Run the writing quality check before finalizing: cut throat-clearing, weaken inflated wording, and break templated rhythm.
+10. Treat at least 5 tables and 4 figures as the default main-paper floor. If the venue template, page budget, or evidence base makes that impossible, make the exception explicit in the plan rather than shrinking the evidence surface silently.
+11. Keep formatting consistent and tidy.
+12. Use formal academic tone and precise terminology throughout.
+13. Keep terminology consistent and define new terms before reuse.
+14. Final manuscript sections should be proper paragraphs, not bullet dumps, unless the user explicitly asks for outline form.
+15. Apply the Clarity Test: identify load-bearing paragraphs and rewrite them more carefully than supporting paragraphs.
+16. Keep the Reader's Journey visible: the reader should know where they are, why they are here, what to take away, and what comes next.
+17. Run the writing quality check before finalizing: cut throat-clearing, weaken inflated wording, and break templated rhythm.
 
 ## Paragraph Clarity Check (Important)
 

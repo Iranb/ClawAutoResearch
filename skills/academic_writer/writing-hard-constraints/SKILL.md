@@ -131,6 +131,7 @@ Do not write:
 - Each figure should answer one main question.
 - Figure titles and captions should be largely self-explanatory.
 - The reader should be able to understand the figure's takeaway without hunting across the whole paper.
+- As a default manuscript floor, the main paper should carry at least 5 tables and 4 figures. If the venue template or evidence base makes that impossible, record the exception explicitly in `PAPER_PLAN.md` and do not finalize without an explicit waiver.
 
 ### 9. One paragraph, one job
 

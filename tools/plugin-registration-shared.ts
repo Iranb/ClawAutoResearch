@@ -5,6 +5,7 @@ import {
 import { isProjectWorkflowAgentId } from "./workflow-agent-isolation.js";
 import type {
   OpenClawPluginCommandDefinition,
+  OpenClawPluginInteractiveHandlerRegistration,
   OpenClawPluginService,
 } from "../runtime-api.js";
 import { enqueueWorkflowTask } from "./workflow-coordination";
@@ -74,6 +75,16 @@ export type ApiLike = {
         ) => string;
       };
     };
+    channel?: {
+      outbound?: {
+        loadAdapter?: (id: string) => Promise<
+          | {
+              sendPayload?: (ctx: Record<string, unknown>) => Promise<Record<string, unknown>>;
+            }
+          | undefined
+        >;
+      };
+    };
   };
   logger?: {
     debug?: (message: string, meta?: Record<string, unknown>) => void;
@@ -87,6 +98,9 @@ export type ApiLike = {
   ) => void;
   registerCommand?: (command: OpenClawPluginCommandDefinition) => void;
   registerService?: (service: OpenClawPluginService) => void;
+  registerInteractiveHandler?: (
+    registration: OpenClawPluginInteractiveHandlerRegistration
+  ) => void;
   on?: (
     hookName: string,
     handler: (event: Record<string, unknown>, ctx: Record<string, unknown>) => unknown,

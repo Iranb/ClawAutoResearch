@@ -41,6 +41,7 @@
     "./researcher/theory-phase",
     "./researcher/research-queue",
     "./shared/workflow-handoff-signal",
+    "./shared/discord-button-transport",
     "./researcher/papernexus-idea-catalyst",
     "./researcher/papernexus-main-graph-name",
     "./researcher/papernexus-paper-refresh",
@@ -48,12 +49,14 @@
   ],
   "planner": [
     "./planner/experiment-plan",
-    "./shared/workflow-handoff-signal"
+    "./shared/workflow-handoff-signal",
+    "./shared/discord-button-transport"
   ],
   "orchestrator": [
     "./orchestrator/plan-research",
     "./orchestrator/resume-pipeline",
-    "./shared/workflow-handoff-signal"
+    "./shared/workflow-handoff-signal",
+    "./shared/discord-button-transport"
   ],
   "coder": [
     "./coder/implement-experiment",
@@ -62,7 +65,8 @@
     "./coder/run-experiment",
     "./coder/github-download",
     "./coder/resume-pipeline",
-    "./shared/workflow-handoff-signal"
+    "./shared/workflow-handoff-signal",
+    "./shared/discord-button-transport"
   ],
   "analyzer": [
     "./analyzer/experiment-design-review",
@@ -71,7 +75,8 @@
     "./analyzer/scientific-figures",
     "./analyzer/papernexus-reflection",
     "./analyzer/resume-pipeline",
-    "./shared/workflow-handoff-signal"
+    "./shared/workflow-handoff-signal",
+    "./shared/discord-button-transport"
   ],
   "academic_writer": [
     "./academic_writer/long-text-write",
@@ -87,7 +92,8 @@
     "./academic_writer/research-paper-writing",
     "./academic_writer/venue-templates",
     "./academic_writer/resume-pipeline",
-    "./shared/workflow-handoff-signal"
+    "./shared/workflow-handoff-signal",
+    "./shared/discord-button-transport"
   ],
   "reviewer": [
     "./reviewer/citation-integrity-gate",
@@ -102,12 +108,14 @@
     "./reviewer/paperreview-submit",
     "./reviewer/review-response",
     "./reviewer/resume-pipeline",
-    "./shared/workflow-handoff-signal"
+    "./shared/workflow-handoff-signal",
+    "./shared/discord-button-transport"
   ],
   "cross-reviewer": [
     "./cross-reviewer/experiment-attack",
     "./cross-reviewer/review-phase",
     "./cross-reviewer/resume-pipeline",
-    "./shared/workflow-handoff-signal"
+    "./shared/workflow-handoff-signal",
+    "./shared/discord-button-transport"
   ]
 }

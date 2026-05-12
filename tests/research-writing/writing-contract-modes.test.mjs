@@ -141,7 +141,7 @@ test("configured default conference template is copied into the project before w
   await fs.access(copiedStyle);
 });
 
-test("writing contract preserves five-pass scientific editing controls", () => {
+test("writing contract preserves six-pass scientific editing controls", () => {
   const state = normalizeWritingContractState({
     scientific_editing_required: true,
     scientific_editing_status: "ready",
@@ -167,6 +167,14 @@ test("writing contract preserves five-pass scientific editing controls", () => {
     defaults.scientificEditingPasses,
     DEFAULT_SCIENTIFIC_EDITING_PASSES
   );
+  assert.deepEqual(DEFAULT_SCIENTIFIC_EDITING_PASSES, [
+    "pass_1_structure",
+    "pass_2_argumentation",
+    "pass_3_sentence_precision",
+    "pass_4_grammar_terminology",
+    "pass_5_typography_latex",
+    "pass_6_integrity_audit",
+  ]);
   assert.equal(defaults.scientificEditingRequired, false);
   assert.equal(defaults.scientificEditingStatus, "optional");
 

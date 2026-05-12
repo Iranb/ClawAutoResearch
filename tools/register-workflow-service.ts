@@ -708,7 +708,8 @@ function isWorkflowRuntimeCapacityFailure(error: unknown): boolean {
   return (
     /429|too many requests|rate limit|rate_limit|quota|allocated quota exceeded|provider capacity|all models failed|timeout|timed out|no readable|failed before returning/.test(
       message
-    )
+    ) ||
+    /failed to extract accountid from token/.test(message)
   );
 }
 
@@ -5570,6 +5571,22 @@ export async function maybeAdvanceAutoModeDiscussionForProject(params: {
           packetPath: currentRound.packetPath,
           resolved: true,
         });
+      }
+      if (
+        currentRound?.packetFingerprint === packet.packetFingerprint &&
+        currentRound.status !== "reviewing" &&
+        currentRound.status !== "resolved" &&
+        currentRound.attempts.length > 0 &&
+        currentRound.attempts.every(
+          (attempt) =>
+            attempt.status === "error" &&
+            isAutoModeDiscussionRuntimeFailure(attempt.error)
+        )
+      ) {
+        return completeWithLocalAutoModeDiscussion(
+          "local_static_discussion_runtime_stale",
+          currentRound.attempts
+        );
       }
 
       if (

@@ -111,6 +111,30 @@ async function writeJson(targetPath, value) {
   await fs.writeFile(targetPath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
 }
 
+test("research_workflow canonicalizes symlinked project roots before recording runtime health", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  const linkParent = await fs.mkdtemp(
+    path.join(os.tmpdir(), "openclaw-research-workflow-tool-link-")
+  );
+  const symlinkRoot = path.join(linkParent, "linked-project");
+  await fs.symlink(projectRoot, symlinkRoot, "dir");
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+    await fs.rm(linkParent, { recursive: true, force: true });
+  });
+
+  const canonicalProjectRoot = await fs.realpath(projectRoot);
+  const tool = createResearchWorkflowTool({ workspaceDir: symlinkRoot });
+  const result = await executeWorkflowTool(tool, {
+    action: "get_runtime_health",
+    projectRoot: symlinkRoot,
+  });
+
+  assert.equal(result.projectResolution.resolvedProjectRoot, canonicalProjectRoot);
+  assert.equal(result.projectResolution.workspaceProjectRoot, canonicalProjectRoot);
+  assert.notEqual(result.projectResolution.resolvedProjectRoot, symlinkRoot);
+});
+
 test("research_workflow build_query_answer_list returns portable select presentation", async () => {
   const tool = createResearchWorkflowTool({
     agentId: "researcher",
@@ -7998,4 +8022,70 @@ test("research_workflow migrate_runtime_state initializes project-local runtime 
     manifest.audit.runtime_migration.compatibility_mode,
     "sessions_spawn_runtime"
   );
+});
+
+test("research_workflow record_scientific_editing_pass_result records durable PaperGuru ledger entries", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  const previousProjectRoot = process.env.OPENCLAW_PROJECT;
+
+  t.after(async () => {
+    if (previousProjectRoot === undefined) {
+      delete process.env.OPENCLAW_PROJECT;
+    } else {
+      process.env.OPENCLAW_PROJECT = previousProjectRoot;
+    }
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  process.env.OPENCLAW_PROJECT = projectRoot;
+  const tool = createResearchWorkflowTool({ workspaceDir: projectRoot });
+
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "demo-project",
+    current_stage: "write",
+    owner_agent: "academic_writer",
+    writing_contract: {
+      paper_mode: "conference",
+      scientific_editing_required: true,
+      scientific_editing_status: "pending",
+    },
+  });
+
+  const result = await executeWorkflowTool(tool, {
+    action: "record_scientific_editing_pass_result",
+    scientificEditingPassResult: {
+      pass_id: "pass_1_structure",
+      status: "completed",
+      files_inspected: ["academic_writer/paper/sections/intro.tex"],
+    },
+  });
+
+  assert.equal(result.passId, "pass_1_structure");
+  assert.equal(result.status, "in_progress");
+  assert.equal(result.paperGuruStatus, "blocked");
+  assert.ok(
+    result.missingSignals.some((signal) =>
+      /scientific editing status must be ready/i.test(signal)
+    ),
+    result.missingSignals.join("\n")
+  );
+
+  const ledger = JSON.parse(
+    await fs.readFile(
+      path.join(projectRoot, "academic_writer", "SCIENTIFIC_EDIT_LEDGER.json"),
+      "utf8"
+    )
+  );
+  assert.equal(ledger.pass_results.length, 6);
+  assert.equal(
+    ledger.pass_results.find((entry) => entry.pass_id === "pass_1_structure")?.status,
+    "completed"
+  );
+
+  const report = await fs.readFile(
+    path.join(projectRoot, "academic_writer", "SCIENTIFIC_EDIT_REPORT.md"),
+    "utf8"
+  );
+  assert.match(report, /### 1\. Structure and Story Arc/);
+  assert.match(report, /Files inspected: academic_writer\/paper\/sections\/intro\.tex/);
 });

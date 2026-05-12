@@ -235,6 +235,7 @@ Respect `allowed_placeholder_count` from citation integrity state. If the budget
 - Introduction: end with numbered contribution list
 - All tables: `\booktabs` package (no vertical rules)
 - All figures: vector PDF format
+- Main paper: aim for at least 5 tables and 4 figures. If the venue template, page budget, or evidence base makes that impossible, record the exception explicitly in `PAPER_PLAN.md` and keep the shortfall visible in the story / figure plan instead of silently compressing it away.
 - Use formal academic tone, precise terminology, and consistent terminology across the manuscript
 - Keep final manuscript prose in proper paragraphs rather than bullet-dump note form
 - Avoid: "In this paper, we…", "It is worth noting that…"

@@ -74,11 +74,12 @@ export const DEFAULT_PROOF_CHECKLIST = [
 ];
 
 export const DEFAULT_SCIENTIFIC_EDITING_PASSES = [
-  "clutter_reduction",
-  "agency_active_voice",
-  "logical_flow",
-  "terminology_consistency",
-  "numerical_consistency",
+  "pass_1_structure",
+  "pass_2_argumentation",
+  "pass_3_sentence_precision",
+  "pass_4_grammar_terminology",
+  "pass_5_typography_latex",
+  "pass_6_integrity_audit",
 ];
 
 export const DEFAULT_KG_STORYLINE_PACKET_PATH =

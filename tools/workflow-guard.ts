@@ -389,7 +389,10 @@ import { materializeSurveyReviewStateImpl } from "./workflow-guard-materializers
 import { materializeFigurePromptContract } from "./research-writing/figure-prompt-contract";
 import { materializeInnovationSynthesis } from "./research-writing/innovation-synthesis";
 import { materializeResultsStoryline } from "./research-writing/results-storyline";
-import { materializeScientificEditingPassPlan } from "./research-writing/scientific-editing-pass-plan";
+import {
+  materializeScientificEditingPassPlan,
+  recordScientificEditingPassResult,
+} from "./research-writing/scientific-editing-pass-plan";
 import { materializeSurveyStorylinePlanner } from "./research-writing/survey-storyline-planner";
 import { materializeTitleAbstractIntroWorkbench } from "./research-writing/title-abstract-intro-workbench";
 import {
@@ -9612,6 +9615,16 @@ export async function materializeScientificEditingPassPlanState(params: {
   return materializeScientificEditingPassPlan(params);
 }
 
+export async function recordScientificEditingPassResultState(params: {
+  projectRoot: string;
+  scientificEditingPassResult?: Record<string, unknown>;
+  trigger?: string | null;
+  agentId?: string | null;
+  operationId?: string | null;
+}): Promise<Awaited<ReturnType<typeof recordScientificEditingPassResult>>> {
+  return recordScientificEditingPassResult(params);
+}
+
 export async function materializeLiteratureDiscoveryPacket(params: {
   projectRoot: string;
   literatureDiscoveryMaterialization?: Record<string, unknown>;
@@ -10072,6 +10085,19 @@ export async function materializeExperimentMemoryPacket(params: {
   });
 }
 
+async function canonicalizeExistingWorkflowProjectRoot(projectRoot: string): Promise<string> {
+  const resolvedProjectRoot = path.resolve(projectRoot);
+  try {
+    await fs.stat(path.join(resolvedProjectRoot, "PROJECT_MANIFEST.json"));
+    const projectRootStat = await fs.lstat(resolvedProjectRoot);
+    return projectRootStat.isSymbolicLink()
+      ? await fs.realpath(resolvedProjectRoot)
+      : resolvedProjectRoot;
+  } catch {
+    return resolvedProjectRoot;
+  }
+}
+
 export async function runWorkflowAutoIterator(params: {
   projectRoot: string;
   agentId?: string;
@@ -10083,10 +10109,13 @@ export async function runWorkflowAutoIterator(params: {
   requesterSessionKey?: string | null;
   sessionBindingKey?: string | null;
 }): Promise<AutoIteratorResult> {
+  const projectRoot = await canonicalizeExistingWorkflowProjectRoot(params.projectRoot);
+  const iteratorParams =
+    projectRoot === params.projectRoot ? params : { ...params, projectRoot };
   const runId = randomUUID();
   const startedAt = new Date().toISOString();
   const rawExistingAudit = normalizeWorkflowAutoIteratorAudit(
-    await readJsonIfExists<Record<string, unknown>>(getAutoIteratorAuditPath(params.projectRoot))
+    await readJsonIfExists<Record<string, unknown>>(getAutoIteratorAuditPath(projectRoot))
   );
   const existingAudit = deriveEffectiveWorkflowAutoIteratorAudit({
     audit: rawExistingAudit,
@@ -10094,7 +10123,7 @@ export async function runWorkflowAutoIterator(params: {
   });
   if (rawExistingAudit?.status === "started" && existingAudit?.status === "started" && existingAudit.runId && existingAudit.runId !== runId) {
     await writeAutoIteratorAuditLifecycle({
-      projectRoot: params.projectRoot,
+      projectRoot,
       runId: existingAudit.runId,
       status: "superseded",
       startedAt: existingAudit.startedAt,
@@ -10109,7 +10138,7 @@ export async function runWorkflowAutoIterator(params: {
     existingAudit.runId !== runId
   ) {
     await writeAutoIteratorAuditLifecycle({
-      projectRoot: params.projectRoot,
+      projectRoot,
       runId: existingAudit.runId,
       status: "timed_out",
       startedAt: existingAudit.startedAt,
@@ -10121,7 +10150,7 @@ export async function runWorkflowAutoIterator(params: {
     });
   }
   await writeAutoIteratorAuditLifecycle({
-    projectRoot: params.projectRoot,
+    projectRoot,
     runId,
     status: "started",
     startedAt,
@@ -10129,7 +10158,7 @@ export async function runWorkflowAutoIterator(params: {
     summary: `Auto iterator started for ${params.mode ?? "default"} mode.`,
   });
   try {
-    return await runWorkflowAutoIteratorImpl(params, {
+    return await runWorkflowAutoIteratorImpl(iteratorParams, {
       normalizePolicy,
       loadExperimentLedgerIfExists,
       readGateState,
@@ -10195,7 +10224,7 @@ export async function runWorkflowAutoIterator(params: {
   } catch (error) {
     const failedAt = new Date().toISOString();
     await writeAutoIteratorAuditLifecycle({
-      projectRoot: params.projectRoot,
+      projectRoot,
       runId,
       status: "failed",
       startedAt,

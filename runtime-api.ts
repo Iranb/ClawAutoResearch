@@ -78,6 +78,12 @@ export type OpenClawPluginService = {
   stop?: (ctx: OpenClawPluginServiceContext) => Promise<void> | void;
 };
 
+export type OpenClawPluginInteractiveHandlerRegistration = {
+  channel: string;
+  namespace: string;
+  handler: (ctx: any) => Promise<{ handled?: boolean } | void> | { handled?: boolean } | void;
+};
+
 export type OpenClawPluginApi = {
   id: string;
   name: string;
@@ -94,6 +100,9 @@ export type OpenClawPluginApi = {
   on?: (...args: any[]) => void;
   registerCommand: (command: OpenClawPluginCommandDefinition) => void;
   registerService?: (service: OpenClawPluginService) => void;
+  registerInteractiveHandler?: (
+    registration: OpenClawPluginInteractiveHandlerRegistration
+  ) => void;
 };
 
 export type OpenClawPluginEntryDefinition = {

@@ -65,9 +65,7 @@ function shouldUseLocalReview(params: {
 }): { useLocal: boolean; reason: string } {
   const round = params.round;
   if (!round || round.packetFingerprint !== params.packetFingerprint) {
-    return params.fallbackAfterMs === 0
-      ? { useLocal: true, reason: "local_static_review_no_runtime_round" }
-      : { useLocal: false, reason: "runtime_review_not_started" };
+    return { useLocal: true, reason: "local_static_review_no_runtime_round" };
   }
   if (round.status === "approved") {
     return { useLocal: false, reason: "already_approved" };

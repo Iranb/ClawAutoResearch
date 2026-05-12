@@ -7,6 +7,7 @@ import {
   evaluateCrossDomainInspirationGate,
   normalizeCrossDomainInspirationState,
 } from "../idea-catalyst/cross-domain-contract";
+import { evaluatePaperGuruGate } from "../autoresearch-loop-state";
 import { normalizeSurveyVisualCompilerState } from "../workflow-guard-state/survey-visual-compiler";
 import {
   auditRevisionCycleObject,
@@ -832,6 +833,21 @@ export async function collectSubmitStageMissingSignals(
       missing.push(
         `{PROJ}/${writingContract.scientificEditingReportPath ?? "academic_writer/SCIENTIFIC_EDIT_REPORT.md"}`
       );
+    }
+    const paperGuruGate = await evaluatePaperGuruGate({
+      projectRoot: ctx.projectRoot,
+      manifest: ctx.manifest,
+    });
+    for (const signal of paperGuruGate.missingSignals) {
+      if (
+        /scientific editing status must be ready/i.test(signal) ||
+        /^\{PROJ\}\//u.test(signal)
+      ) {
+        continue;
+      }
+      if (!missing.includes(signal)) {
+        missing.push(signal);
+      }
     }
   }
   missing.push(

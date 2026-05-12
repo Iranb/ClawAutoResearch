@@ -40,6 +40,7 @@ import {
   materializePlanState,
   materializePaperStoryState,
   materializeScientificEditingPassPlanState,
+  recordScientificEditingPassResultState,
   materializeStorylinePlannerState,
   materializeResultsStorylineState,
   planCitationExpansionForWorkflow,
@@ -1382,6 +1383,7 @@ const SERIALIZED_WORKFLOW_ACTIONS = new Set([
   "materialize_title_abstract_intro_workbench_state",
   "materialize_figure_prompt_contract",
   "materialize_scientific_editing_pass_plan",
+  "record_scientific_editing_pass_result",
   "materialize_innovation_synthesis_state",
   "materialize_writing_support_artifacts",
   "materialize_writing_hook_policies",
@@ -1509,6 +1511,8 @@ const WORKFLOW_ACTION_FUNCTIONS: Record<string, string> = {
   materialize_figure_prompt_contract: "materializeFigurePromptContractState",
   materialize_scientific_editing_pass_plan:
     "materializeScientificEditingPassPlanState",
+  record_scientific_editing_pass_result:
+    "recordScientificEditingPassResultState",
   materialize_innovation_synthesis_state: "materializeInnovationSynthesisState",
   materialize_writing_support_artifacts: "materializeWritingSupportArtifacts",
   materialize_writing_hook_policies: "materializeWritingHookPolicies",
@@ -1639,6 +1643,21 @@ async function resolveWorkflowToolState(params: {
   action?: string;
   autoBind?: boolean;
 }): Promise<WorkflowToolState> {
+  const canonicalizeProjectRoot = async (projectRoot: string | null) => {
+    if (!projectRoot) {
+      return null;
+    }
+    const resolvedProjectRoot = path.resolve(projectRoot);
+    try {
+      await fs.stat(path.join(resolvedProjectRoot, "PROJECT_MANIFEST.json"));
+      const projectRootStat = await fs.lstat(resolvedProjectRoot);
+      return projectRootStat.isSymbolicLink()
+        ? await fs.realpath(resolvedProjectRoot)
+        : resolvedProjectRoot;
+    } catch {
+      return resolvedProjectRoot;
+    }
+  };
   const channelBinding = asObject(params.rawParams.channelBinding);
   const citationCalibration = asObject(params.rawParams.citationCalibration);
   const explicitProjectRootOverride =
@@ -1675,6 +1694,20 @@ async function resolveWorkflowToolState(params: {
       return null;
     }
   })();
+  const canonicalWorkspaceProjectRoot = await canonicalizeProjectRoot(
+    workspaceProjectRoot
+  );
+  const canonicalSnapshotProjectRoot = await canonicalizeProjectRoot(
+    snapshot.projectRoot
+  );
+  const canonicalSnapshot =
+    canonicalSnapshotProjectRoot &&
+    canonicalSnapshotProjectRoot !== snapshot.projectRoot
+      ? {
+          ...snapshot,
+          projectRoot: canonicalSnapshotProjectRoot,
+        }
+      : snapshot;
 
   const allowWorkspaceProjectFallback =
     workflowPolicy.enableChannelProjectBindings !== true ||
@@ -1682,27 +1715,28 @@ async function resolveWorkflowToolState(params: {
       !readString(params.agentCtx.sessionId) &&
       !readString(params.agentCtx.channelKey));
 
-  const projectRoot =
+  const projectRoot = await canonicalizeProjectRoot(
     explicitProjectRootOverride ??
-    snapshot.projectRoot ??
-    (allowWorkspaceProjectFallback ? workspaceProjectRoot : null) ??
-    getProjectRootForWorkflow({
-      policy: workflowPolicy,
-      workspaceDir: params.agentCtx.workspaceDir,
-      sessionKey: params.agentCtx.sessionKey,
-      sessionId: params.agentCtx.sessionId,
-      messageChannel: params.agentCtx.messageChannel,
-      channelKey:
-        readString(channelBinding?.channelKey) ??
-        readString(params.agentCtx.channelKey),
-    });
+      canonicalSnapshot.projectRoot ??
+      (allowWorkspaceProjectFallback ? canonicalWorkspaceProjectRoot : null) ??
+      getProjectRootForWorkflow({
+        policy: workflowPolicy,
+        workspaceDir: params.agentCtx.workspaceDir,
+        sessionKey: params.agentCtx.sessionKey,
+        sessionId: params.agentCtx.sessionId,
+        messageChannel: params.agentCtx.messageChannel,
+        channelKey:
+          readString(channelBinding?.channelKey) ??
+          readString(params.agentCtx.channelKey),
+      })
+  );
 
   return {
     workflowPolicy,
     channelBinding,
-    snapshot,
+    snapshot: canonicalSnapshot,
     projectRoot,
-    workspaceProjectRoot,
+    workspaceProjectRoot: canonicalWorkspaceProjectRoot,
     projectRequiredMessage:
       "A resolved project is required for this workflow action. Bind the current Discord/channel session to a project or set OPENCLAW_PROJECT.",
     bindingRole:
@@ -2922,6 +2956,7 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               "materialize_title_abstract_intro_workbench_state",
               "materialize_figure_prompt_contract",
               "materialize_scientific_editing_pass_plan",
+              "record_scientific_editing_pass_result",
               "materialize_innovation_synthesis_state",
               "materialize_writing_support_artifacts",
               "materialize_writing_hook_policies",
@@ -3166,6 +3201,10 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
             type: "object",
             additionalProperties: true,
           },
+          scientificEditingPassResult: {
+            type: "object",
+            additionalProperties: true,
+          },
           writingSupportMaterialization: {
             type: "object",
             additionalProperties: true,
@@ -3295,6 +3334,9 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
             additionalProperties: true,
           },
           topic: {
+            type: "string",
+          },
+          operationId: {
             type: "string",
           },
           papernexusRemoteStage: {
@@ -5887,6 +5929,22 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                 ),
                 trigger: "research_workflow",
                 agentId: ctx.agentId,
+              });
+              return textResponse(JSON.stringify(result, null, 2));
+            }
+            case "record_scientific_editing_pass_result": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const result = await recordScientificEditingPassResultState({
+                projectRoot: resolvedProjectRoot,
+                scientificEditingPassResult: requireObject(
+                  params.scientificEditingPassResult ?? {},
+                  "scientificEditingPassResult"
+                ),
+                trigger: "research_workflow",
+                agentId: ctx.agentId,
+                operationId:
+                  readString(params.operationId) ??
+                  `research_workflow:${action}:${Date.now()}`,
               });
               return textResponse(JSON.stringify(result, null, 2));
             }

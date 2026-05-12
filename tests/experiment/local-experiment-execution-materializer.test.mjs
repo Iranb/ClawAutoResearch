@@ -198,6 +198,24 @@ test("local experiment execution materializer runs and reconciles a code bundle 
       },
     ],
   });
+  await writeJson(path.join(projectRoot, bundle.bundleDir, "RESULT_SUMMARY.json"), {
+    run_id: "local-reference-gcd-42",
+    status: "completed",
+    baseline: {
+      known_accuracy: 0.72,
+      novel_accuracy: 0.31,
+      h_score: 0.4334,
+    },
+    proposed: {
+      known_accuracy: 0.74,
+      novel_accuracy: 0.45,
+      h_score: 0.5597,
+    },
+    ablations: {
+      minus_class_balance_debiasing: { h_score: 0.5 },
+      minus_consistency_filtering: { h_score: 0.49 },
+    },
+  });
 
   const result = await materializeLocalExperimentExecutionImpl({
     projectRoot,
@@ -319,11 +337,32 @@ test("auto iterator commits code to experiment after local execution materialize
     },
   });
 
-  await materializeCodeExperimentBundleImpl({
+  const bundle = await materializeCodeExperimentBundleImpl({
     projectRoot,
     trigger: "test",
     agentId: "coder",
   });
+  await writeJson(
+    path.join(projectRoot, bundle.bundleDir, "RESULT_SUMMARY.json"),
+    {
+      run_id: "local-reference-gcd-42",
+      status: "completed",
+      baseline: {
+        known_accuracy: 0.72,
+        novel_accuracy: 0.31,
+        h_score: 0.4334,
+      },
+      proposed: {
+        known_accuracy: 0.74,
+        novel_accuracy: 0.45,
+        h_score: 0.5597,
+      },
+      ablations: {
+        minus_class_balance_debiasing: { h_score: 0.5 },
+        minus_consistency_filtering: { h_score: 0.49 },
+      },
+    }
+  );
 
   const result = await runWorkflowAutoIterator({
     projectRoot,
@@ -460,6 +499,113 @@ test("local experiment execution repairs raw ready_for_analysis artifacts into e
   });
   assert.equal(proof.ready, true);
   assert.equal(proof.receipts[0].hasResultMetrics, true);
+});
+
+test("local experiment execution keeps Karpathy loop running when primary metric has no gain", async (t) => {
+  const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-local-experiment-zero-"));
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "local-exp-zero",
+    current_stage: "experiment",
+    topic: "Try one graph-grounded candidate without metric gain",
+    experiment_search: {
+      status: "launching",
+      track_id: "track-main",
+      multi_seed_status: "pending",
+      ablation_status: "pending",
+      candidate_head_commit: "candidate-zero",
+    },
+    research_program: {
+      status: "approved",
+      primary_metric: "H-score",
+      baseline_reference: "local GCD baseline",
+      datasets: ["local-gcd-reference-benchmark"],
+      tracks: [
+        {
+          track_id: "track-main",
+          status: "active",
+          hypothesis: "A graph-derived confidence gate improves GCD.",
+          novelty_basis: "Transfer confidence gating from semi-supervised learning.",
+          main_metric: "H-score",
+        },
+      ],
+      plan_selection: {
+        selected_track_id: "track-main",
+      },
+    },
+  });
+
+  const bundleDir = path.join(projectRoot, "coder", "experiments", "track-main", "exp_zero");
+  await writeText(path.join(bundleDir, "train.py"), "print('precomputed zero-gain result')\n");
+  await writeText(path.join(bundleDir, "README.md"), "# zero gain\n");
+  await writeJson(path.join(bundleDir, "EXPERIMENT_MANIFEST.json"), {
+    experiment_id: "exp-zero",
+    track_id: "track-main",
+    status: "completed",
+    hypothesis: "A graph-derived confidence gate improves GCD.",
+    one_change_signature: "confidence gate threshold only",
+    datasets: ["local-gcd-reference-benchmark"],
+  });
+  await writeJson(path.join(bundleDir, "RESULT_SUMMARY.json"), {
+    run_id: "zero-gain",
+    experiment_id: "exp-zero",
+    status: "completed",
+    baseline: {
+      known_accuracy: 0.7,
+      novel_accuracy: 0.4,
+      h_score: 0.5091,
+    },
+    proposed: {
+      known_accuracy: 0.7,
+      novel_accuracy: 0.4,
+      h_score: 0.5091,
+    },
+    ablations: {},
+  });
+  await writeJson(path.join(projectRoot, "researcher", "EXPERIMENT_LEDGER.json"), {
+    schema_version: 1,
+    project_id: "local-exp-zero",
+    experiments: [
+      {
+        experiment_id: "exp-zero",
+        track_id: "track-main",
+        config_ref: "coder/experiments/track-main/exp_zero",
+        status: "running",
+      },
+    ],
+  });
+
+  const result = await materializeLocalExperimentExecutionImpl({
+    projectRoot,
+    trigger: "test-zero-gain",
+    agentId: "researcher",
+  });
+  assert.equal(result.experimentId, "exp-zero");
+  assert.ok(result.generatedFiles.includes("researcher/AUTORESEARCH_LOOP_STATE.json"));
+
+  const manifest = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "PROJECT_MANIFEST.json"), "utf8")
+  );
+  assert.equal(manifest.experiment_search.status, "searching");
+  assert.equal(manifest.experiment_search.last_trial_outcome, "discard");
+  assert.equal(manifest.experiment_search.last_decision, "continue_tuning");
+  assert.equal(manifest.experiment_search.multi_seed_status, "pending");
+  assert.equal(manifest.experiment_search.ablation_status, "pending");
+  assert.equal(manifest.experiment_memory.karpathy_inner_loop_status, "running");
+  assert.equal(manifest.experiment_memory.karpathy_keep_discard_decision, "discard");
+
+  const loopState = JSON.parse(
+    await fs.readFile(
+      path.join(projectRoot, "researcher", "AUTORESEARCH_LOOP_STATE.json"),
+      "utf8"
+    )
+  );
+  assert.equal(loopState.trial_history[0].decision.outcome, "discard");
+  assert.equal(loopState.advance.analyze.allowed, false);
+  assert.match(loopState.blocking_reason, /No promoted trial exists/i);
 });
 
 test("local experiment execution reconciles completed result summaries despite stale active ledger entries", async (t) => {

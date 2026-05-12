@@ -59,6 +59,7 @@ export type WorkflowCommandKind =
   | "workflow_status"
   | "handoff_status"
   | "show_commands"
+  | "autoresearch_panel"
   | "discord_buttons_test"
   | "survey_graph_build"
   | "idea_catalyst_search"
@@ -150,6 +151,7 @@ export const COMMAND_LABELS: Record<WorkflowCommandKind, string> = {
   workflow_status: "/workflow-status",
   handoff_status: "/handoff-status",
   show_commands: "/show-commands",
+  autoresearch_panel: "/autoresearch-panel",
   discord_buttons_test: "/autoresearch-buttons-test",
   survey_graph_build: "/survey-graph-build",
   idea_catalyst_search: "/idea-catalyst-search",

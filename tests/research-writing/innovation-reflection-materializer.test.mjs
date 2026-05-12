@@ -93,3 +93,50 @@ test("innovation reflection materializer refreshes stale experiment evidence", a
   );
   assert.deepEqual(manifest.innovation_reflection.reflected_experiment_ids, ["exp-1"]);
 });
+
+test("innovation reflection preflight can refresh before entering idea from frontier mapping", async (t) => {
+  const projectRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "openclaw-innovation-reflection-frontier-")
+  );
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  const manifest = {
+    project_id: "research-demo",
+    current_stage: "frontier_mapping",
+    owner_agent: "researcher",
+    innovation_reflection: {
+      required_after_experiments: true,
+      status: "missing",
+      reflected_experiment_ids: [],
+    },
+  };
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), manifest);
+  await writeJson(path.join(projectRoot, "researcher", "EXPERIMENT_LEDGER.json"), {
+    experiments: [
+      {
+        experiment_id: "exp-1",
+        status: "completed",
+        updated_at: "2026-05-11T16:58:59.110Z",
+        decision: "discard",
+        summary: "Candidate did not improve the primary metric.",
+        metrics: {
+          h_score: 0,
+          baseline_h_score: 0,
+          delta_h_score: 0,
+        },
+        evidence_pointers: ["researcher/artifacts/results/exp-1/RESULT_SUMMARY.json"],
+      },
+    ],
+  });
+
+  assert.equal(
+    await shouldMaterializeInnovationReflection({
+      projectRoot,
+      manifest,
+      stage: "frontier_mapping",
+    }),
+    true
+  );
+});

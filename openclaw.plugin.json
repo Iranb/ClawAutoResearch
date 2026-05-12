@@ -104,6 +104,52 @@
         "default": false,
         "description": "Allow Discord/session channels to bind to project roots so different channels can run different research projects in the same OpenClaw process."
       },
+      "discordPanel": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "Optional persistent Discord-native AutoResearch control panel. When enabled, the plugin maintains one public bot message with reusable workflow buttons.",
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "default": false,
+            "description": "Send and periodically refresh the persistent Discord panel."
+          },
+          "channelId": {
+            "type": "string",
+            "default": "",
+            "description": "Discord channel id that should contain the persistent AutoResearch panel."
+          },
+          "accountId": {
+            "type": "string",
+            "default": "",
+            "description": "Optional Discord account id used to send/edit the panel, for example researcher."
+          },
+          "actionMode": {
+            "type": "string",
+            "enum": ["test_panel", "test_message", "workflow"],
+            "default": "test_panel",
+            "description": "test_panel edits the panel with click feedback, test_message posts public test replies, and workflow dispatches the mapped workflow commands."
+          },
+          "refreshIntervalMs": {
+            "type": "number",
+            "minimum": 60000,
+            "default": 1200000,
+            "description": "How often the Gateway refreshes the panel message and reusable component registry."
+          },
+          "startupRefreshDelayMs": {
+            "type": "number",
+            "minimum": 10000,
+            "default": 120000,
+            "description": "One delayed post-startup refresh. It re-registers the newest panel after the Discord provider is fully online without sending another message if edit fails."
+          },
+          "activeActionTtlMs": {
+            "type": "number",
+            "minimum": 10000,
+            "default": 600000,
+            "description": "Duplicate-click suppression window for guarded workflow actions such as Resume and Graph."
+          }
+        }
+      },
       "channelProjectBindingsPath": {
         "type": "string",
         "default": "",
@@ -393,6 +439,9 @@
     },
     "enableChannelProjectBindings": {
       "label": "Enable Channel Project Bindings"
+    },
+    "discordPanel": {
+      "label": "Discord Panel"
     },
     "channelProjectBindingsPath": {
       "label": "Channel Project Bindings Path"
