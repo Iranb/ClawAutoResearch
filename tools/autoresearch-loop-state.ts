@@ -52,6 +52,7 @@ export type AutoResearchTrialRecord = {
   branch: string | null;
   commit: string | null;
   artifacts: string[];
+  attempt: Record<string, unknown> | null;
   decision: {
     outcome: AutoResearchTrialDecisionOutcome;
     reason: string | null;
@@ -169,6 +170,18 @@ function readMetricValue(entry: Record<string, unknown>): number | null {
   );
 }
 
+function readBoolean(value: unknown): boolean | null {
+  if (typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (normalized === "true") return true;
+    if (normalized === "false") return false;
+  }
+  return null;
+}
+
 function deriveTrialOutcome(entry: Record<string, unknown>): AutoResearchTrialDecisionOutcome {
   const delta = readMetricDelta(entry);
   const decision = normalizeStage(
@@ -205,6 +218,11 @@ function normalizeTrialRecord(entry: unknown, index: number): AutoResearchTrialR
   const experimentId = pickString(record, ["experiment_id", "experimentId", "id"]);
   const metadata = asRecord(record.metadata) ?? {};
   const execution = asRecord(metadata.execution) ?? {};
+  const attempt =
+    asRecord(record.attempt) ??
+    asRecord(metadata.attempt) ??
+    asRecord(execution.attempt) ??
+    null;
   const keyMetric = asRecord(record.key_metric ?? record.keyMetric) ?? {};
   const decision = deriveTrialOutcome(record);
   return {
@@ -229,6 +247,7 @@ function normalizeTrialRecord(entry: unknown, index: number): AutoResearchTrialR
       ...asStringArray(record.result_paths ?? record.resultPaths),
       ...asStringArray(record.evidence_pointers ?? record.evidencePointers),
     ]),
+    attempt,
     decision: {
       outcome: decision,
       reason:
@@ -305,6 +324,37 @@ async function readExperimentLedger(projectRoot: string) {
   );
 }
 
+function derivePaperNexusEvidenceLevel(params: {
+  graphPresenceStatus: string | null;
+  readyProofLevel: string | null;
+  claimLevel: string | null;
+  sourceBackedGraphClaim: boolean | null;
+}): string {
+  const graphStatus = normalizeStage(params.graphPresenceStatus);
+  const readyProofLevel = normalizeStage(params.readyProofLevel);
+  const claimLevel = normalizeStage(params.claimLevel);
+  if (
+    params.sourceBackedGraphClaim === true ||
+    readyProofLevel === "source_span" ||
+    claimLevel === "source_backed_graph" ||
+    claimLevel === "per_paper_source_backed"
+  ) {
+    return "remote_source_backed";
+  }
+  if (
+    readyProofLevel === "remote_summary" ||
+    readyProofLevel === "paper_index" ||
+    claimLevel === "remote_corpus_summary" ||
+    claimLevel === "paper_index_confirmed"
+  ) {
+    return "remote_metadata";
+  }
+  if (graphStatus === "ready") {
+    return "local_fallback";
+  }
+  return "unavailable";
+}
+
 function buildPaperNexusProjection(manifest: Record<string, unknown>): Record<string, unknown> {
   const paperIngestion = asRecord(manifest.paper_ingestion) ?? {};
   const ideaCatalyst = asRecord(manifest.idea_catalyst) ?? {};
@@ -334,6 +384,48 @@ function buildPaperNexusProjection(manifest: Record<string, unknown>): Record<st
   const tokenAccount =
     pickString(manifest, ["papernexus_api_token_account", "papernexusApiTokenAccount"]) ??
     "default";
+  const graphPresenceStatus =
+    pickString(paperIngestion, ["graph_presence_status", "graphPresenceStatus"]) ?? null;
+  const readyProofLevel =
+    pickString(paperIngestion, [
+      "ready_proof_level",
+      "readyProofLevel",
+      "graph_presence_ready_proof_level",
+      "graphPresenceReadyProofLevel",
+    ]) ??
+    pickString(manifest, [
+      "graph_presence_ready_proof_level",
+      "graphPresenceReadyProofLevel",
+    ]) ??
+    null;
+  const claimLevel =
+    pickString(paperIngestion, [
+      "papernexus_claim_level",
+      "papernexusClaimLevel",
+      "claim_level",
+      "claimLevel",
+    ]) ??
+    pickString(manifest, [
+      "papernexus_claim_level",
+      "papernexusClaimLevel",
+      "claim_level",
+      "claimLevel",
+    ]) ??
+    null;
+  const sourceBackedGraphClaim =
+    readBoolean(
+      paperIngestion.papernexus_source_backed_graph_claim ??
+        paperIngestion.source_backed_graph_claim ??
+        paperIngestion.sourceBackedGraphClaim ??
+        manifest.papernexus_source_backed_graph_claim ??
+        manifest.source_backed_graph_claim
+    );
+  const evidenceLevel = derivePaperNexusEvidenceLevel({
+    graphPresenceStatus,
+    readyProofLevel,
+    claimLevel,
+    sourceBackedGraphClaim,
+  });
   return {
     server: mcpUrl ?? apiBaseUrl,
     mcp_url: mcpUrl,
@@ -346,10 +438,14 @@ function buildPaperNexusProjection(manifest: Record<string, unknown>): Record<st
       pickString(manifest, ["papernexus_shared_corpus", "papernexusSharedCorpus"]) ??
       pickString(paperIngestion, ["corpus_id", "corpusId", "corpus"]) ??
       null,
-    graph_presence_status:
-      pickString(paperIngestion, ["graph_presence_status", "graphPresenceStatus"]) ?? null,
+    graph_presence_status: graphPresenceStatus,
     graph_presence_checked_at:
       pickString(paperIngestion, ["graph_presence_checked_at", "graphPresenceCheckedAt"]) ?? null,
+    graph_ready_proof_level: readyProofLevel,
+    claim_level: claimLevel,
+    source_backed_graph_claim: sourceBackedGraphClaim ?? false,
+    evidence_level: evidenceLevel,
+    degraded_graph_context: evidenceLevel !== "remote_source_backed",
     capabilities: {
       research_lookup:
         pickString(capabilities, ["research_lookup", "researchLookup"]) ??
@@ -584,7 +680,105 @@ function trialGate(state: AutoResearchLoopState): string[] {
   if ((latestPromoted.metric_delta ?? 0) <= 0) {
     return ["Promoted trial must have a positive primary-metric delta."];
   }
+  const attempt = asRecord(latestPromoted.attempt) ?? {};
+  const terminalStatus = pickString(attempt, ["terminal_status", "terminalStatus"]);
+  if (
+    terminalStatus &&
+    terminalStatus !== "improved_promoted_candidate"
+  ) {
+    return [
+      `Promoted trial attempt must be improved_promoted_candidate (current: ${terminalStatus}).`,
+    ];
+  }
+  if (readBoolean(attempt.local_control_flow_fallback) === true) {
+    return ["Promoted trial cannot rely on local control-flow fallback evidence."];
+  }
   return [];
+}
+
+function recordId(record: Record<string, unknown>, fallback: string): string {
+  return pickString(record, ["claim_id", "claimId", "id"]) ?? fallback;
+}
+
+function isStrongClaim(record: Record<string, unknown>): boolean {
+  const strength = normalizeStage(
+    record.strength ??
+      record.claim_strength ??
+      record.claimStrength ??
+      record.evidence_requirement ??
+      record.evidenceRequirement
+  );
+  return (
+    strength === "strong" ||
+    strength === "paper_facing" ||
+    strength === "paragraph_required" ||
+    readBoolean(record.strong_claim ?? record.strongClaim) === true ||
+    readBoolean(record.paper_facing ?? record.paperFacing) === true ||
+    readBoolean(record.requires_paragraph_evidence ?? record.requiresParagraphEvidence) === true
+  );
+}
+
+function claimIdsForUsage(record: Record<string, unknown>): string[] {
+  const scalarClaimId = pickString(record, ["claim_id", "claimId"]);
+  return uniqueStrings([
+    ...asStringArray(record.claim_ids ?? record.claimIds),
+    ...(scalarClaimId ? [scalarClaimId] : []),
+  ]);
+}
+
+function hasPaperAnchor(record: Record<string, unknown>): boolean {
+  return (
+    asStringArray(record.paper_ids ?? record.paperIds).length > 0 ||
+    Boolean(pickString(record, ["paper_id", "paperId"]))
+  );
+}
+
+function hasParagraphAnchor(record: Record<string, unknown>): boolean {
+  return (
+    asStringArray(
+      record.paper_paragraph_ids ??
+        record.paperParagraphIds ??
+        record.paragraph_ids ??
+        record.paragraphIds
+    ).length > 0 ||
+    Boolean(pickString(record, ["paper_paragraph_id", "paperParagraphId", "paragraph_id", "paragraphId"]))
+  );
+}
+
+function articleEvidenceCoverageGate(
+  contract: ArticleEvidenceContract,
+  targetStage: AutoResearchAdvanceTarget
+): string[] {
+  const claims = normalizeObjectArray(contract.claims)
+    .map((entry) => asRecord(entry))
+    .filter((entry): entry is Record<string, unknown> => Boolean(entry));
+  const strongClaims = claims.filter(isStrongClaim);
+  if (strongClaims.length === 0) {
+    return [];
+  }
+  const usages = normalizeObjectArray(contract.usages)
+    .map((entry) => asRecord(entry))
+    .filter((entry): entry is Record<string, unknown> => Boolean(entry));
+  const blockers: string[] = [];
+  for (const [index, claim] of strongClaims.entries()) {
+    const claimId = recordId(claim, `claim_${index + 1}`);
+    const claimUsages = usages.filter((usage) => claimIdsForUsage(usage).includes(claimId));
+    const hasPaper = hasPaperAnchor(claim) || claimUsages.some(hasPaperAnchor);
+    const hasParagraph =
+      hasParagraphAnchor(claim) || claimUsages.some((usage) => hasPaperAnchor(usage) && hasParagraphAnchor(usage));
+    const waived = claimUsages.some((usage) =>
+      Boolean(pickString(usage, ["waived_reason", "waivedReason", "waiver_reason", "waiverReason"]))
+    );
+    if ((targetStage === "write" || targetStage === "review") && !hasPaper) {
+      blockers.push(`Strong claim ${claimId} lacks a paper anchor.`);
+    }
+    if (targetStage === "submit" && (!hasPaper || !hasParagraph) && !waived) {
+      blockers.push(
+        `Strong claim ${claimId} lacks submit-ready claim-paper-paragraph usage coverage.`
+      );
+    }
+  }
+  return blockers;
 }
 
 function articleEvidenceGate(state: AutoResearchLoopState, targetStage: AutoResearchAdvanceTarget): string[] {
@@ -594,15 +788,56 @@ function articleEvidenceGate(state: AutoResearchLoopState, targetStage: AutoRese
     const ideaCatalystReady =
       normalizeStage(state.papernexus.idea_catalyst_status) === "ready" ||
       normalizeStage(plannerBridge?.status) === "ready";
+    const evidenceLevel = normalizeStage(state.papernexus.evidence_level);
+    const remoteGraphRequested =
+      Boolean(pickString(state.papernexus, ["server", "mcp_url", "api_base_url"])) ||
+      normalizeStage(state.papernexus.access_mode)?.includes("remote") === true;
     if (!ideaCatalystReady) {
       return ["Graph-guided plan requires ready Idea-Catalyst evidence."];
     }
     if (!plannerBridge || normalizeObjectArray(plannerBridge.fragments).length === 0) {
       return ["Graph-guided plan requires planner_plan.idea_catalyst_bridge fragments."];
     }
+    if (
+      remoteGraphRequested &&
+      evidenceLevel !== "remote_source_backed" &&
+      evidenceLevel !== "remote_metadata"
+    ) {
+      return [
+        `Graph-guided plan requires remote PaperNexus evidence (current: ${evidenceLevel ?? "unavailable"}).`,
+      ];
+    }
+    const claimMappings = normalizeObjectArray(plannerBridge.claim_mappings)
+      .map((entry) => asRecord(entry))
+      .filter((entry): entry is Record<string, unknown> => Boolean(entry));
+    const claimMappedFragmentIds = new Set(
+      claimMappings
+        .map((entry) => pickString(entry, ["fragment_id", "fragmentId"]))
+        .filter((entry): entry is string => Boolean(entry))
+    );
+    const incompleteFragments = normalizeObjectArray(plannerBridge.fragments)
+      .map((entry) => asRecord(entry))
+      .filter((entry): entry is Record<string, unknown> => Boolean(entry))
+      .filter((entry, index) => {
+        const fragmentId = pickString(entry, ["fragment_id", "fragmentId"]) ?? `fragment_${index + 1}`;
+        const claimIds = asStringArray(entry.claim_ids ?? entry.claimIds);
+        return (
+          asStringArray(entry.paper_ids ?? entry.paperIds).length === 0 ||
+          (claimIds.length === 0 && !claimMappedFragmentIds.has(fragmentId))
+        );
+      });
+    if (incompleteFragments.length > 0) {
+      return [
+        "Graph-guided plan requires selected fragments to have both paper anchors and claim mappings.",
+      ];
+    }
   }
   if ((targetStage === "write" || targetStage === "review" || targetStage === "submit") && contract.usages.length === 0) {
     return ["Article evidence contract has no manuscript usages."];
+  }
+  const coverageBlockers = articleEvidenceCoverageGate(contract, targetStage);
+  if (coverageBlockers.length > 0) {
+    return coverageBlockers;
   }
   if (targetStage === "submit") {
     const paperGuru = asRecord(contract.writing_quality.paper_guru);

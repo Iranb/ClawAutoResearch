@@ -7,15 +7,18 @@ import { execFile as execFileCb } from "node:child_process";
 import { promisify } from "node:util";
 
 import {
+  buildAutoWorkflowTransportParityScorecard,
   configuredProjectsRootFromOpenClawConfig,
   configuredModelRefsForAgent,
   deriveAutoWorkflowChildMaxIterations,
   defaultProjectIdForAutoWorkflowRun,
   materializeAutoWorkflowModelOverrideConfig,
+  normalizeAutoWorkflowBootstrapTransport,
   normalizeAutoWorkflowCommand,
   normalizeAutoWorkflowMode,
   resolveAutoWorkflowProjectsRoot,
   resolveAutoWorkflowLocalFallbackEnv,
+  shouldAutoGenerateLiveProjectId,
   shouldEnableAgentModelSyncWatchdog,
   shouldRestartGatewayAfterAgentModelSync,
   verifyAgentRuntimeModelConfig,
@@ -50,6 +53,8 @@ test("auto workflow E2E runner normalizes user-facing command aliases", () => {
   assert.equal(normalizeAutoWorkflowCommand("full").lane, "full");
   assert.equal(normalizeAutoWorkflowMode("real"), "live");
   assert.equal(normalizeAutoWorkflowMode("deterministic"), "fixture");
+  assert.equal(normalizeAutoWorkflowBootstrapTransport("local-live"), "local");
+  assert.equal(normalizeAutoWorkflowBootstrapTransport("discord-parity"), "discord");
   assert.equal(
     configuredProjectsRootFromOpenClawConfig({
       projectsRoot: "/tmp/top-level-projects",
@@ -81,6 +86,29 @@ test("auto workflow E2E runner normalizes user-facing command aliases", () => {
   );
 });
 
+test("package scripts make real runs use Discord parity and preserve local-live aliases", async () => {
+  const packageJson = JSON.parse(
+    await fs.readFile(path.join(process.cwd(), "package.json"), "utf8")
+  );
+
+  assert.match(
+    packageJson.scripts["test:autoresearch:real"],
+    /--bootstrap-transport discord/
+  );
+  assert.match(
+    packageJson.scripts["test:autoreview:real"],
+    /--bootstrap-transport discord/
+  );
+  assert.match(
+    packageJson.scripts["test:autoresearch:local-live"],
+    /--bootstrap-transport local/
+  );
+  assert.match(
+    packageJson.scripts["test:autoreview:local-live"],
+    /--bootstrap-transport local/
+  );
+});
+
 test("auto workflow E2E runner help exits before live preflight", async () => {
   const { stdout, stderr } = await execFile(
     process.execPath,
@@ -96,6 +124,31 @@ test("auto workflow E2E runner help exits before live preflight", async () => {
   assert.match(stdout, /--strict-content/);
   assert.doesNotMatch(stdout, /Auto workflow E2E: fail/);
   assert.equal(stderr, "");
+});
+
+test("auto workflow E2E runner rejects hidden project ids in live Discord parity", async () => {
+  await assert.rejects(
+    execFile(process.execPath, [
+      path.join(process.cwd(), "scripts", "run_auto_workflow_e2e_test.mjs"),
+      "--mode",
+      "live",
+      "--command",
+      "/auto-research",
+      "--bootstrap-transport",
+      "discord",
+      "--project-id",
+      "hidden-project",
+      "--no-preflight",
+      "--json",
+    ]),
+    (error) => {
+      assert.match(
+        error.stderr,
+        /--project-id cannot be used with live Discord parity/
+      );
+      return true;
+    }
+  );
 });
 
 test("auto workflow E2E runner forwards strict content to fixture child runs", async (t) => {
@@ -192,6 +245,36 @@ test("auto workflow E2E runner generates isolated live project ids by default", 
   );
 });
 
+test("auto workflow E2E runner does not auto-generate hidden project ids for Discord parity", () => {
+  assert.equal(
+    shouldAutoGenerateLiveProjectId({
+      mode: "live",
+      bootstrapTransport: "local",
+      reuseProject: false,
+      projectIdArg: null,
+    }),
+    true
+  );
+  assert.equal(
+    shouldAutoGenerateLiveProjectId({
+      mode: "live",
+      bootstrapTransport: "discord",
+      reuseProject: false,
+      projectIdArg: null,
+    }),
+    false
+  );
+  assert.equal(
+    shouldAutoGenerateLiveProjectId({
+      mode: "fixture",
+      bootstrapTransport: "local",
+      reuseProject: false,
+      projectIdArg: null,
+    }),
+    false
+  );
+});
+
 test("auto workflow E2E runner derives live iteration budget from timeout", () => {
   assert.equal(
     deriveAutoWorkflowChildMaxIterations({
@@ -255,6 +338,60 @@ test("auto workflow E2E runner injects short local fallback timeouts for no-Disc
   assert.deepEqual(fixture.envOverrides, {});
   assert.equal(fixture.summary.codeReviewFallbackAfterMs, null);
   assert.equal(fixture.summary.autoModeDiscussionFallbackAfterMs, null);
+
+  const discord = resolveAutoWorkflowLocalFallbackEnv(
+    {
+      mode: "live",
+      bootstrapTransport: "discord",
+    },
+    {}
+  );
+  assert.deepEqual(discord.envOverrides, {});
+  assert.equal(discord.summary.codeReviewFallbackAfterMs, null);
+  assert.equal(discord.summary.codeReviewSource, "unset");
+  assert.equal(discord.summary.autoModeDiscussionFallbackAfterMs, null);
+  assert.equal(discord.summary.autoModeDiscussionSource, "unset");
+});
+
+test("auto workflow E2E runner builds a Discord parity scorecard", () => {
+  const scorecard = buildAutoWorkflowTransportParityScorecard({
+    command: normalizeAutoWorkflowCommand("/auto-research"),
+    mode: "live",
+    bootstrapTransport: "discord",
+    conversationId: "gcd-research-lab",
+    resultSummary: {
+      lanes: [
+        {
+          lane: "experiment",
+          transport: "discord",
+          conversationId: "gcd-research-lab",
+          projectRoot: "/tmp/projects/generalized-category-discovery",
+          finalVerdict: "partial",
+        },
+      ],
+    },
+    workflowLocalFallback: {
+      codeReviewFallbackAfterMs: null,
+      autoModeDiscussionFallbackAfterMs: null,
+    },
+    projectIdArg: null,
+    generatedProjectId: null,
+    explicitProjectId: null,
+  });
+
+  assert.equal(scorecard.profile, "discord-parity");
+  assert.equal(scorecard.userPathAligned, true);
+  assert.equal(scorecard.expectedCommandSource, "native");
+  assert.equal(scorecard.localFallbackInjected, false);
+  assert.equal(scorecard.hiddenProjectIdOverrideUsed, false);
+  assert.equal(
+    scorecard.lanes[0].bootstrapSessionKey,
+    "agent:researcher:discord:slash:owner"
+  );
+  assert.equal(
+    scorecard.lanes[0].commandTargetSessionKey,
+    "agent:researcher:discord:channel:gcd-research-lab"
+  );
 });
 
 test("auto workflow E2E runner preserves explicit fallback configuration", () => {

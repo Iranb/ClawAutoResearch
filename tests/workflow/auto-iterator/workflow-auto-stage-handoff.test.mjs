@@ -6,7 +6,11 @@ import path from "node:path";
 
 import { createPluginRegistrationContext } from "../../../tools/plugin-registration-shared.ts";
 import { maybeDispatchAutoIteratorTask } from "../../../tools/register-workflow-tools.ts";
-import { readWorkflowRuntimeQueueStore } from "../../../tools/workflow-runtime-state.ts";
+import {
+  readWorkflowRuntimeQueueStore,
+  readWorkflowRuntimeSessionsStore,
+  writeWorkflowRuntimeSessionsStore,
+} from "../../../tools/workflow-runtime-state.ts";
 import { materializeWorkflowTaskGraph, readWorkflowTaskGraphStore } from "../../../tools/workflow-team/task-graph.ts";
 
 async function makeProjectRoot() {
@@ -177,6 +181,179 @@ test("maybeDispatchAutoIteratorTask does not queue a durable fallback when auto 
 
   const queue = await readWorkflowRuntimeQueueStore(projectRoot);
   assert.equal(queue.entries.length, 0);
+});
+
+test("maybeDispatchAutoIteratorTask waits on a fresh orphan owner session instead of redispatching", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  const now = new Date().toISOString();
+  await writeWorkflowRuntimeSessionsStore({
+    projectRoot,
+    projectId: "demo-project",
+    entries: [
+      {
+        sessionKey: "agent:researcher:discord:group:paper-lab:subagent:experiment",
+        sessionId: "session-active",
+        runtime: "subagent",
+        role: "researcher",
+        agentId: "researcher",
+        ownerAgent: "researcher",
+        family: "research",
+        kind: "workflow_stage_dispatch",
+        channelKey: "discord:group:paper-lab",
+        requesterSessionKey: "agent:orchestrator:discord:group:paper-lab",
+        projectId: "demo-project",
+        projectRoot,
+        parentSessionKey: "agent:orchestrator:discord:group:paper-lab",
+        threadBindingKey: null,
+        depth: 1,
+        status: "active",
+        runId: "run-active",
+        queueKey: null,
+        startedAt: now,
+        lastHeartbeatAt: now,
+        lastAnnounceAt: null,
+        lastCheckedAt: now,
+        lastFinishedAt: null,
+        lastError: null,
+      },
+    ],
+  });
+
+  const result = await maybeDispatchAutoIteratorTask({
+    plugin: createPlugin(),
+    workflowPolicy: {
+      enforceWorkflowBoundaries: true,
+      autoMode: "aggressive",
+      projectsRoot: path.dirname(projectRoot),
+      agentContactCooldownSeconds: 300,
+    },
+    agentCtx: {
+      agentId: "orchestrator",
+      sessionKey: "agent:orchestrator:discord:group:paper-lab",
+      messageChannel: "discord",
+    },
+    snapshot: {
+      role: "orchestrator",
+      projectRoot,
+      projectId: "demo-project",
+      currentStage: "experiment",
+    },
+    result: {
+      ownerAfter: "researcher",
+      stageAfter: "experiment",
+      effectiveAutoMode: "aggressive",
+      recommendedActions: [
+        {
+          kind: "drive_stage",
+          owner: "researcher",
+          stage: "experiment",
+          summary: "Run one bounded experiment-search pass.",
+          command: "/run-experiments",
+          mailboxMessageId: null,
+          cooldownRemainingSeconds: 0,
+          blocking: false,
+        },
+      ],
+    },
+  });
+
+  assert.equal(result.dispatched, false);
+  assert.equal(result.blockedByRuntimeReconciliation, true);
+  assert.equal(result.runtimeDispatchStatus.status, "waiting_for_owner");
+  const queue = await readWorkflowRuntimeQueueStore(projectRoot);
+  assert.equal(queue.entries.length, 0);
+});
+
+test("maybeDispatchAutoIteratorTask reclaims a stale orphan owner session before redispatching", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await writeWorkflowRuntimeSessionsStore({
+    projectRoot,
+    projectId: "demo-project",
+    entries: [
+      {
+        sessionKey: "agent:researcher:discord:group:paper-lab:subagent:experiment",
+        sessionId: "session-stale",
+        runtime: "subagent",
+        role: "researcher",
+        agentId: "researcher",
+        ownerAgent: "researcher",
+        family: "research",
+        kind: "workflow_stage_dispatch",
+        channelKey: "discord:group:paper-lab",
+        requesterSessionKey: "agent:orchestrator:discord:group:paper-lab",
+        projectId: "demo-project",
+        projectRoot,
+        parentSessionKey: "agent:orchestrator:discord:group:paper-lab",
+        threadBindingKey: null,
+        depth: 1,
+        status: "active",
+        runId: "run-stale",
+        queueKey: null,
+        startedAt: "2026-04-10T12:00:00.000Z",
+        lastHeartbeatAt: "2026-04-10T12:00:00.000Z",
+        lastAnnounceAt: null,
+        lastCheckedAt: "2026-04-10T12:00:00.000Z",
+        lastFinishedAt: null,
+        lastError: null,
+      },
+    ],
+  });
+
+  const result = await maybeDispatchAutoIteratorTask({
+    plugin: createPlugin(),
+    workflowPolicy: {
+      enforceWorkflowBoundaries: true,
+      autoMode: "aggressive",
+      projectsRoot: path.dirname(projectRoot),
+      agentContactCooldownSeconds: 60,
+    },
+    agentCtx: {
+      agentId: "orchestrator",
+      sessionKey: "agent:orchestrator:discord:group:paper-lab",
+      messageChannel: "discord",
+    },
+    snapshot: {
+      role: "orchestrator",
+      projectRoot,
+      projectId: "demo-project",
+      currentStage: "experiment",
+    },
+    result: {
+      ownerAfter: "researcher",
+      stageAfter: "experiment",
+      effectiveAutoMode: "aggressive",
+      recommendedActions: [
+        {
+          kind: "drive_stage",
+          owner: "researcher",
+          stage: "experiment",
+          summary: "Run one bounded experiment-search pass.",
+          command: "/run-experiments",
+          mailboxMessageId: null,
+          cooldownRemainingSeconds: 0,
+          blocking: false,
+        },
+      ],
+    },
+  });
+
+  assert.equal(result.queuedFallback, true);
+  assert.equal(result.runtimeDispatchStatus.status, "stale_reclaimed");
+  assert.equal(result.dispatchTerminality.ok, true);
+
+  const sessions = await readWorkflowRuntimeSessionsStore(projectRoot);
+  assert.equal(sessions.entries[0].status, "needs_repair");
+  const queue = await readWorkflowRuntimeQueueStore(projectRoot);
+  assert.equal(queue.entries.length, 1);
+  assert.equal(queue.entries[0].ownerAgent, "researcher");
 });
 
 test("maybeDispatchAutoIteratorTask queues same-owner repair dispatch when auto iterator marks it executable", async (t) => {

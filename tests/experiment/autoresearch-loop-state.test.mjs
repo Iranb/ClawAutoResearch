@@ -120,6 +120,12 @@ test("plan advancement requires Idea-Catalyst bridge fragments in the unified st
     planner_plan: {
       idea_catalyst_bridge: {
         status: "ready",
+        claim_mappings: [
+          {
+            fragment_id: "frag-1",
+            claim_id: "claim-1",
+          },
+        ],
         fragments: [
           {
             fragment_id: "frag-1",
@@ -133,6 +139,93 @@ test("plan advancement requires Idea-Catalyst bridge fragments in the unified st
 
   const bridgedState = await hydrateAutoResearchLoopState({ projectRoot });
   assert.equal(canAdvance(bridgedState, "plan").allowed, true);
+});
+
+test("PaperNexus local fallback is explicit and blocks remote graph-guided plan claims", async (t) => {
+  const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-loop-graph-level-"));
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "loop-graph-level",
+    current_stage: "plan",
+    papernexus_api_base_url: "http://10.126.56.41:4821",
+    papernexus_access_mode: "remote_mcp",
+    paper_ingestion: {
+      graph_presence_status: "ready",
+      ready_proof_level: "none",
+      papernexus_claim_level: "connectivity_only",
+      papernexus_source_backed_graph_claim: false,
+    },
+    idea_catalyst: {
+      status: "ready",
+    },
+    planner_plan: {
+      idea_catalyst_bridge: {
+        status: "ready",
+        claim_mappings: [
+          {
+            fragment_id: "frag-1",
+            claim_id: "claim-1",
+          },
+        ],
+        fragments: [
+          {
+            fragment_id: "frag-1",
+            paper_ids: ["paper-1"],
+            paragraph_ids: ["para-1"],
+          },
+        ],
+      },
+    },
+  });
+
+  const state = await hydrateAutoResearchLoopState({ projectRoot });
+  assert.equal(state.papernexus.evidence_level, "local_fallback");
+  assert.equal(state.papernexus.degraded_graph_context, true);
+  const decision = canAdvance(state, "plan");
+  assert.equal(decision.allowed, false);
+  assert.match(decision.reasons[0], /remote PaperNexus evidence/i);
+});
+
+test("submit gate requires strong claim paragraph usage coverage", async (t) => {
+  const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-loop-submit-coverage-"));
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+  const state = await hydrateAutoResearchLoopState({
+    projectRoot,
+    manifest: {
+      project_id: "loop-submit-coverage",
+      reference_context: {
+        article_evidence_contract: {
+          claims: [
+            {
+              claim_id: "claim-strong",
+              strength: "strong",
+              paper_ids: ["paper-1"],
+            },
+          ],
+          usages: [
+            {
+              usage_id: "usage-1",
+              claim_ids: ["claim-strong"],
+              paper_ids: ["paper-1"],
+            },
+          ],
+          writing_quality: {
+            paper_guru: {
+              status: "optional",
+            },
+          },
+        },
+      },
+    },
+  });
+  const decision = canAdvance(state, "submit");
+  assert.equal(decision.allowed, false);
+  assert.match(decision.reasons[0], /claim-paper-paragraph usage coverage/i);
 });
 
 test("PaperGuru gate requires six completed passes plus compile, reference, number, and claim-evidence receipts", async (t) => {

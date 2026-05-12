@@ -10,6 +10,7 @@ import {
   appendLocalPapernexusArgs,
   resolveLocalPapernexusConfig,
 } from "./local_papernexus_config.mjs";
+import { buildWorkflowTransportContext } from "./workflow_transport_context.mjs";
 
 const scriptPath = fileURLToPath(import.meta.url);
 const scriptDir = path.dirname(scriptPath);
@@ -43,6 +44,8 @@ function formatUsage() {
     "  --project-id <id>     Explicit project id.",
     "  --timeout-ms <ms>     Overall child-run timeout.",
     "  --max-iterations <n>  Live auto-iterator budget.",
+    "  --bootstrap-transport local|discord",
+    "                         local-live debug path or Discord native-slash parity path.",
     "  --strict-content      Enforce publication-depth content quality checks in the paper harness.",
     "  --allow-partial       Treat partial live progress as a reportable outcome.",
     "  --json                Print the summary JSON.",
@@ -184,6 +187,28 @@ export function normalizeAutoWorkflowMode(value) {
   throw new Error(`Unknown E2E mode "${value}". Use live/real or fixture/deterministic.`);
 }
 
+export function normalizeAutoWorkflowBootstrapTransport(value) {
+  const token = normalizeToken(value || "local");
+  if (["local", "local-live", "no-discord"].includes(token)) {
+    return "local";
+  }
+  if (["discord", "discord-parity", "native-slash", "slash"].includes(token)) {
+    return "discord";
+  }
+  throw new Error(
+    `Unknown bootstrap transport "${value}". Use local/local-live or discord/discord-parity.`
+  );
+}
+
+export function shouldAutoGenerateLiveProjectId(params) {
+  return Boolean(
+    params?.mode === "live" &&
+      normalizeAutoWorkflowBootstrapTransport(params?.bootstrapTransport ?? "local") === "local" &&
+      !params?.reuseProject &&
+      !params?.projectIdArg
+  );
+}
+
 export function deriveAutoWorkflowChildMaxIterations(params) {
   const explicit = Number(params?.maxIterations);
   if (Number.isFinite(explicit) && explicit > 0) {
@@ -216,7 +241,7 @@ function parseNonNegativeInteger(value) {
 function shouldDefaultNoDiscordE2eLocalFallbacks(params) {
   return (
     params?.mode === "live" &&
-    normalizeToken(params?.bootstrapTransport ?? "local") === "local"
+    normalizeAutoWorkflowBootstrapTransport(params?.bootstrapTransport ?? "local") === "local"
   );
 }
 
@@ -1070,6 +1095,9 @@ function summarizeLane(name, value) {
     transport: value.transport ?? null,
     conversationId: value.conversationId ?? null,
     projectRoot: value.projectRoot ?? null,
+    bootstrapSessionKey: value.bootstrap?.sessionKey ?? null,
+    bootstrapRunId: value.bootstrap?.runId ?? null,
+    bootstrapFallbackTransport: value.bootstrap?.fallbackTransport ?? null,
     finalVerdict: value.harness?.finalVerdict ?? null,
     strictContent: value.harness?.strictContent ?? null,
     failureReason: value.failureReason ?? value.harness?.failureReason ?? value.harness?.error ?? null,
@@ -1101,6 +1129,125 @@ function summarizeLane(name, value) {
         }))
       : [],
     handoffCount: Array.isArray(value.handoffs) ? value.handoffs.length : null,
+  };
+}
+
+function transportProfileForBootstrapTransport(bootstrapTransport) {
+  return normalizeAutoWorkflowBootstrapTransport(bootstrapTransport) === "discord"
+    ? "discord-parity"
+    : "local-live";
+}
+
+function localFallbackInjected(workflowLocalFallback) {
+  const codeReviewFallbackAfterMs =
+    workflowLocalFallback?.codeReviewFallbackAfterMs ?? null;
+  const autoModeDiscussionFallbackAfterMs =
+    workflowLocalFallback?.autoModeDiscussionFallbackAfterMs ?? null;
+  return Boolean(
+    codeReviewFallbackAfterMs !== null ||
+      autoModeDiscussionFallbackAfterMs !== null
+  );
+}
+
+function expectedLaneNames(command) {
+  if (command?.lane === "full") {
+    return ["experiment", "survey"];
+  }
+  return [command?.lane === "survey" ? "survey" : "experiment"];
+}
+
+function expectedConversationIdForLane(baseConversationId, lane, requestedLane) {
+  if (!baseConversationId) {
+    return null;
+  }
+  return requestedLane === "full" ? `${baseConversationId}-${lane}` : baseConversationId;
+}
+
+function buildExpectedTransportContextSummary(params) {
+  const context = buildWorkflowTransportContext({
+    transport: params.bootstrapTransport,
+    lane: params.lane,
+    conversationId: params.conversationId,
+    accountId: "default",
+    userId: "owner",
+  });
+  const commandExtras = context.commandContextExtras();
+  return {
+    transport: context.transport,
+    lane: context.lane,
+    conversationId: context.conversationId,
+    accountId: context.accountId,
+    channel: context.channel,
+    from: context.from,
+    to: context.to,
+    originatingChannel: context.originatingChannel,
+    originatingTo: context.originatingTo,
+    requesterChannel: context.requesterChannel,
+    channelKey: context.channelKey,
+    bootstrapSessionKey: context.bootstrapSessionKey,
+    commandTargetSessionKey: context.commandTargetSessionKey,
+    commandSource: commandExtras.commandSource ?? "local",
+  };
+}
+
+export function buildAutoWorkflowTransportParityScorecard(params) {
+  const bootstrapTransport = normalizeAutoWorkflowBootstrapTransport(params?.bootstrapTransport);
+  const command = params?.command ?? normalizeAutoWorkflowCommand("full");
+  const resultSummary = params?.resultSummary ?? {};
+  const workflowLocalFallback = params?.workflowLocalFallback ?? null;
+  const resultLanes = Array.isArray(resultSummary.lanes) ? resultSummary.lanes : [];
+  const laneInputs =
+    resultLanes.length > 0
+      ? resultLanes
+      : expectedLaneNames(command).map((lane) => ({
+          lane,
+          conversationId: expectedConversationIdForLane(
+            params?.conversationId,
+            lane,
+            command.lane
+          ),
+        }));
+  const lanes = laneInputs.map((lane) => {
+    const laneName = lane.lane === "survey" ? "survey" : "experiment";
+    const context = buildExpectedTransportContextSummary({
+      bootstrapTransport,
+      lane: laneName,
+      conversationId:
+        lane.conversationId ??
+        expectedConversationIdForLane(params?.conversationId, laneName, command.lane),
+    });
+    return {
+      lane: laneName,
+      transport: lane.transport ?? bootstrapTransport,
+      conversationId: lane.conversationId ?? context.conversationId,
+      projectRoot: lane.projectRoot ?? null,
+      projectId: lane.projectRoot ? path.basename(lane.projectRoot) : null,
+      finalVerdict: lane.finalVerdict ?? null,
+      failureReason: lane.failureReason ?? null,
+      expectedCommandSource: context.commandSource,
+      bootstrapSessionKey: lane.bootstrapSessionKey ?? context.bootstrapSessionKey,
+      commandTargetSessionKey: context.commandTargetSessionKey,
+      originatingChannel: context.originatingChannel,
+      originatingTo: context.originatingTo,
+      routePeer: context.to,
+      bindingChannelKey: context.channelKey,
+      bootstrapRunId: lane.bootstrapRunId ?? null,
+      bootstrapFallbackTransport: lane.bootstrapFallbackTransport ?? null,
+    };
+  });
+  return {
+    profile: transportProfileForBootstrapTransport(bootstrapTransport),
+    mode: params?.mode ?? null,
+    bootstrapTransport,
+    userPathAligned: bootstrapTransport === "discord",
+    expectedCommandSource: bootstrapTransport === "discord" ? "native" : "local",
+    hiddenProjectIdOverrideUsed: Boolean(params?.projectIdArg || params?.generatedProjectId),
+    requestedProjectId: params?.projectIdArg ?? null,
+    generatedProjectId: params?.generatedProjectId ?? null,
+    effectiveProjectId: params?.explicitProjectId ?? resultSummary.projectId ?? null,
+    localFallbackInjected: localFallbackInjected(workflowLocalFallback),
+    localFallback: workflowLocalFallback,
+    lanes,
   };
 }
 
@@ -1345,6 +1492,16 @@ function formatHumanSummary(summary) {
       `local fallback: code-review=${summary.workflowLocalFallback.codeReviewFallbackAfterMs ?? "unset"}ms (${summary.workflowLocalFallback.codeReviewSource}), discussion=${summary.workflowLocalFallback.autoModeDiscussionFallbackAfterMs ?? "unset"}ms (${summary.workflowLocalFallback.autoModeDiscussionSource})`
     );
   }
+  if (summary.transportParity) {
+    lines.push(
+      `transport parity: ${summary.transportParity.profile} commandSource=${summary.transportParity.expectedCommandSource} localFallbackInjected=${summary.transportParity.localFallbackInjected} hiddenProjectIdOverride=${summary.transportParity.hiddenProjectIdOverrideUsed}`
+    );
+    for (const lane of summary.transportParity.lanes ?? []) {
+      lines.push(
+        `transport parity ${lane.lane}: target=${lane.commandTargetSessionKey ?? "unknown"} origin=${lane.originatingChannel ?? "unknown"}:${lane.originatingTo ?? "unknown"} project=${lane.projectId ?? "unknown"}`
+      );
+    }
+  }
   for (const lane of summary.result.lanes) {
     lines.push(
       "",
@@ -1405,7 +1562,9 @@ async function main(argv = process.argv) {
   );
   const topic = argValue(argv, "--topic", "Generalized Category Discovery");
   const mode = normalizeAutoWorkflowMode(argValue(argv, "--mode", "live"));
-  const bootstrapTransport = argValue(argv, "--bootstrap-transport", "local");
+  const bootstrapTransport = normalizeAutoWorkflowBootstrapTransport(
+    argValue(argv, "--bootstrap-transport", "local")
+  );
   const projectIdArg = argValue(argv, "--project-id", null);
   const profile = argValue(argv, "--profile", null);
   const sourceConfigPath =
@@ -1421,8 +1580,18 @@ async function main(argv = process.argv) {
   const isolatedGateway = !hasFlag(argv, "--no-isolated-gateway");
   const timestamp = timestampSlug();
   const reuseProject = hasFlag(argv, "--reuse-project");
+  if (mode === "live" && bootstrapTransport === "discord" && projectIdArg) {
+    throw new Error(
+      "--project-id cannot be used with live Discord parity because a real native slash command cannot carry the hidden project id override. Use local-live for project-id-specific tests."
+    );
+  }
   const generatedProjectId =
-    mode === "live" && !reuseProject && !projectIdArg
+    shouldAutoGenerateLiveProjectId({
+      mode,
+      bootstrapTransport,
+      reuseProject,
+      projectIdArg,
+    })
       ? defaultProjectIdForAutoWorkflowRun({ command, topic, timestamp })
       : null;
   const explicitProjectId = projectIdArg ?? generatedProjectId;
@@ -1737,6 +1906,17 @@ async function main(argv = process.argv) {
       timedOut: child.timedOut,
     },
     result: resultSummary,
+    transportParity: buildAutoWorkflowTransportParityScorecard({
+      command,
+      mode,
+      bootstrapTransport,
+      conversationId,
+      resultSummary,
+      workflowLocalFallback: workflowLocalFallback.summary,
+      projectIdArg,
+      generatedProjectId,
+      explicitProjectId,
+    }),
     snapshots,
     snapshotRoot: path.join(runRoot, "snapshots"),
     projectsDashboardPath: projectsDashboard.projectsDashboardPath ?? null,

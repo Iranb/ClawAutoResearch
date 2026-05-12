@@ -451,6 +451,7 @@ import {
   ensureWorkflowProjectRootImpl,
   formatProjectDirEntry as formatProjectDirEntryImpl,
   getGateStatePath as getGateStatePathImpl,
+  getConfiguredProjectsRoot,
   getGateStateSummaryImpl,
   getProjectsStatePath as getProjectsStatePathImpl,
   hasTimedDefaultGateExpired as hasTimedDefaultGateExpiredImpl,
@@ -10251,6 +10252,26 @@ export function getProjectRootForWorkflow(options?: {
   return getProjectRoot(options);
 }
 
+function assertWorkflowChannelBindingProjectsRootConfigured(params: {
+  policy?: WorkflowGuardPolicy;
+  workspaceDir?: string;
+}): void {
+  const policy = normalizePolicy(params.policy as Record<string, unknown> | undefined);
+  if (!policy.enableChannelProjectBindings) {
+    return;
+  }
+  const projectsRoot = getConfiguredProjectsRoot({
+    policy,
+    workspaceDir: params.workspaceDir,
+  });
+  if (projectsRoot) {
+    return;
+  }
+  throw new Error(
+    "Channel-project bindings require ClawAutoResearch projectsRoot (or OPENCLAW_PROJECTS_ROOT); workspace fallback is disabled for workflow project resolution."
+  );
+}
+
 export function getChannelProjectBindingForWorkflow(params: {
   policy?: WorkflowGuardPolicy;
   workspaceDir?: string;
@@ -10259,6 +10280,7 @@ export function getChannelProjectBindingForWorkflow(params: {
   messageChannel?: string;
   channelKey?: string;
 }) {
+  assertWorkflowChannelBindingProjectsRootConfigured(params);
   return getChannelProjectBinding({
     policy: params.policy,
     context: {
@@ -10275,6 +10297,7 @@ export function listChannelProjectBindingsForWorkflow(params: {
   policy?: WorkflowGuardPolicy;
   workspaceDir?: string;
 }) {
+  assertWorkflowChannelBindingProjectsRootConfigured(params);
   return listChannelProjectBindings({
     policy: params.policy,
     context: {
@@ -10325,6 +10348,7 @@ export async function bindChannelProjectForWorkflow(params: {
   createIfMissing?: boolean;
   runtimeSession?: WorkflowRuntimeSessionBinding | null;
 }) {
+  assertWorkflowChannelBindingProjectsRootConfigured(params);
   const ensuredProject = await ensureWorkflowProjectRoot({
     policy: params.policy,
     workspaceDir: params.workspaceDir,
@@ -10395,6 +10419,7 @@ export async function ensureChannelProjectBindingForWorkflow(params: {
   notes?: string | null;
   runtimeSession?: WorkflowRuntimeSessionBinding | null;
 }) {
+  assertWorkflowChannelBindingProjectsRootConfigured(params);
   if (
     !shouldUseChannelProjectBindingForWorkflow({
       messageChannel: params.messageChannel,
@@ -10513,6 +10538,7 @@ export async function unbindChannelProjectForWorkflow(params: {
   messageChannel?: string;
   channelKey?: string;
 }) {
+  assertWorkflowChannelBindingProjectsRootConfigured(params);
   return clearChannelProjectBinding({
     policy: params.policy,
     context: {

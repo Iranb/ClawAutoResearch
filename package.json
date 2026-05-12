@@ -60,9 +60,15 @@
     "test:workflow:writing": "node --test $(find tests/workflow/writing -name '*.test.mjs' -type f | sort)",
     "test:workflow:zotero": "node --test $(find tests/workflow/zotero -name '*.test.mjs' -type f | sort)",
     "test:auto:fixture": "node scripts/run_auto_workflow_e2e_test.mjs --mode fixture --command full",
-    "test:auto:real": "node scripts/run_auto_workflow_e2e_test.mjs --mode live --command full",
-    "test:autoresearch:real": "node scripts/run_auto_workflow_e2e_test.mjs --mode live --command /autoresearch",
-    "test:autoreview:real": "node scripts/run_auto_workflow_e2e_test.mjs --mode live --command /autoreview",
+    "test:auto:local-live": "node scripts/run_auto_workflow_e2e_test.mjs --mode live --command full --bootstrap-transport local",
+    "test:auto:discord-parity": "node scripts/run_auto_workflow_e2e_test.mjs --mode live --command full --bootstrap-transport discord",
+    "test:auto:real": "node scripts/run_auto_workflow_e2e_test.mjs --mode live --command full --bootstrap-transport discord",
+    "test:autoresearch:local-live": "node scripts/run_auto_workflow_e2e_test.mjs --mode live --command /autoresearch --bootstrap-transport local",
+    "test:autoresearch:discord-parity": "node scripts/run_auto_workflow_e2e_test.mjs --mode live --command /autoresearch --bootstrap-transport discord",
+    "test:autoresearch:real": "node scripts/run_auto_workflow_e2e_test.mjs --mode live --command /autoresearch --bootstrap-transport discord",
+    "test:autoreview:local-live": "node scripts/run_auto_workflow_e2e_test.mjs --mode live --command /autoreview --bootstrap-transport local",
+    "test:autoreview:discord-parity": "node scripts/run_auto_workflow_e2e_test.mjs --mode live --command /autoreview --bootstrap-transport discord",
+    "test:autoreview:real": "node scripts/run_auto_workflow_e2e_test.mjs --mode live --command /autoreview --bootstrap-transport discord",
     "install:plugin": "bash install.sh"
   },
   "keywords": [

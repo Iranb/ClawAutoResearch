@@ -152,6 +152,13 @@ export type WorkflowRuntimeDispatchReconciliationResult = {
   lastSessionHeartbeatAt: string | null;
 };
 
+export type WorkflowRuntimeDispatchTerminalityResult = {
+  ok: boolean;
+  queueFound: boolean;
+  sessionFound: boolean;
+  handoffFound: boolean;
+};
+
 const ACTIVE_RUNTIME_QUEUE_STATUSES = new Set([
   "queued",
   "launching",
@@ -436,6 +443,71 @@ export async function reconcileWorkflowRuntimeDispatchState(params: {
     details: result,
   });
   return result;
+}
+
+export async function verifyWorkflowRuntimeDispatchTerminality(params: {
+  projectRoot: string;
+  projectId?: string | null;
+  stage?: string | null;
+  owner?: string | null;
+  launchKey?: string | null;
+  sessionKey?: string | null;
+  runId?: string | null;
+  handoffIntentId?: string | null;
+}): Promise<WorkflowRuntimeDispatchTerminalityResult> {
+  const projectRoot = path.resolve(params.projectRoot);
+  const projectId = resolveProjectId(projectRoot, params.projectId);
+  const stage = readString(params.stage);
+  const owner = readString(params.owner);
+  const launchKey = readString(params.launchKey);
+  const sessionKey = readString(params.sessionKey);
+  const runId = readString(params.runId);
+  const handoffIntentId = readString(params.handoffIntentId);
+  const [queueStore, sessionsStore, handoffStore] = await Promise.all([
+    readWorkflowRuntimeQueueStore(projectRoot),
+    readWorkflowRuntimeSessionsStore(projectRoot),
+    readWorkflowHandoffIntentStore(projectRoot),
+  ]);
+  const queueFound = queueStore.entries.some(
+    (entry) => launchKey != null && entry.queueKey === launchKey
+  );
+  const sessionFound = sessionsStore.entries.some(
+    (entry) =>
+      (launchKey != null && entry.queueKey === launchKey) ||
+      (sessionKey != null && entry.sessionKey === sessionKey) ||
+      (runId != null && entry.runId === runId)
+  );
+  const handoffFound = handoffStore.intents.some(
+    (intent) =>
+      (handoffIntentId != null && intent.intentId === handoffIntentId) ||
+      (isWorkflowHandoffActiveStatus(intent.status) &&
+        sameResolvedPath(intent.projectRoot, projectRoot) &&
+        ownerMatches(intent.toRole, owner) &&
+        stageMatches(intent.stageAfter ?? intent.stage, stage))
+  );
+  const ok = queueFound || sessionFound || handoffFound;
+  await appendWorkflowDiagnosticEvent({
+    projectRoot,
+    projectId,
+    component: "dispatch",
+    action: "dispatch_terminality_checked",
+    status: ok ? "completed" : "failed",
+    stage,
+    owner,
+    summary: ok
+      ? "Auto-stage dispatch has a durable queue, session, or handoff mapping."
+      : "Auto-stage dispatch returned without a durable queue, session, or handoff mapping.",
+    details: {
+      launchKey,
+      sessionKey,
+      runId,
+      handoffIntentId,
+      queueFound,
+      sessionFound,
+      handoffFound,
+    },
+  });
+  return { ok, queueFound, sessionFound, handoffFound };
 }
 
 export async function buildWorkflowRuntimeRecoveryPlan(params: {

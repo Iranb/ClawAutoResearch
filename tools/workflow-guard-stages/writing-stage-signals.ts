@@ -7,7 +7,10 @@ import {
   evaluateCrossDomainInspirationGate,
   normalizeCrossDomainInspirationState,
 } from "../idea-catalyst/cross-domain-contract";
-import { evaluatePaperGuruGate } from "../autoresearch-loop-state";
+import {
+  AUTORESEARCH_LOOP_STATE_PATH,
+  evaluatePaperGuruGate,
+} from "../autoresearch-loop-state";
 import { normalizeSurveyVisualCompilerState } from "../workflow-guard-state/survey-visual-compiler";
 import {
   auditRevisionCycleObject,
@@ -123,6 +126,152 @@ function readNumberField(record: Record<string, unknown> | null, keys: string[])
     }
   }
   return 0;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function stringValue(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function stringList(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return Array.from(
+    new Set(value.map((entry) => stringValue(entry)).filter((entry): entry is string => Boolean(entry)))
+  );
+}
+
+function normalized(value: unknown): string | null {
+  return stringValue(value)?.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "") ?? null;
+}
+
+function booleanValue(value: unknown): boolean | null {
+  if (typeof value === "boolean") return value;
+  const raw = normalized(value);
+  if (raw === "true") return true;
+  if (raw === "false") return false;
+  return null;
+}
+
+function isStrongArticleClaim(record: Record<string, unknown>): boolean {
+  const strength = normalized(
+    record.strength ??
+      record.claim_strength ??
+      record.claimStrength ??
+      record.evidence_requirement ??
+      record.evidenceRequirement
+  );
+  return (
+    strength === "strong" ||
+    strength === "paper_facing" ||
+    strength === "paragraph_required" ||
+    booleanValue(record.strong_claim ?? record.strongClaim) === true ||
+    booleanValue(record.paper_facing ?? record.paperFacing) === true ||
+    booleanValue(record.requires_paragraph_evidence ?? record.requiresParagraphEvidence) === true
+  );
+}
+
+function claimIdentifier(record: Record<string, unknown>, fallback: string): string {
+  return stringValue(record.claim_id) ?? stringValue(record.claimId) ?? stringValue(record.id) ?? fallback;
+}
+
+function usageClaimIds(record: Record<string, unknown>): string[] {
+  const scalar = stringValue(record.claim_id) ?? stringValue(record.claimId);
+  return [...stringList(record.claim_ids ?? record.claimIds), ...(scalar ? [scalar] : [])];
+}
+
+function hasPaperAnchor(record: Record<string, unknown>): boolean {
+  return (
+    stringList(record.paper_ids ?? record.paperIds).length > 0 ||
+    Boolean(stringValue(record.paper_id) ?? stringValue(record.paperId))
+  );
+}
+
+function hasParagraphAnchor(record: Record<string, unknown>): boolean {
+  return (
+    stringList(
+      record.paper_paragraph_ids ??
+        record.paperParagraphIds ??
+        record.paragraph_ids ??
+        record.paragraphIds
+    ).length > 0 ||
+    Boolean(
+      stringValue(record.paper_paragraph_id) ??
+        stringValue(record.paperParagraphId) ??
+        stringValue(record.paragraph_id) ??
+        stringValue(record.paragraphId)
+    )
+  );
+}
+
+async function readArticleEvidenceContract(params: {
+  projectRoot: string;
+  manifest: Record<string, unknown> | null | undefined;
+}): Promise<Record<string, unknown>> {
+  const state = await readJsonIfExists<Record<string, unknown>>(
+    path.join(params.projectRoot, AUTORESEARCH_LOOP_STATE_PATH)
+  );
+  const stateReference = asRecord(state?.reference_context);
+  const manifestReference = asRecord(params.manifest?.reference_context);
+  return (
+    asRecord(stateReference?.article_evidence_contract) ??
+    asRecord(manifestReference?.article_evidence_contract) ??
+    {}
+  );
+}
+
+async function appendArticleEvidenceCoverageSignals(params: {
+  missing: string[];
+  projectRoot: string;
+  manifest: Record<string, unknown> | null | undefined;
+  phase: "write" | "submit";
+}): Promise<void> {
+  const contract = await readArticleEvidenceContract({
+    projectRoot: params.projectRoot,
+    manifest: params.manifest,
+  });
+  const claims = Array.isArray(contract.claims)
+    ? contract.claims.map(asRecord).filter((entry): entry is Record<string, unknown> => Boolean(entry))
+    : [];
+  const strongClaims = claims.filter(isStrongArticleClaim);
+  if (strongClaims.length === 0) {
+    return;
+  }
+  const usages = Array.isArray(contract.usages)
+    ? contract.usages.map(asRecord).filter((entry): entry is Record<string, unknown> => Boolean(entry))
+    : [];
+  for (const [index, claim] of strongClaims.entries()) {
+    const claimId = claimIdentifier(claim, `claim_${index + 1}`);
+    const claimUsages = usages.filter((usage) => usageClaimIds(usage).includes(claimId));
+    const paperCovered = hasPaperAnchor(claim) || claimUsages.some(hasPaperAnchor);
+    const paragraphCovered =
+      hasParagraphAnchor(claim) ||
+      claimUsages.some((usage) => hasPaperAnchor(usage) && hasParagraphAnchor(usage));
+    const waived = claimUsages.some((usage) =>
+      Boolean(
+        stringValue(usage.waived_reason) ??
+          stringValue(usage.waivedReason) ??
+          stringValue(usage.waiver_reason) ??
+          stringValue(usage.waiverReason)
+      )
+    );
+    if (params.phase === "write" && !paperCovered) {
+      params.missing.push(
+        `article_evidence_contract strong claim ${claimId} must have a paper anchor before WRITE`
+      );
+    }
+    if (params.phase === "submit" && (!paperCovered || !paragraphCovered) && !waived) {
+      params.missing.push(
+        `article_evidence_contract strong claim ${claimId} must have claim-paper-paragraph usage coverage before SUBMIT`
+      );
+    }
+  }
 }
 
 function effectiveCitationMinimumForWritingContract(params: {
@@ -568,6 +717,12 @@ export async function collectWriteStageMissingSignals(
       `graph_guided_writing has not been initialized yet (current: status=${graphGuidedWriting.status})`
     );
   }
+  await appendArticleEvidenceCoverageSignals({
+    missing,
+    projectRoot: ctx.projectRoot,
+    manifest: ctx.manifest,
+    phase: "write",
+  });
   const reviewIssueTracker = await deps.hydrateReviewIssueTrackerState({
     projectRoot: ctx.projectRoot,
     value: ctx.manifest?.review_issue_tracker,
@@ -866,6 +1021,12 @@ export async function collectSubmitStageMissingSignals(
       `PROJECT_MANIFEST.json.graph_guided_writing must report ready/covered evidence with no missing claims (current: status=${graphGuidedWriting.status}, evidence_coverage=${graphGuidedWriting.evidenceCoverageStatus}, missing_claims=${graphGuidedWriting.missingEvidenceClaims.join(",") || "none"})`
     );
   }
+  await appendArticleEvidenceCoverageSignals({
+    missing,
+    projectRoot: ctx.projectRoot,
+    manifest: ctx.manifest,
+    phase: "submit",
+  });
   const reviewIssueTracker = await deps.hydrateReviewIssueTrackerState({
     projectRoot: ctx.projectRoot,
     value: ctx.manifest?.review_issue_tracker,
