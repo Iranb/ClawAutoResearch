@@ -14,6 +14,8 @@ import {
   replayWorkflowBroadcastOutbox,
 } from "./workflow-announce-runtime.js";
 import { appendWorkflowDiagnosticEvent } from "./workflow-diagnostics.js";
+import { readWorkflowHandoffIntentStore } from "./workflow-handoff/handoff-store";
+import { isWorkflowHandoffActiveStatus } from "./workflow-handoff/handoff-types";
 import type { ChannelProjectBindingPolicy } from "./channel-project-bindings";
 import type {
   WorkflowRuntimeBroadcastEntry,
@@ -133,6 +135,308 @@ export type WorkflowRuntimeRecoveryResult = {
   repairedSessions: WorkflowRuntimeSessionEntry[];
   recoveryBroadcast: WorkflowRuntimeBroadcastEntry | null;
 };
+
+export type WorkflowRuntimeDispatchReconciliationResult = {
+  projectId: string | null;
+  projectRoot: string;
+  stage: string | null;
+  owner: string | null;
+  queueKey: string | null;
+  status: "healthy" | "waiting_for_dispatch" | "waiting_for_owner" | "stale_reclaimed";
+  shouldDispatch: boolean;
+  detectedCondition: string | null;
+  activeSessionKeys: string[];
+  reclaimedSessionKeys: string[];
+  activeQueueKeys: string[];
+  activeHandoffIds: string[];
+  lastSessionHeartbeatAt: string | null;
+};
+
+const ACTIVE_RUNTIME_QUEUE_STATUSES = new Set([
+  "queued",
+  "launching",
+  "running",
+  "degraded",
+]);
+
+function sameResolvedPath(left: string | null | undefined, right: string): boolean {
+  const resolvedLeft = readString(left);
+  return !resolvedLeft || path.resolve(resolvedLeft) === right;
+}
+
+function ownerMatches(
+  value: string | null | undefined,
+  owner: string | null
+): boolean {
+  const normalizedOwner = readString(owner);
+  return !normalizedOwner || readString(value) === normalizedOwner;
+}
+
+function stageMatches(
+  value: string | null | undefined,
+  stage: string | null
+): boolean {
+  const normalizedStage = readString(stage);
+  return !normalizedStage || readString(value) === normalizedStage;
+}
+
+function activeQueueMatchesDispatch(params: {
+  entry: WorkflowRuntimeQueueEntry;
+  projectRoot: string;
+  owner: string | null;
+  stage: string | null;
+  queueKey: string | null;
+}): boolean {
+  if (!ACTIVE_RUNTIME_QUEUE_STATUSES.has(params.entry.status)) {
+    return false;
+  }
+  if (!sameResolvedPath(params.entry.projectRoot, params.projectRoot)) {
+    return false;
+  }
+  if (readString(params.queueKey) && params.entry.queueKey === params.queueKey) {
+    return true;
+  }
+  if (!ownerMatches(params.entry.ownerAgent, params.owner)) {
+    return false;
+  }
+  return stageMatches(params.entry.dispatchPayload?.stage, params.stage);
+}
+
+function activeSessionMatchesDispatch(params: {
+  entry: WorkflowRuntimeSessionEntry;
+  projectRoot: string;
+  owner: string | null;
+  queueKey: string | null;
+}): boolean {
+  if (params.entry.status !== "active") {
+    return false;
+  }
+  if (!sameResolvedPath(params.entry.projectRoot, params.projectRoot)) {
+    return false;
+  }
+  if (readString(params.queueKey) && params.entry.queueKey === params.queueKey) {
+    return true;
+  }
+  if (
+    !ownerMatches(params.entry.ownerAgent, params.owner) &&
+    !ownerMatches(params.entry.agentId, params.owner) &&
+    !ownerMatches(params.entry.role, params.owner)
+  ) {
+    return false;
+  }
+  return params.entry.family === "research" && params.entry.kind === "workflow_stage_dispatch";
+}
+
+function latestSessionFreshnessIso(
+  entry: WorkflowRuntimeSessionEntry
+): string | null {
+  const candidates = [
+    entry.lastHeartbeatAt,
+    entry.lastAnnounceAt,
+    entry.lastCheckedAt,
+    entry.startedAt,
+  ].filter((value): value is string => Boolean(readString(value)));
+  return candidates
+    .sort((left, right) => Date.parse(right) - Date.parse(left))[0] ?? null;
+}
+
+function latestIso(values: Array<string | null | undefined>): string | null {
+  return values
+    .filter((value): value is string => Boolean(readString(value)))
+    .sort((left, right) => Date.parse(right) - Date.parse(left))[0] ?? null;
+}
+
+export async function reconcileWorkflowRuntimeDispatchState(params: {
+  projectRoot: string;
+  projectId?: string | null;
+  stage?: string | null;
+  owner?: string | null;
+  queueKey?: string | null;
+  staleSessionAgeMs?: number;
+}): Promise<WorkflowRuntimeDispatchReconciliationResult> {
+  const projectRoot = path.resolve(params.projectRoot);
+  const projectId = resolveProjectId(projectRoot, params.projectId);
+  const stage = readString(params.stage);
+  const owner = readString(params.owner);
+  const queueKey = readString(params.queueKey);
+  const staleSessionAgeMs =
+    typeof params.staleSessionAgeMs === "number" && Number.isFinite(params.staleSessionAgeMs)
+      ? Math.max(0, Math.floor(params.staleSessionAgeMs))
+      : 15 * 60 * 1000;
+
+  const [queueStore, sessionsStore, handoffStore] = await Promise.all([
+    readWorkflowRuntimeQueueStore(projectRoot),
+    readWorkflowRuntimeSessionsStore(projectRoot),
+    readWorkflowHandoffIntentStore(projectRoot),
+  ]);
+  const activeQueue = queueStore.entries.filter((entry) =>
+    activeQueueMatchesDispatch({
+      entry,
+      projectRoot,
+      owner,
+      stage,
+      queueKey,
+    })
+  );
+  const activeHandoffs = handoffStore.intents.filter(
+    (intent) =>
+      isWorkflowHandoffActiveStatus(intent.status) &&
+      sameResolvedPath(intent.projectRoot, projectRoot) &&
+      ownerMatches(intent.toRole, owner) &&
+      stageMatches(intent.stageAfter ?? intent.stage, stage)
+  );
+  const activeSessions = sessionsStore.entries.filter((entry) =>
+    activeSessionMatchesDispatch({
+      entry,
+      projectRoot,
+      owner,
+      queueKey,
+    })
+  );
+  const activeSessionKeys = activeSessions.map((entry) => entry.sessionKey);
+  const lastSessionHeartbeatAt = latestIso(
+    activeSessions.map((entry) => latestSessionFreshnessIso(entry))
+  );
+
+  if (activeQueue.length > 0 || activeHandoffs.length > 0) {
+    const result: WorkflowRuntimeDispatchReconciliationResult = {
+      projectId,
+      projectRoot,
+      stage,
+      owner,
+      queueKey,
+      status: "waiting_for_dispatch",
+      shouldDispatch: false,
+      detectedCondition: "active_dispatch_chain_exists",
+      activeSessionKeys,
+      reclaimedSessionKeys: [],
+      activeQueueKeys: activeQueue.map((entry) => entry.queueKey),
+      activeHandoffIds: activeHandoffs.map((entry) => entry.intentId),
+      lastSessionHeartbeatAt,
+    };
+    await appendWorkflowDiagnosticEvent({
+      projectRoot,
+      projectId,
+      component: "runtime_recovery",
+      action: "dispatch_reconciliation",
+      status: "waiting",
+      stage,
+      owner,
+      summary:
+        "Auto-stage dispatch is waiting because an active queue entry or handoff already owns this delivery chain.",
+      details: result,
+    });
+    return result;
+  }
+
+  if (activeSessions.length === 0) {
+    return {
+      projectId,
+      projectRoot,
+      stage,
+      owner,
+      queueKey,
+      status: "healthy",
+      shouldDispatch: true,
+      detectedCondition: null,
+      activeSessionKeys,
+      reclaimedSessionKeys: [],
+      activeQueueKeys: activeQueue.map((entry) => entry.queueKey),
+      activeHandoffIds: activeHandoffs.map((entry) => entry.intentId),
+      lastSessionHeartbeatAt,
+    };
+  }
+
+  const staleSessions = activeSessions.filter((entry) =>
+    isStaleSessionEntry(entry, staleSessionAgeMs)
+  );
+  if (staleSessions.length !== activeSessions.length) {
+    const result: WorkflowRuntimeDispatchReconciliationResult = {
+      projectId,
+      projectRoot,
+      stage,
+      owner,
+      queueKey,
+      status: "waiting_for_owner",
+      shouldDispatch: false,
+      detectedCondition: "orphaned_bound_session_without_handoff",
+      activeSessionKeys,
+      reclaimedSessionKeys: [],
+      activeQueueKeys: [],
+      activeHandoffIds: [],
+      lastSessionHeartbeatAt,
+    };
+    await appendWorkflowDiagnosticEvent({
+      projectRoot,
+      projectId,
+      component: "runtime_recovery",
+      action: "dispatch_reconciliation",
+      status: "waiting",
+      stage,
+      owner,
+      summary:
+        "Auto-stage dispatch is waiting because an active owner session exists without an active handoff or queue entry.",
+      details: result,
+    });
+    return result;
+  }
+
+  const reclaimedSessionKeys = staleSessions.map((entry) => entry.sessionKey);
+  const checkedAt = nowIso();
+  await writeWorkflowRuntimeSessionsStore({
+    projectRoot,
+    projectId,
+    entries: sessionsStore.entries.map((entry) =>
+      reclaimedSessionKeys.includes(entry.sessionKey)
+        ? {
+            ...entry,
+            status: "needs_repair",
+            lastCheckedAt: checkedAt,
+            lastError:
+              entry.lastError ??
+              "Reclaimed stale active stage-dispatch session with no active handoff or queue entry.",
+          }
+        : entry
+    ),
+  });
+
+  const result: WorkflowRuntimeDispatchReconciliationResult = {
+    projectId,
+    projectRoot,
+    stage,
+    owner,
+    queueKey,
+    status: "stale_reclaimed",
+    shouldDispatch: true,
+    detectedCondition: "orphaned_bound_session_without_handoff",
+    activeSessionKeys,
+    reclaimedSessionKeys,
+    activeQueueKeys: [],
+    activeHandoffIds: [],
+    lastSessionHeartbeatAt,
+  };
+  await appendWorkflowRuntimeEvent({
+    projectRoot,
+    projectId,
+    kind: "runtime_dispatch_reconciliation",
+    summary:
+      `Reclaimed ${reclaimedSessionKeys.length} stale active session(s) before auto-stage dispatch.`,
+    details: result,
+  });
+  await appendWorkflowDiagnosticEvent({
+    projectRoot,
+    projectId,
+    component: "runtime_recovery",
+    action: "dispatch_reconciliation",
+    status: "degraded",
+    stage,
+    owner,
+    summary:
+      "Reclaimed stale owner session(s) with no active handoff or queue before dispatch.",
+    details: result,
+  });
+  return result;
+}
 
 export async function buildWorkflowRuntimeRecoveryPlan(params: {
   projectRoot: string;

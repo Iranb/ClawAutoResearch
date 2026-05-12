@@ -21,6 +21,8 @@ import {
 import {
   readWorkflowRuntimeQueueStore,
   readWorkflowRuntimeSessionsStore,
+  writeWorkflowRuntimeQueueStore,
+  writeWorkflowRuntimeSessionsStore,
 } from "../../../tools/workflow-runtime-state.ts";
 import { bindChannelProjectForWorkflow } from "../../../tools/workflow-guard.ts";
 import {
@@ -70,6 +72,7 @@ import { readWorkflowHandoffIntentStore } from "../../../tools/workflow-handoff/
 import { readWorkflowArtifactReceiptStore } from "../../../tools/workflow-handoff/artifact-receipts.ts";
 import { readWorkflowHooksStateStore } from "../../../tools/workflow-hooks/state.ts";
 import { recordWorkflowNotificationChannelForProject } from "../../../tools/workflow-notification-channels.ts";
+import { readWorkflowDiagnosticEvents } from "../../../tools/workflow-diagnostics.ts";
 
 async function makeProjectsRoot() {
   return fs.mkdtemp(path.join(os.tmpdir(), "openclaw-research-workflow-service-"));
@@ -1593,6 +1596,405 @@ test("maybeLaunchAutoStageForProject runs researcher-owned work on a dedicated s
     /^agent:researcher:discord:group:paper-lab:subagent:/
   );
   assert.match(runs[0].message, /Immediate command: \/run-experiments/);
+});
+
+test("maybeLaunchAutoStageForProject waits instead of redispatching when an active owner session has no handoff or queue", async (t) => {
+  const projectsRoot = await makeProjectsRoot();
+  const projectRoot = path.join(projectsRoot, "alpha");
+  const runs = [];
+  t.after(async () => {
+    await fs.rm(projectsRoot, { recursive: true, force: true });
+  });
+  await fs.mkdir(projectRoot, { recursive: true });
+  await recordDiscordNotificationTarget(projectRoot, "alpha");
+  const now = new Date().toISOString();
+  await writeWorkflowRuntimeSessionsStore({
+    projectRoot,
+    projectId: "alpha",
+    entries: [
+      {
+        sessionKey: "agent:researcher:discord:group:paper-lab:subagent:experiment",
+        sessionId: "session-active",
+        runtime: "subagent",
+        role: "researcher",
+        agentId: "researcher",
+        ownerAgent: "researcher",
+        family: "research",
+        kind: "workflow_stage_dispatch",
+        channelKey: "discord:group:paper-lab",
+        requesterSessionKey: "agent:researcher:discord:group:paper-lab",
+        projectId: "alpha",
+        projectRoot,
+        parentSessionKey: "agent:researcher:discord:group:paper-lab",
+        threadBindingKey: null,
+        depth: 1,
+        status: "active",
+        runId: "run-active",
+        queueKey: null,
+        startedAt: now,
+        lastHeartbeatAt: now,
+        lastAnnounceAt: null,
+        lastCheckedAt: now,
+        lastFinishedAt: null,
+        lastError: null,
+      },
+    ],
+  });
+
+  const launch = await maybeLaunchAutoStageForProject({
+    workflowRuntime: {
+      async run(params) {
+        runs.push(params);
+        return { runId: `stage-run-${runs.length}` };
+      },
+    },
+    workflowPolicy: {
+      autoMode: "conservative",
+      autoGate: defaultAutoGateConfig(),
+      enableChannelProjectBindings: true,
+      projectsRoot,
+      heartbeatBackgroundChecks: true,
+      agentContactCooldownSeconds: 300,
+      enableWorkflowMailbox: true,
+    },
+    projectRoot,
+    projectId: "alpha",
+    autoIteratorResult: {
+      gateBlocking: false,
+      stageAfter: "experiment",
+      recommendedActions: [
+        {
+          kind: "drive_stage",
+          owner: "researcher",
+          stage: "experiment",
+          summary: "Run one bounded experiment-search pass.",
+          command: "/run-experiments",
+          mailboxMessageId: null,
+          cooldownRemainingSeconds: 0,
+          blocking: false,
+        },
+      ],
+    },
+    launchedStageKeys: new Map(),
+    deps: {
+      listChannelProjectBindingsForWorkflow() {
+        return {
+          enabled: true,
+          storePath: projectsRoot,
+          bindings: [
+            {
+              channelKey: "discord:group:paper-lab",
+              projectRoot,
+              projectId: "alpha",
+              messageChannel: "discord",
+              sessionKeySample: "agent:researcher:discord:group:paper-lab",
+              sessionId: null,
+              boundAt: "2026-03-25T00:00:00.000Z",
+              updatedAt: "2026-03-25T00:05:00.000Z",
+              boundByAgent: "researcher",
+              notes: null,
+            },
+          ],
+        };
+      },
+    },
+  });
+
+  assert.equal(launch.launched, false);
+  assert.equal(launch.reason, "runtime_reconciliation_waiting");
+  assert.equal(runs.length, 0);
+
+  const sessions = await readWorkflowRuntimeSessionsStore(projectRoot);
+  assert.equal(sessions.entries[0].status, "active");
+  const diagnostics = await readWorkflowDiagnosticEvents(projectRoot);
+  assert.ok(
+    diagnostics.some(
+      (event) =>
+        event.component === "runtime_recovery" &&
+        event.action === "dispatch_reconciliation" &&
+        event.status === "waiting"
+    )
+  );
+});
+
+test("maybeLaunchAutoStageForProject waits instead of redispatching when an active queue already owns the stage handoff", async (t) => {
+  const projectsRoot = await makeProjectsRoot();
+  const projectRoot = path.join(projectsRoot, "alpha");
+  const runs = [];
+  t.after(async () => {
+    await fs.rm(projectsRoot, { recursive: true, force: true });
+  });
+  await fs.mkdir(projectRoot, { recursive: true });
+  await recordDiscordNotificationTarget(projectRoot, "alpha");
+  const now = new Date().toISOString();
+  await writeWorkflowRuntimeQueueStore({
+    projectRoot,
+    projectId: "alpha",
+    entries: [
+      {
+        transitionId: "transition-existing-experiment",
+        queueId: "transition-existing-experiment",
+        queueKey: "existing-experiment-stage-handoff",
+        source: "workflow_auto_stage",
+        entryType: "dispatch_task",
+        ownerAgent: "researcher",
+        channelKey: "discord:group:paper-lab",
+        requesterSessionKey: "agent:researcher:discord:group:paper-lab",
+        messageChannel: "discord",
+        preferredSessionKey:
+          "agent:researcher:discord:group:paper-lab:subagent:experiment",
+        family: "research",
+        kind: "workflow_stage_dispatch",
+        projectId: "alpha",
+        projectRoot,
+        queuedAt: now,
+        lastAttemptedAt: null,
+        lastCheckedAt: now,
+        attemptCount: 0,
+        summary: "Queued experiment stage handoff.",
+        status: "queued",
+        fallbackMode: null,
+        lastError: null,
+        parentSessionKey: "agent:researcher:discord:group:paper-lab",
+        threadBindingKey: null,
+        depth: 1,
+        runPayload: null,
+        dispatchPayload: {
+          requesterChannel: "discord",
+          requesterAccountId: null,
+          preferredSessionKeys: [
+            "agent:researcher:discord:group:paper-lab:subagent:experiment",
+          ],
+          fromRole: "researcher",
+          toRole: "researcher",
+          projectRoot,
+          projectId: "alpha",
+          stage: "experiment",
+          summary: "Queued experiment stage handoff.",
+          command: "/run-experiments",
+          mailboxMessageId: null,
+          requireMailboxAcknowledgement: true,
+          extraBody: null,
+          waitTimeoutMs: 5000,
+          retryOnTimeout: true,
+          enableSpawnFallback: true,
+          useWorkflowHandoff: true,
+          autoModeActive: true,
+        },
+      },
+    ],
+  });
+
+  const launch = await maybeLaunchAutoStageForProject({
+    workflowRuntime: {
+      async run(params) {
+        runs.push(params);
+        return { runId: `stage-run-${runs.length}` };
+      },
+    },
+    workflowPolicy: {
+      autoMode: "conservative",
+      autoGate: defaultAutoGateConfig(),
+      enableChannelProjectBindings: true,
+      projectsRoot,
+      heartbeatBackgroundChecks: true,
+      agentContactCooldownSeconds: 300,
+      enableWorkflowMailbox: true,
+    },
+    projectRoot,
+    projectId: "alpha",
+    autoIteratorResult: {
+      gateBlocking: false,
+      stageAfter: "experiment",
+      recommendedActions: [
+        {
+          kind: "drive_stage",
+          owner: "researcher",
+          stage: "experiment",
+          summary: "Run one bounded experiment-search pass.",
+          command: "/run-experiments",
+          mailboxMessageId: null,
+          cooldownRemainingSeconds: 0,
+          blocking: false,
+        },
+      ],
+    },
+    launchedStageKeys: new Map(),
+    deps: {
+      listChannelProjectBindingsForWorkflow() {
+        return {
+          enabled: true,
+          storePath: projectsRoot,
+          bindings: [
+            {
+              channelKey: "discord:group:paper-lab",
+              projectRoot,
+              projectId: "alpha",
+              messageChannel: "discord",
+              sessionKeySample: "agent:researcher:discord:group:paper-lab",
+              sessionId: null,
+              boundAt: "2026-03-25T00:00:00.000Z",
+              updatedAt: "2026-03-25T00:05:00.000Z",
+              boundByAgent: "researcher",
+              notes: null,
+            },
+          ],
+        };
+      },
+    },
+  });
+
+  assert.equal(launch.launched, false);
+  assert.equal(launch.reason, "runtime_reconciliation_waiting");
+  assert.equal(runs.length, 0);
+
+  const diagnostics = await readWorkflowDiagnosticEvents(projectRoot);
+  assert.ok(
+    diagnostics.some(
+      (event) =>
+        event.component === "runtime_recovery" &&
+        event.action === "dispatch_reconciliation" &&
+        event.status === "waiting" &&
+        event.details?.detectedCondition === "active_dispatch_chain_exists"
+    )
+  );
+});
+
+test("maybeLaunchAutoStageForProject reclaims stale orphan owner sessions before dispatching", async (t) => {
+  const projectsRoot = await makeProjectsRoot();
+  const projectRoot = path.join(projectsRoot, "alpha");
+  const runs = [];
+  t.after(async () => {
+    await fs.rm(projectsRoot, { recursive: true, force: true });
+  });
+  await fs.mkdir(projectRoot, { recursive: true });
+  await recordDiscordNotificationTarget(projectRoot, "alpha");
+  const oldIso = "2026-03-25T00:00:00.000Z";
+  await writeWorkflowRuntimeSessionsStore({
+    projectRoot,
+    projectId: "alpha",
+    entries: [
+      {
+        sessionKey: "agent:researcher:discord:group:paper-lab:subagent:stale-experiment",
+        sessionId: "session-stale",
+        runtime: "subagent",
+        role: "researcher",
+        agentId: "researcher",
+        ownerAgent: "researcher",
+        family: "research",
+        kind: "workflow_stage_dispatch",
+        channelKey: "discord:group:paper-lab",
+        requesterSessionKey: "agent:researcher:discord:group:paper-lab",
+        projectId: "alpha",
+        projectRoot,
+        parentSessionKey: "agent:researcher:discord:group:paper-lab",
+        threadBindingKey: null,
+        depth: 1,
+        status: "active",
+        runId: "run-stale",
+        queueKey: null,
+        startedAt: oldIso,
+        lastHeartbeatAt: oldIso,
+        lastAnnounceAt: null,
+        lastCheckedAt: oldIso,
+        lastFinishedAt: null,
+        lastError: null,
+      },
+    ],
+  });
+
+  const launch = await maybeLaunchAutoStageForProject({
+    workflowRuntime: {
+      async run(params) {
+        runs.push(params);
+        await acknowledgePendingWorkflowMailboxes([projectRoot]);
+        return { runId: `stage-run-${runs.length}` };
+      },
+    },
+    workflowPolicy: {
+      autoMode: "conservative",
+      autoGate: defaultAutoGateConfig(),
+      enableChannelProjectBindings: true,
+      projectsRoot,
+      heartbeatBackgroundChecks: true,
+      agentContactCooldownSeconds: 60,
+      enableWorkflowMailbox: true,
+    },
+    projectRoot,
+    projectId: "alpha",
+    autoIteratorResult: {
+      gateBlocking: false,
+      stageAfter: "experiment",
+      recommendedActions: [
+        {
+          kind: "drive_stage",
+          owner: "researcher",
+          stage: "experiment",
+          summary: "Run one bounded experiment-search pass.",
+          command: "/run-experiments",
+          mailboxMessageId: null,
+          cooldownRemainingSeconds: 0,
+          blocking: false,
+        },
+      ],
+    },
+    launchedStageKeys: new Map(),
+    deps: {
+      listChannelProjectBindingsForWorkflow() {
+        return {
+          enabled: true,
+          storePath: projectsRoot,
+          bindings: [
+            {
+              channelKey: "discord:group:paper-lab",
+              projectRoot,
+              projectId: "alpha",
+              messageChannel: "discord",
+              sessionKeySample: "agent:researcher:discord:group:paper-lab",
+              sessionId: null,
+              boundAt: "2026-03-25T00:00:00.000Z",
+              updatedAt: "2026-03-25T00:05:00.000Z",
+              boundByAgent: "researcher",
+              notes: null,
+            },
+          ],
+        };
+      },
+    },
+  });
+
+  assert.equal(launch.launched, true);
+  assert.equal(launch.reason, "started");
+  assert.equal(runs.length, 1);
+
+  const sessions = await readWorkflowRuntimeSessionsStore(projectRoot);
+  assert.equal(
+    sessions.entries.find((entry) => entry.sessionKey.includes("stale-experiment"))?.status,
+    "needs_repair"
+  );
+  assert.equal(
+    sessions.entries.some(
+      (entry) => entry.queueKey === launch.launchKey && entry.status === "active"
+    ),
+    true
+  );
+  const diagnostics = await readWorkflowDiagnosticEvents(projectRoot);
+  assert.ok(
+    diagnostics.some(
+      (event) =>
+        event.component === "runtime_recovery" &&
+        event.action === "dispatch_reconciliation" &&
+        event.status === "degraded"
+    )
+  );
+  assert.ok(
+    diagnostics.some(
+      (event) =>
+        event.component === "dispatch" &&
+        event.action === "dispatch_terminality_checked" &&
+        event.status === "completed"
+    )
+  );
 });
 
 test("maybeLaunchAutoStageForProject honors configured experiment monitor cooldowns", async (t) => {

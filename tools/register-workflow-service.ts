@@ -24,6 +24,7 @@ import {
 } from "./workflow-execution/background-pool";
 import {
   readWorkflowAnnounceOutboxStore,
+  readWorkflowRuntimeQueueStore,
   readWorkflowRuntimeSessionsStore,
   updateWorkflowRuntimeQueueStore,
   updateWorkflowRuntimeSessionsStore,
@@ -33,6 +34,7 @@ import {
   recordWorkflowAnnounceEvent,
 } from "./workflow-session-orchestrator.js";
 import { runWorkflowRuntimeMaintenancePass } from "./workflow-runtime-maintenance.js";
+import { reconcileWorkflowRuntimeDispatchState } from "./workflow-runtime-recovery.js";
 import {
   createWorkflowBroadcastRuntimeFromApi,
   createWorkflowExecutionRuntimeFromApi,
@@ -435,6 +437,7 @@ type AutoStageLaunchAttempt = {
     | "no_drive_stage_action"
     | "cooldown_active"
     | "already_launched"
+    | "runtime_reconciliation_waiting"
     | "dispatch_failed";
   projectId: string | null;
   projectRoot: string;
@@ -2698,6 +2701,50 @@ function buildAutoStageLaunchKey(params: {
   ].join("::");
 }
 
+async function verifyWorkflowDispatchTerminality(params: {
+  projectRoot: string;
+  projectId: string | null;
+  stage: string | null;
+  owner: string | null;
+  launchKey: string;
+  sessionKey: string | null;
+  runId: string | null;
+}): Promise<{ ok: boolean; queueFound: boolean; sessionFound: boolean }> {
+  const [queueStore, sessionsStore] = await Promise.all([
+    readWorkflowRuntimeQueueStore(params.projectRoot),
+    readWorkflowRuntimeSessionsStore(params.projectRoot),
+  ]);
+  const queueFound = queueStore.entries.some(
+    (entry) => entry.queueKey === params.launchKey
+  );
+  const sessionFound = sessionsStore.entries.some(
+    (entry) =>
+      entry.queueKey === params.launchKey ||
+      (params.sessionKey != null && entry.sessionKey === params.sessionKey)
+  );
+  const ok = queueFound || sessionFound;
+  await appendWorkflowDiagnosticEvent({
+    projectRoot: params.projectRoot,
+    projectId: params.projectId,
+    component: "dispatch",
+    action: "dispatch_terminality_checked",
+    status: ok ? "completed" : "failed",
+    stage: params.stage,
+    owner: params.owner,
+    summary: ok
+      ? "Auto-stage dispatch has a durable queue or session mapping."
+      : "Auto-stage dispatch returned without a durable queue or session mapping.",
+    details: {
+      launchKey: params.launchKey,
+      sessionKey: params.sessionKey,
+      runId: params.runId,
+      queueFound,
+      sessionFound,
+    },
+  });
+  return { ok, queueFound, sessionFound };
+}
+
 function isExperimentMonitorCommand(command: string | null | undefined): boolean {
   return /\/monitor-experiment\b/i.test(command ?? "");
 }
@@ -2993,6 +3040,7 @@ export async function maybeLaunchAutoStageForProject(params: {
                     "binding_missing",
                     "cooldown_active",
                     "already_launched",
+                    "runtime_reconciliation_waiting",
                     "session_pool_full",
                     "no_drive_stage_action",
                   ].includes(attempt.reason)
@@ -3201,6 +3249,42 @@ export async function maybeLaunchAutoStageForProject(params: {
         owner: action.owner,
         command: action.command,
       });
+      const runtimeReconciliation = await reconcileWorkflowRuntimeDispatchState({
+        projectRoot: params.projectRoot,
+        projectId: params.projectId,
+        stage: action.stage ?? params.autoIteratorResult.stageAfter ?? null,
+        owner: action.owner,
+        queueKey: launchKey,
+        staleSessionAgeMs: Math.max(
+          60_000,
+          Math.floor((params.workflowPolicy.agentContactCooldownSeconds ?? 300) * 1000)
+        ),
+      });
+      if (runtimeReconciliation.status === "stale_reclaimed") {
+        params.launchedStageKeys.delete(params.projectRoot);
+      }
+      if (!runtimeReconciliation.shouldDispatch) {
+        const reconciliationError =
+          runtimeReconciliation.detectedCondition === "active_dispatch_chain_exists"
+            ? "An active queue entry or handoff already owns this stage delivery; waiting instead of repeating dispatch."
+            : "Active owner session exists without an active handoff or queue entry; waiting instead of repeating dispatch.";
+        return finalizeAttempt({
+          launched: false,
+          reason: "runtime_reconciliation_waiting",
+          projectId: params.projectId,
+          projectRoot: params.projectRoot,
+          stage: action.stage ?? params.autoIteratorResult.stageAfter ?? null,
+          owner: action.owner,
+          sessionKey: runtimeReconciliation.activeSessionKeys[0] ?? null,
+          runId: null,
+          dispatchStrategy: null,
+          launchKey,
+          error: reconciliationError,
+          reusedServiceSession: false,
+          activeResearcherSessionsInChannel:
+            runtimeReconciliation.activeSessionKeys.length,
+        });
+      }
       const lastLaunch = params.launchedStageKeys.get(params.projectRoot);
       const cooldownMs = Math.max(
         1,
@@ -3400,6 +3484,34 @@ export async function maybeLaunchAutoStageForProject(params: {
           dispatchStrategy: dispatchLaunch.strategy,
           launchKey,
           error: dispatchLaunch.error,
+          reusedServiceSession: false,
+          activeResearcherSessionsInChannel:
+            pooledSessionLease?.activeResearcherSessionsInChannel ?? null,
+        });
+      }
+      const terminality = await verifyWorkflowDispatchTerminality({
+        projectRoot: params.projectRoot,
+        projectId: params.projectId,
+        stage: action.stage ?? params.autoIteratorResult.stageAfter ?? null,
+        owner: action.owner,
+        launchKey,
+        sessionKey: dispatchLaunch.sessionKey,
+        runId: dispatchLaunch.runId,
+      });
+      if (!terminality.ok) {
+        return finalizeAttempt({
+          launched: false,
+          reason: "dispatch_failed",
+          projectId: params.projectId,
+          projectRoot: params.projectRoot,
+          stage: action.stage ?? params.autoIteratorResult.stageAfter ?? null,
+          owner: action.owner,
+          sessionKey: dispatchLaunch.sessionKey,
+          runId: dispatchLaunch.runId,
+          dispatchStrategy: dispatchLaunch.strategy,
+          launchKey,
+          error:
+            "Dispatch completed without a durable queue/session mapping; blocked for runtime recovery.",
           reusedServiceSession: false,
           activeResearcherSessionsInChannel:
             pooledSessionLease?.activeResearcherSessionsInChannel ?? null,
