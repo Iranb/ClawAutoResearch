@@ -45,7 +45,8 @@
     "./researcher/papernexus-idea-catalyst",
     "./researcher/papernexus-main-graph-name",
     "./researcher/papernexus-paper-refresh",
-    "./researcher/papernexus-precise-paper-index"
+    "./researcher/papernexus-precise-paper-index",
+    "./researcher/papernexus-corpus-refresh"
   ],
   "planner": [
     "./planner/experiment-plan",
