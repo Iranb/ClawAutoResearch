@@ -13,6 +13,7 @@ import {
   deriveProjectTitleForBootstrap,
   buildIdleResearchTemplateForBootstrap,
   defaultResearchProgramZoteroProjectPath,
+  getConfiguredProjectsRoot,
 } from "../workflow-guard-project-state";
 import { readMailbox } from "../workflow-guard-collaboration";
 import { loadExperimentLedgerIfExists } from "../workflow-guard-experiment-history";
@@ -113,6 +114,25 @@ export {
   defaultResearchProgramZoteroProjectPath,
 };
 
+function assertWorkflowBindingsProjectsRootConfigured(params: {
+  policy?: ChannelProjectBindingPolicy;
+  context?: ChannelProjectBindingContext;
+}): void {
+  if (params.policy?.enableChannelProjectBindings !== true) {
+    return;
+  }
+  const projectsRoot = getConfiguredProjectsRoot({
+    policy: params.policy,
+    workspaceDir: params.context?.workspaceDir,
+  });
+  if (projectsRoot) {
+    return;
+  }
+  throw new Error(
+    "Channel-project bindings require ClawAutoResearch projectsRoot (or OPENCLAW_PROJECTS_ROOT); workspace fallback is disabled for workflow project resolution."
+  );
+}
+
 export function resolveWorkflowProjectContext(
   params: {
     policy?: ChannelProjectBindingPolicy;
@@ -120,6 +140,7 @@ export function resolveWorkflowProjectContext(
     invalidEnvProjectRootMode?: InvalidEnvProjectRootMode;
   }
 ): ResolvedProjectContext {
+  assertWorkflowBindingsProjectsRootConfigured(params);
   return resolveChannelProjectContext(params);
 }
 

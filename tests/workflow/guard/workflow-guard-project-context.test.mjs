@@ -100,3 +100,40 @@ test("project context resolves a channel binding and loads project state", async
   assert.equal(state.mailbox.messages.length, 0);
 });
 
+test("project context rejects workflow channel bindings without a configured projectsRoot", async (t) => {
+  const workspaceRoot = await makeWorkspace();
+
+  t.after(async () => {
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  });
+
+  assert.throws(
+    () =>
+      resolveWorkflowProjectContext({
+        policy: {
+          enableChannelProjectBindings: true,
+        },
+        context: {
+          workspaceDir: workspaceRoot,
+          sessionKey: "agent:researcher:local:group:paper-lab",
+          messageChannel: "local",
+          role: "researcher",
+        },
+      }),
+    /workspace fallback is disabled/i
+  );
+
+  await assert.rejects(
+    () =>
+      loadWorkflowProjectState({
+        policy: {
+          enableChannelProjectBindings: true,
+        },
+        workspaceDir: workspaceRoot,
+        sessionKey: "agent:researcher:local:group:paper-lab",
+        messageChannel: "local",
+        role: "researcher",
+      }),
+    /workspace fallback is disabled/i
+  );
+});

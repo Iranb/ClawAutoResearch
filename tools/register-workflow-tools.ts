@@ -258,6 +258,10 @@ import {
 } from "./workflow-handoff/handoff-delivery";
 import { sweepPendingHandoffIntents } from "./workflow-handoff/handoff-sweep.js";
 import {
+  reconcileWorkflowRuntimeDispatchState,
+  verifyWorkflowRuntimeDispatchTerminality,
+} from "./workflow-runtime-recovery.js";
+import {
   claimAndActivateWorkflowHandoffForAgent,
   syncPreparedWorkflowHandoffToManifest,
 } from "./workflow-handoff/handoff-activation.js";
@@ -2208,6 +2212,31 @@ function buildAutoStageDispatchQueueKey(params: {
   ].join("::");
 }
 
+async function prepareAutoIteratorDispatchPreflight(params: {
+  projectRoot: string;
+  projectId?: string | null;
+  stage?: string | null;
+  owner?: string | null;
+  command?: string | null;
+  staleSessionAgeMs?: number;
+}) {
+  const queueKey = buildAutoStageDispatchQueueKey({
+    projectRoot: params.projectRoot,
+    stage: params.stage,
+    owner: params.owner,
+    command: params.command,
+  });
+  const runtimeReconciliation = await reconcileWorkflowRuntimeDispatchState({
+    projectRoot: params.projectRoot,
+    projectId: params.projectId,
+    stage: params.stage,
+    owner: params.owner,
+    queueKey,
+    staleSessionAgeMs: params.staleSessionAgeMs,
+  });
+  return { queueKey, runtimeReconciliation };
+}
+
 function buildStageHandoffAcceptanceChecks(params: {
   workflowLine: "experiment" | "survey";
   stageAfter: string | null | undefined;
@@ -2473,6 +2502,13 @@ export async function maybeDispatchAutoIteratorTask(params: {
       owner: ownerAfter,
     };
   }
+  const stage =
+    primaryAction.stage ?? params.result.stageAfter ?? params.snapshot.currentStage;
+  const command = primaryAction.command ?? params.result.nextAction;
+  const staleSessionAgeMs = Math.max(
+    60_000,
+    Math.floor((params.workflowPolicy.agentContactCooldownSeconds ?? 300) * 1000)
+  );
 
   if (requesterRole === ownerAfter) {
     if (
@@ -2482,15 +2518,37 @@ export async function maybeDispatchAutoIteratorTask(params: {
     ) {
       return null;
     }
+    const dispatchPreflight = await prepareAutoIteratorDispatchPreflight({
+      projectRoot: params.snapshot.projectRoot,
+      projectId: params.snapshot.projectId,
+      stage,
+      owner: ownerAfter,
+      command,
+      staleSessionAgeMs,
+    });
+    if (!dispatchPreflight.runtimeReconciliation.shouldDispatch) {
+      return {
+        dispatched: false,
+        blockedByRuntimeReconciliation: true,
+        blockedByCooldown: false,
+        cooldownRemainingSeconds: null,
+        owner: ownerAfter,
+        sameOwnerRepairDispatch: true,
+        queueKey: dispatchPreflight.queueKey,
+        runtimeDispatchStatus: dispatchPreflight.runtimeReconciliation,
+        error:
+          dispatchPreflight.runtimeReconciliation.detectedCondition ===
+          "active_dispatch_chain_exists"
+            ? "An active queue entry or handoff already owns this stage delivery; waiting instead of repeating dispatch."
+            : "Active owner session exists without an active handoff or queue entry; waiting instead of repeating dispatch.",
+      };
+    }
     const requesterSessionKey =
       readString(params.agentCtx.sessionKey) ?? `agent:${requesterRole}:main`;
     const preferredSessionKeys = deriveWorkflowDispatchSessionCandidates({
       requesterSessionKey,
       targetRole: ownerAfter,
     });
-    const stage =
-      primaryAction.stage ?? params.result.stageAfter ?? params.snapshot.currentStage;
-    const command = primaryAction.command ?? params.result.nextAction;
     const summary = primaryAction.summary;
     const dispatch = params.forceQueueOnly
       ? {
@@ -2571,6 +2629,15 @@ export async function maybeDispatchAutoIteratorTask(params: {
           autoModeActive: true,
         },
       });
+      const terminality = await verifyWorkflowRuntimeDispatchTerminality({
+        projectRoot: params.snapshot.projectRoot,
+        projectId: params.snapshot.projectId,
+        stage,
+        owner: ownerAfter,
+        launchKey: queued.entry.queueKey,
+        sessionKey: dispatch.sessionKey,
+        runId: dispatch.runId,
+      });
       return {
         ...dispatch,
         blockedByCooldown: false,
@@ -2580,6 +2647,31 @@ export async function maybeDispatchAutoIteratorTask(params: {
         queuedFallback: true,
         queueKey: queued.entry.queueKey,
         queuePosition: queued.queuePosition,
+        runtimeDispatchStatus: dispatchPreflight.runtimeReconciliation,
+        dispatchTerminality: terminality,
+      };
+    }
+    const terminality = await verifyWorkflowRuntimeDispatchTerminality({
+      projectRoot: params.snapshot.projectRoot,
+      projectId: params.snapshot.projectId,
+      stage,
+      owner: ownerAfter,
+      launchKey: dispatchPreflight.queueKey,
+      sessionKey: dispatch.sessionKey,
+      runId: dispatch.runId,
+    });
+    if (!terminality.ok) {
+      return {
+        ...dispatch,
+        dispatched: false,
+        blockedByCooldown: false,
+        cooldownRemainingSeconds: null,
+        owner: ownerAfter,
+        sameOwnerRepairDispatch: true,
+        runtimeDispatchStatus: dispatchPreflight.runtimeReconciliation,
+        dispatchTerminality: terminality,
+        error:
+          "Dispatch completed without a durable queue/session/handoff mapping; blocked for runtime recovery.",
       };
     }
     return {
@@ -2588,6 +2680,8 @@ export async function maybeDispatchAutoIteratorTask(params: {
       cooldownRemainingSeconds: null,
       owner: ownerAfter,
       sameOwnerRepairDispatch: true,
+      runtimeDispatchStatus: dispatchPreflight.runtimeReconciliation,
+      dispatchTerminality: terminality,
     };
   }
 
@@ -2619,6 +2713,30 @@ export async function maybeDispatchAutoIteratorTask(params: {
   }
   if (!params.snapshot.projectRoot) {
     return null;
+  }
+  const dispatchPreflight = await prepareAutoIteratorDispatchPreflight({
+    projectRoot: params.snapshot.projectRoot,
+    projectId: params.snapshot.projectId,
+    stage,
+    owner: ownerAfter,
+    command,
+    staleSessionAgeMs,
+  });
+  if (!dispatchPreflight.runtimeReconciliation.shouldDispatch) {
+    return {
+      dispatched: false,
+      blockedByRuntimeReconciliation: true,
+      blockedByCooldown: false,
+      cooldownRemainingSeconds: null,
+      owner: ownerAfter,
+      queueKey: dispatchPreflight.queueKey,
+      runtimeDispatchStatus: dispatchPreflight.runtimeReconciliation,
+      error:
+        dispatchPreflight.runtimeReconciliation.detectedCondition ===
+        "active_dispatch_chain_exists"
+          ? "An active queue entry or handoff already owns this stage delivery; waiting instead of repeating dispatch."
+          : "Active owner session exists without an active handoff or queue entry; waiting instead of repeating dispatch.",
+    };
   }
   const handoffIntent = await createStageOwnerHandoffIntent({
     projectRoot: params.snapshot.projectRoot,
@@ -2844,9 +2962,9 @@ export async function maybeDispatchAutoIteratorTask(params: {
       projectsRoot: params.workflowPolicy.projectsRoot,
       queueKey: buildAutoStageDispatchQueueKey({
         projectRoot: params.snapshot.projectRoot,
-        stage: primaryAction.stage ?? params.result.stageAfter ?? params.snapshot.currentStage,
+        stage,
         owner: ownerAfter,
-        command: primaryAction.command,
+        command,
       }),
       summary:
         `Queued the ${primaryAction.stage ?? params.result.stageAfter ?? "current"} stage handoff for ${ownerAfter} because immediate auto-mode dispatch was unavailable.`,
@@ -2873,6 +2991,16 @@ export async function maybeDispatchAutoIteratorTask(params: {
         autoModeActive: true,
       },
     });
+    const terminality = await verifyWorkflowRuntimeDispatchTerminality({
+      projectRoot: params.snapshot.projectRoot,
+      projectId: params.snapshot.projectId,
+      stage,
+      owner: ownerAfter,
+      launchKey: queued.entry.queueKey,
+      sessionKey: dispatch.sessionKey,
+      runId: dispatch.runId,
+      handoffIntentId: handoffIntent.intent.intentId,
+    });
     return {
       ...dispatch,
       blockedByCooldown: false,
@@ -2883,6 +3011,36 @@ export async function maybeDispatchAutoIteratorTask(params: {
       queuedFallback: true,
       queueKey: queued.entry.queueKey,
       queuePosition: queued.queuePosition,
+      runtimeDispatchStatus: dispatchPreflight.runtimeReconciliation,
+      dispatchTerminality: terminality,
+    };
+  }
+  const terminality = await verifyWorkflowRuntimeDispatchTerminality({
+    projectRoot: params.snapshot.projectRoot,
+    projectId: params.snapshot.projectId,
+    stage,
+    owner: ownerAfter,
+    launchKey:
+      "queueKey" in dispatch && typeof dispatch.queueKey === "string"
+        ? dispatch.queueKey
+        : dispatchPreflight.queueKey,
+    sessionKey: dispatch.sessionKey,
+    runId: dispatch.runId,
+    handoffIntentId: handoffIntent.intent.intentId,
+  });
+  if (!terminality.ok) {
+    return {
+      ...dispatch,
+      dispatched: false,
+      blockedByCooldown: false,
+      cooldownRemainingSeconds: null,
+      owner: ownerAfter,
+      handoffIntentId: handoffIntent.intent.intentId,
+      handoffStatus: deliveryResult?.intent.status ?? handoffIntent.intent.status,
+      runtimeDispatchStatus: dispatchPreflight.runtimeReconciliation,
+      dispatchTerminality: terminality,
+      error:
+        "Dispatch completed without a durable queue/session/handoff mapping; blocked for runtime recovery.",
     };
   }
   return {
@@ -2892,6 +3050,8 @@ export async function maybeDispatchAutoIteratorTask(params: {
     owner: ownerAfter,
     handoffIntentId: handoffIntent.intent.intentId,
     handoffStatus: deliveryResult?.intent.status ?? handoffIntent.intent.status,
+    runtimeDispatchStatus: dispatchPreflight.runtimeReconciliation,
+    dispatchTerminality: terminality,
   };
 }
 

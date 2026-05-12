@@ -604,8 +604,15 @@ test("local experiment execution keeps Karpathy loop running when primary metric
     )
   );
   assert.equal(loopState.trial_history[0].decision.outcome, "discard");
+  assert.equal(loopState.trial_history[0].attempt.terminal_status, "no_improvement_reverted");
+  assert.equal(loopState.trial_history[0].attempt.git_decision, "reverted");
+  assert.match(loopState.trial_history[0].attempt.stdout_path, /stdout\.log$/);
+  assert.match(loopState.trial_history[0].attempt.stderr_path, /stderr\.log$/);
   assert.equal(loopState.advance.analyze.allowed, false);
   assert.match(loopState.blocking_reason, /No promoted trial exists/i);
+
+  await fs.access(path.join(projectRoot, loopState.trial_history[0].attempt.stdout_path));
+  await fs.access(path.join(projectRoot, loopState.trial_history[0].attempt.stderr_path));
 });
 
 test("local experiment execution reconciles completed result summaries despite stale active ledger entries", async (t) => {

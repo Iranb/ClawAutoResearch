@@ -1284,6 +1284,11 @@ export async function runAutoCommandEndToEndLive(params) {
   const commandName = lane === "survey" ? "auto-review" : "auto-research";
   const explicitProjectId = params.projectId ?? null;
   const bootstrapTransport = params.bootstrapTransport === "discord" ? "discord" : "local";
+  if (bootstrapTransport === "discord" && explicitProjectId) {
+    throw new Error(
+      "Live Discord parity cannot use a hidden project id override because the native slash message cannot carry it. Use local-live for project-id-specific tests."
+    );
+  }
   const conversationId = params.conversationId ?? buildLiveConversationId(lane);
   const transportContext = buildWorkflowTransportContext({
     transport: bootstrapTransport,

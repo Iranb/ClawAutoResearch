@@ -459,9 +459,35 @@ async function runBundleTrainScript(params: {
   trainPath: string;
   resultSummaryPath: string;
   seed: number;
-}): Promise<{ executed: boolean; python: string | null; stderr: string | null }> {
+  stdoutPath: string;
+  stderrPath: string;
+  timeoutMs: number;
+}): Promise<{
+  executed: boolean;
+  python: string | null;
+  stdout: string | null;
+  stderr: string | null;
+  stdoutPath: string;
+  stderrPath: string;
+  timedOut: boolean;
+  errorMessage: string | null;
+}> {
   if (await exists(params.resultSummaryPath)) {
-    return { executed: false, python: null, stderr: null };
+    await writeTextEnsured(
+      params.stdoutPath,
+      "Skipped train.py because RESULT_SUMMARY.json already exists.\n"
+    );
+    await writeTextEnsured(params.stderrPath, "");
+    return {
+      executed: false,
+      python: null,
+      stdout: null,
+      stderr: null,
+      stdoutPath: params.stdoutPath,
+      stderrPath: params.stderrPath,
+      timedOut: false,
+      errorMessage: null,
+    };
   }
 
   let lastError: unknown = null;
@@ -472,23 +498,66 @@ async function runBundleTrainScript(params: {
         [params.trainPath, "--seed", String(params.seed), "--output", params.resultSummaryPath],
         {
           cwd: params.projectRoot,
-          timeout: 120_000,
+          timeout: params.timeoutMs,
           maxBuffer: 1024 * 1024,
         }
       );
+      const stdout =
+        typeof result.stdout === "string" && result.stdout.trim()
+          ? result.stdout.trim()
+          : "";
+      const stderr =
+        typeof result.stderr === "string" && result.stderr.trim()
+          ? result.stderr.trim()
+          : "";
+      await writeTextEnsured(params.stdoutPath, stdout ? `${stdout}\n` : "");
+      await writeTextEnsured(params.stderrPath, stderr ? `${stderr}\n` : "");
       return {
         executed: true,
         python,
-        stderr: typeof result.stderr === "string" && result.stderr.trim()
-          ? result.stderr.trim()
-          : null,
+        stdout: stdout || null,
+        stderr: stderr || null,
+        stdoutPath: params.stdoutPath,
+        stderrPath: params.stderrPath,
+        timedOut: false,
+        errorMessage: null,
       };
     } catch (error) {
       lastError = error;
       if ((error as NodeJS.ErrnoException).code === "ENOENT") {
         continue;
       }
-      throw error;
+      const record = error as NodeJS.ErrnoException & {
+        stdout?: unknown;
+        stderr?: unknown;
+        killed?: boolean;
+        signal?: string | null;
+      };
+      const stdout =
+        typeof record.stdout === "string" && record.stdout.trim()
+          ? record.stdout.trim()
+          : "";
+      const stderr =
+        typeof record.stderr === "string" && record.stderr.trim()
+          ? record.stderr.trim()
+          : "";
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      const timedOut = record.killed === true || record.signal === "SIGTERM";
+      await writeTextEnsured(params.stdoutPath, stdout ? `${stdout}\n` : "");
+      await writeTextEnsured(
+        params.stderrPath,
+        [stderr, errorMessage].filter(Boolean).join("\n") + "\n"
+      );
+      return {
+        executed: true,
+        python,
+        stdout: stdout || null,
+        stderr: stderr || errorMessage,
+        stdoutPath: params.stdoutPath,
+        stderrPath: params.stderrPath,
+        timedOut,
+        errorMessage,
+      };
     }
   }
 
@@ -499,11 +568,35 @@ async function runBundleTrainScript(params: {
       ? lastError
       : new Error("No Python executable was available for local experiment execution.");
   }
+  await writeTextEnsured(params.stdoutPath, "");
+  await writeTextEnsured(
+    params.stderrPath,
+    "No Python executable was available; wrote deterministic local reference result.\n"
+  );
   return {
     executed: false,
     python: null,
+    stdout: null,
     stderr: "No Python executable was available; wrote deterministic local reference result.",
+    stdoutPath: params.stdoutPath,
+    stderrPath: params.stderrPath,
+    timedOut: false,
+    errorMessage: null,
   };
+}
+
+async function readGitHead(projectRoot: string): Promise<string | null> {
+  try {
+    const result = await execFileAsync("git", ["-C", projectRoot, "rev-parse", "HEAD"], {
+      timeout: 5000,
+      maxBuffer: 128 * 1024,
+    });
+    return typeof result.stdout === "string" && result.stdout.trim()
+      ? result.stdout.trim()
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 function buildRegistryMarkdown(params: {
@@ -663,13 +756,37 @@ export async function materializeLocalExperimentExecutionImpl(params: {
   });
   const runId = `local-${experimentId}-seed-42`;
   const seed = 42;
+  const candidateCommit =
+    searchState.candidateHeadCommit ??
+    searchState.lastCandidateCommit ??
+    searchState.incumbentCommit ??
+    null;
   const resultSummaryPath = path.join(bundle.bundleDir, "RESULT_SUMMARY.json");
+  const resultDir = path.join(
+    projectRoot,
+    "researcher",
+    "artifacts",
+    "results",
+    safeSegment(experimentId, "exp-1")
+  );
+  const attemptId = `${runId}-attempt`;
+  const stdoutPath = path.join(resultDir, "stdout.log");
+  const stderrPath = path.join(resultDir, "stderr.log");
+  const timeoutSeconds = Math.min(
+    600,
+    Math.max(1, Math.floor((innerLoop.trialTimeBudgetMinutes ?? 10) * 60))
+  );
+  const gitBefore = candidateCommit ?? (await readGitHead(projectRoot));
   const runResult = await runBundleTrainScript({
     projectRoot,
     trainPath: bundle.trainPath,
     resultSummaryPath,
     seed,
+    stdoutPath,
+    stderrPath,
+    timeoutMs: timeoutSeconds * 1000,
   });
+  const fallbackResultWritten = !(await exists(resultSummaryPath));
   if (!(await exists(resultSummaryPath))) {
     await writeJsonEnsured(
       resultSummaryPath,
@@ -690,6 +807,22 @@ export async function materializeLocalExperimentExecutionImpl(params: {
   const primaryMetricValue = pickNumber(rawPrimaryMetric ?? {}, ["value"]) ?? metrics.h_score;
   const candidatePromoted = metrics.delta_h_score > 0;
   const lastTrialOutcome = candidatePromoted ? "keep" : "discard";
+  const terminalStatus = runResult.timedOut
+    ? "timeout_reverted"
+    : runResult.errorMessage
+      ? "runtime_failed_with_logs"
+      : fallbackResultWritten
+        ? "metric_missing_repair"
+        : candidatePromoted
+          ? "improved_promoted_candidate"
+          : "no_improvement_reverted";
+  const gitAfter = await readGitHead(projectRoot);
+  const gitDecision =
+    gitBefore || gitAfter || candidateCommit
+      ? candidatePromoted
+        ? "promoted"
+        : "reverted"
+      : "skipped_not_initialized";
   const measuredTrialDurationMinutes =
     deriveMeasuredTrialDurationMinutes({
       ledgerLike: {
@@ -707,13 +840,6 @@ export async function materializeLocalExperimentExecutionImpl(params: {
     innerLoop,
     measuredDurationMinutes: measuredTrialDurationMinutes,
   });
-  const resultDir = path.join(
-    projectRoot,
-    "researcher",
-    "artifacts",
-    "results",
-    safeSegment(experimentId, "exp-1")
-  );
   const researcherResultPath = path.join(resultDir, "RESULT_SUMMARY.json");
   const aggregateResultsPath = path.join(
     projectRoot,
@@ -729,18 +855,53 @@ export async function materializeLocalExperimentExecutionImpl(params: {
   const resultPaths = [
     toRelativeProjectPath(projectRoot, researcherResultPath),
     toRelativeProjectPath(projectRoot, aggregateResultsPath),
+    toRelativeProjectPath(projectRoot, stdoutPath),
+    toRelativeProjectPath(projectRoot, stderrPath),
     DEFAULT_EVALUATION_SUMMARY_PATH,
     DEFAULT_PLOT_PACK_PATH,
     DEFAULT_KARPATHY_LOOP_PATH,
   ];
+  generatedFiles.push(toRelativeProjectPath(projectRoot, stdoutPath));
+  generatedFiles.push(toRelativeProjectPath(projectRoot, stderrPath));
   const orchestration = asRecord(manifest.orchestration_state) ?? {};
   const stageRunId =
     pickString(orchestration, ["stage_run_id", "stageRunId"]) ?? null;
-  const candidateCommit =
-    searchState.candidateHeadCommit ??
-    searchState.lastCandidateCommit ??
-    searchState.incumbentCommit ??
-    null;
+  const attemptRecord = {
+    attempt_id: attemptId,
+    run_id: runId,
+    command: `python ${bundle.bundleRelativeDir}/train.py --seed ${seed} --output ${toRelativeProjectPath(projectRoot, resultSummaryPath)}`,
+    timeout_seconds: timeoutSeconds,
+    stdout_path: toRelativeProjectPath(projectRoot, stdoutPath),
+    stderr_path: toRelativeProjectPath(projectRoot, stderrPath),
+    result_summary_path: toRelativeProjectPath(projectRoot, resultSummaryPath),
+    metric_before:
+      terminalStatus === "metric_missing_repair" || terminalStatus === "runtime_failed_with_logs"
+        ? null
+        : metrics.baseline_h_score,
+    metric_after:
+      terminalStatus === "metric_missing_repair" || terminalStatus === "runtime_failed_with_logs"
+        ? null
+        : metrics.h_score,
+    primary_metric_delta:
+      terminalStatus === "metric_missing_repair" || terminalStatus === "runtime_failed_with_logs"
+        ? null
+        : metrics.delta_h_score,
+    terminal_status: terminalStatus,
+    git_before: gitBefore,
+    git_after: gitAfter,
+    git_decision: gitDecision,
+    terminal_reason:
+      terminalStatus === "metric_missing_repair"
+        ? "result_summary_missing_local_fallback_written"
+        : terminalStatus === "runtime_failed_with_logs"
+          ? runResult.errorMessage
+          : terminalStatus === "timeout_reverted"
+            ? "command_timeout"
+            : candidatePromoted
+              ? "positive_primary_metric_delta"
+              : "primary_metric_no_gain",
+    local_control_flow_fallback: fallbackResultWritten,
+  };
   const enrichedSummary: Record<string, unknown> = {
     ...rawSummary,
     experiment_id: experimentId,
@@ -769,13 +930,18 @@ export async function materializeLocalExperimentExecutionImpl(params: {
     result_paths: resultPaths,
     stage_run_id: stageRunId,
     git_commit: candidateCommit,
+    attempt: attemptRecord,
     completed_at: now,
     local_execution: {
       trigger: params.trigger ?? null,
       agent_id: params.agentId ?? null,
       python: runResult.python,
       executed: runResult.executed,
+      stdout_path: attemptRecord.stdout_path,
+      stderr_path: attemptRecord.stderr_path,
       stderr: runResult.stderr,
+      error_message: runResult.errorMessage,
+      timed_out: runResult.timedOut,
     },
   };
   await writeJsonEnsured(resultSummaryPath, enrichedSummary);
@@ -846,6 +1012,7 @@ export async function materializeLocalExperimentExecutionImpl(params: {
         ? "The local reference GCD benchmark supports advancing the FixMatch-inspired consistency bundle to analysis."
         : "The local reference GCD benchmark completed without a positive primary-metric improvement; discard this candidate and continue bounded search.",
     result_summary_path: toRelativeProjectPath(projectRoot, researcherResultPath),
+    attempt: attemptRecord,
   };
   await writeJsonEnsured(evaluationSummaryPath, evaluationSummary);
   generatedFiles.push(DEFAULT_EVALUATION_SUMMARY_PATH);
@@ -906,6 +1073,7 @@ export async function materializeLocalExperimentExecutionImpl(params: {
       delta: metrics.delta_h_score,
       direction: "higher_is_better",
     },
+    latest_attempt: attemptRecord,
     innovation_deviation: innovationDeviation,
     result_summary_path: toRelativeProjectPath(projectRoot, researcherResultPath),
     next_action:
@@ -984,6 +1152,7 @@ export async function materializeLocalExperimentExecutionImpl(params: {
       delta: metrics.delta_h_score,
       direction: "higher_is_better",
     },
+    attempt: attemptRecord,
     execution_mode:
       pickString(enrichedSummary, ["execution_mode", "executionMode"]) ??
       "local_reference_gcd_benchmark",
@@ -1071,7 +1240,13 @@ export async function materializeLocalExperimentExecutionImpl(params: {
           result_summary_path: toRelativeProjectPath(projectRoot, resultSummaryPath),
           local_execution: true,
           trigger: params.trigger ?? null,
+          stdout_path: attemptRecord.stdout_path,
+          stderr_path: attemptRecord.stderr_path,
+          timeout_seconds: timeoutSeconds,
+          terminal_status: terminalStatus,
+          git_decision: gitDecision,
         },
+        attempt: attemptRecord,
         bundle: {
           path: bundle.bundleRelativeDir,
           execution_command: executionCommand,

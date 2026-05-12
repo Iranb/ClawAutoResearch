@@ -10,6 +10,7 @@ import {
   buildWorkflowSnapshot,
   ensureChannelProjectBindingForWorkflow,
   getChannelProjectBindingForWorkflow,
+  listChannelProjectBindingsForWorkflow,
   unbindChannelProjectForWorkflow,
 } from "../../../tools/workflow-guard.ts";
 import {
@@ -1132,6 +1133,54 @@ test("unresolved channel-project lookup stays under projectsRoot instead of fall
   assert.equal(
     binding.storePath,
     path.join(projectsRoot, ".openclaw-research", "channel-project-bindings.json")
+  );
+});
+
+test("workflow channel binding helpers reject missing projectsRoot instead of falling back to workspace", async (t) => {
+  const workspaceRoot = await makeTempWorkspace();
+  const sessionKey = "agent:researcher:local:group:lookup-room";
+  delete process.env.OPENCLAW_PROJECT;
+
+  t.after(async () => {
+    delete process.env.OPENCLAW_PROJECT;
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  });
+
+  assert.throws(
+    () =>
+      getChannelProjectBindingForWorkflow({
+        policy: {
+          enableChannelProjectBindings: true,
+        },
+        workspaceDir: workspaceRoot,
+        sessionKey,
+        messageChannel: "local",
+      }),
+    /workspace fallback is disabled/i
+  );
+
+  assert.throws(
+    () =>
+      listChannelProjectBindingsForWorkflow({
+        policy: {
+          enableChannelProjectBindings: true,
+        },
+        workspaceDir: workspaceRoot,
+      }),
+    /workspace fallback is disabled/i
+  );
+
+  await assert.rejects(
+    () =>
+      ensureChannelProjectBindingForWorkflow({
+        policy: {
+          enableChannelProjectBindings: true,
+        },
+        workspaceDir: workspaceRoot,
+        sessionKey,
+        messageChannel: "local",
+      }),
+    /workspace fallback is disabled/i
   );
 });
 
