@@ -167,6 +167,47 @@ test("bridge paths without source spans cannot pass normal brainstorm", () => {
   assert.match(decision.evidence.gate_failure_reason, /hypothesis-only/i);
 });
 
+test("requisition search queries retain topic-specific anchors when target domain is generic", () => {
+  const decision = buildIdeaCatalystGateDecision(
+    {
+      target_domain: "Computer Science",
+      challenge_clusters: ["query latency optimization"],
+      candidate_domains: [
+        {
+          domain: "Database Systems",
+          pruned: false,
+        },
+      ],
+    },
+    {
+      questions: [
+        {
+          question_id: "q-sqlite",
+          domain_specific_question: "query latency under point and range workloads",
+          coverage_status: "partial",
+        },
+      ],
+    },
+    {
+      topicContext:
+        "CPU-only SQLite index design for p95 query latency and insert overhead",
+    }
+  );
+
+  assert.equal(decision.decision, "requisition");
+  assert.equal(
+    decision.requisition.topic_context,
+    "CPU-only SQLite index design for p95 query latency and insert overhead"
+  );
+  assert.equal(decision.requisition.search_queries.length >= 1, true);
+  const combinedQueries = decision.requisition.search_queries
+    .map((entry) => entry.query)
+    .join("\n");
+  assert.match(combinedQueries, /SQLite index design/i);
+  assert.match(combinedQueries, /Database Systems/i);
+  assert.match(combinedQueries, /query latency/i);
+});
+
 test("llm question generator prompt and parser support decomposition augmentation", () => {
   const prompt = buildQuestionGenerationPrompt({
     targetDomain: "Computer Science",

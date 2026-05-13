@@ -308,6 +308,139 @@ test("pending background queue check releases provider-capacity active runs", as
   assert.equal(runs.entries[0].status, "needs_repair");
 });
 
+test("pending background queue check reconciles tracking-miss runs from durable research queue state", async (t) => {
+  const workspaceRoot = await makeTempWorkspace();
+  const projectRoot = path.join(workspaceRoot, "durable-research-queue-project");
+  const projectId = "durable-research-queue-project";
+  const backgroundSessionKey =
+    "agent:researcher:local:conversation:tracking-miss:subagent:workflow-research-queue";
+  const queueKey =
+    "background-run:agent:researcher:local:conversation:tracking-miss:research:research_queue:durable-research-queue-project:idea-gap";
+
+  t.after(async () => {
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  });
+
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: projectId,
+    current_stage: "graph_build",
+    owner_agent: "researcher",
+    paper_ingestion: {
+      runtime_status: "ready",
+      graph_presence_status: "ready",
+      queued_requests: [
+        {
+          request_id: "idea-gap",
+          request_kind: "requisition",
+          trigger_kind: "idea_literature_discovery",
+          wrapper: "pn_batch_import.py",
+          command_text: "research queue requisition",
+          status: "completed",
+          last_run_id: "run:research-queue",
+          last_session_key: backgroundSessionKey,
+          summary: "Graph already contains the requested evidence.",
+          finished_at: "2026-04-25T13:08:00.000Z",
+          validation_status: "warning",
+          validation_report_path:
+            "researcher/literature-discovery/idea-gap-satisfaction.json",
+        },
+      ],
+      active_batches: [],
+      batch_items: [],
+      paper_operations: [],
+      import_task_ids: [],
+      completed_papers: [],
+    },
+  });
+
+  await enqueueQueuedBackgroundWorkflowRun({
+    source: "start_background_run",
+    ownerAgent: "researcher",
+    requesterSessionKey: "agent:researcher:local:conversation:tracking-miss",
+    messageChannel: "local",
+    preferredSessionKey: backgroundSessionKey,
+    family: "research",
+    kind: "research_queue",
+    projectId,
+    projectRoot,
+    queueKey,
+    summary: "Queue research requisition.",
+    runPayload: {
+      message: "/research-queue durable-tracking-miss",
+      lane: "nested",
+      deliver: false,
+      idempotencyKey: null,
+      extraSystemPrompt: null,
+    },
+  });
+
+  const queueStore = await readWorkflowRuntimeQueueStore(projectRoot);
+  await writeWorkflowRuntimeQueueStore({
+    projectRoot,
+    projectId,
+    entries: queueStore.entries.map((entry) => ({
+      ...entry,
+      status: "running",
+      lastAttemptedAt: new Date(Date.now() - 60_000).toISOString(),
+    })),
+  });
+
+  await recordBackgroundWorkflowRun({
+    ownerAgent: "researcher",
+    channelKey: "local:conversation:tracking-miss",
+    requesterSessionKey: "agent:researcher:local:conversation:tracking-miss",
+    backgroundSessionKey,
+    runId: "run:research-queue",
+    queueKey,
+    family: "research",
+    kind: "research_queue",
+    projectId,
+    projectRoot,
+  });
+
+  const sessionsStore = await readWorkflowRuntimeSessionsStore(projectRoot);
+  sessionsStore.entries[0].startedAt = new Date(Date.now() - 20_000).toISOString();
+  await writeJson(
+    path.join(projectRoot, ".openclaw-research", "workflow-runtime-sessions.json"),
+    sessionsStore
+  );
+
+  const pending = await hasPendingBackgroundWorkflowQueueKey({
+    queueKey,
+    projectId,
+    projectRoot,
+    workflowRuntime: {
+      async waitForRun(params) {
+        assert.equal(params.runId, "run:research-queue");
+        return {
+          status: "error",
+          error: "Embedded workflow run is not tracked in the local registry.",
+        };
+      },
+    },
+  });
+
+  assert.deepEqual(pending, { queued: false, active: false });
+
+  const runs = await listBackgroundWorkflowRuns({
+    projectId,
+    projectRoot,
+  });
+  assert.equal(runs.entries.length, 1);
+  assert.equal(runs.entries[0].status, "idle");
+
+  const reconciledQueueStore = await readWorkflowRuntimeQueueStore(projectRoot);
+  assert.equal(reconciledQueueStore.entries[0].status, "completed");
+
+  const manifest = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "PROJECT_MANIFEST.json"), "utf8")
+  );
+  assert.equal(
+    manifest.paper_ingestion.queued_requests[0].summary,
+    "Graph already contains the requested evidence."
+  );
+});
+
 test("background queue repair entries do not block fresh queue keys", async (t) => {
   const workspaceRoot = await makeTempWorkspace();
   const projectsRoot = path.join(workspaceRoot, "projects");

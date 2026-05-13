@@ -1440,6 +1440,155 @@ test("materialize_plan_state repairs malformed plan payloads into auto-iterator-
   assert.match(auditText, /Handoff Decision/);
 });
 
+test("materialize_plan_state repairs compared option evidence and empty write scope", async (t) => {
+  const projectRoot = await makeProjectRoot();
+
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await seedPlanProject(projectRoot);
+  const trackId = "track-sqlite-index-design";
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.title =
+    "CPU-only SQLite index design for small analytical workloads on macOS";
+  manifest.primary_track_id = trackId;
+  manifest.active_track_ids = [trackId];
+  manifest.research_program = {
+    status: "ready",
+    goal: "Measure SQLite index strategy trade-offs under a five minute CPU-only budget.",
+    problem_statement:
+      "How do no-index, single-column, composite, and covering indexes affect p95 latency?",
+    baseline_reference: "No-index SQLite table",
+    primary_metric: "p95 query latency",
+    datasets: ["Synthetic SQLite transaction table"],
+    tracks: [
+      {
+        track_id: trackId,
+        status: "active",
+        hypothesis: "Covering indexes reduce p95 latency for point queries.",
+        novelty_basis: "Small analytical SQLite workload design on macOS.",
+        main_metric: "p95 query latency",
+        success_threshold: ">= 30% p95 latency reduction over no-index",
+        required_baselines: ["No-index SQLite table"],
+        required_ablations: ["single-column index", "composite index"],
+        required_controls: ["fixed seed"],
+        experiment_stage_matrix: [
+          "baseline_implementation",
+          "baseline_tuning",
+          "creative_research",
+          "ablation_studies",
+        ],
+        budget: {
+          gpu_hours: 0,
+          max_runs: 6,
+          max_debug_iterations: 2,
+        },
+        stop_rules: ["stop after two non-improving runs"],
+        rollback_triggers: ["insert overhead dominates latency gain"],
+        write_scope: {
+          allowed_claim_ids: [],
+          allowed_figure_ids: [],
+        },
+      },
+    ],
+    task_graph: [],
+    plan_alternatives: [
+      {
+        option_id: "opt_no_index",
+        title: "No index baseline",
+        status: "candidate",
+        summary: null,
+        graph_evidence_paths: [],
+        key_risks: [],
+      },
+      {
+        option_id: "opt_single_column",
+        title: "Single-column B-tree index",
+        status: "candidate",
+        summary: null,
+        graph_evidence_paths: [],
+        key_risks: [],
+      },
+      {
+        option_id: "opt_composite",
+        title: "Composite B-tree index",
+        status: "rejected",
+        summary: "Keep a narrower fallback with graph evidence.",
+        graph_evidence_paths: ["graph/LIMITATION_FRONTIER.md"],
+        key_risks: ["May underperform for point lookups."],
+      },
+      {
+        option_id: "opt_covering",
+        linked_track_id: trackId,
+        title: "Covering index",
+        status: "selected",
+        summary: "Use covering indexes for the main bounded experiment.",
+        graph_evidence_paths: ["researcher/FRONTIER_REPORT.md"],
+        key_risks: ["Database size may increase."],
+      },
+    ],
+    plan_selection: {
+      selected_option_id: "opt_covering",
+      selected_track_id: trackId,
+      compared_option_ids: [
+        "opt_no_index",
+        "opt_single_column",
+        "opt_composite",
+        "opt_covering",
+      ],
+      rationale: "Covering indexes best match the p95 latency objective.",
+      decisive_graph_evidence_paths: [
+        "researcher/FRONTIER_REPORT.md",
+        "graph/LIMITATION_FRONTIER.md",
+      ],
+      fallback_option_ids: ["opt_composite"],
+    },
+  };
+  await writeJson(manifestPath, manifest);
+  await writeJson(path.join(projectRoot, "TRACK_REGISTRY.json"), {
+    tracks: [
+      {
+        track_id: trackId,
+        status: "active",
+        title: "SQLite index design",
+        evidence_pointers: ["graph/LIMITATION_FRONTIER.md"],
+      },
+    ],
+  });
+  await seedReadyIdeationContract(projectRoot, { trackId });
+
+  const tool = createResearchWorkflowTool({ workspaceDir: projectRoot });
+  const materialized = await executeWorkflowTool(tool, {
+    action: "materialize_plan_state",
+    planMaterialization: {
+      selectedTrackId: trackId,
+    },
+  });
+  const validationErrors = materialized.validationErrors.join("\n");
+  assert.doesNotMatch(
+    validationErrors,
+    /write_scope allowed claims|opt_no_index|opt_single_column/
+  );
+
+  const nextManifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  const [track] = nextManifest.research_program.tracks;
+  assert.ok(track.write_scope.allowed_claim_ids.length > 0);
+  assert.ok(track.write_scope.allowed_figure_ids.length > 0);
+  const alternativesById = new Map(
+    nextManifest.research_program.plan_alternatives.map((option) => [
+      option.option_id,
+      option,
+    ])
+  );
+  for (const optionId of ["opt_no_index", "opt_single_column"]) {
+    const option = alternativesById.get(optionId);
+    assert.ok(option.summary);
+    assert.ok(option.graph_evidence_paths.length > 0);
+  }
+});
+
 test("materialize_plan_state uses EML defaults instead of GCD plan fallbacks", async (t) => {
   const projectRoot = await makeProjectRoot();
 

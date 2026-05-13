@@ -12,6 +12,7 @@ import {
   isGatewayProviderCapacityFailure,
   isGatewayTransientAgentWaitFailure,
   reconcileGatewayWaitResultWithSessionInspection,
+  resolveGatewayOriginatingRoute,
 } from "../../scripts/gateway_runtime_subagent.mjs";
 
 test("gateway runtime message carries project context and continuation instructions", () => {
@@ -55,6 +56,44 @@ test("gateway runtime message keeps non-Researcher agents from rebinding local p
 
 test("gateway runtime message preserves a plain task when no runtime context is supplied", () => {
   assert.equal(buildGatewayRuntimeMessage({ message: "/graph-build" }), "/graph-build");
+});
+
+test("gateway runtime derives local originating route from workflow session context", () => {
+  assert.deepEqual(
+    resolveGatewayOriginatingRoute(
+      {
+        sessionKey: "agent:orchestrator:subagent:spawned-orchestrator",
+        requesterSessionKey:
+          "agent:researcher:local:conversation:gcd-local-live:subagent:workflow-stage:plan",
+        messageChannel: "local",
+      },
+      {}
+    ),
+    {
+      originatingChannel: "local",
+      originatingTo: "conversation:gcd-local-live",
+      originatingAccountId: "default",
+    }
+  );
+});
+
+test("gateway runtime does not emit partial originating route fields", () => {
+  assert.deepEqual(
+    resolveGatewayOriginatingRoute(
+      {
+        sessionKey: "agent:orchestrator:subagent:spawned-orchestrator",
+        requesterSessionKey: "agent:researcher:main",
+      },
+      {
+        originatingChannel: "discord",
+      }
+    ),
+    {
+      originatingChannel: null,
+      originatingTo: null,
+      originatingAccountId: null,
+    }
+  );
 });
 
 test("gateway runtime treats agent.wait socket loss as a transient wait failure", () => {

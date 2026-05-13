@@ -314,6 +314,10 @@ test("research_workflow enforces multi-agent review before creating and promotin
   );
   assert.equal(promotedEntry.decision, "advance");
   assert.equal(promotedEntry.status, "merged");
+  assert.equal(promotedEntry.metadata.trial_contract.source, "experiment_git_op");
+  assert.equal(promotedEntry.metadata.trial_contract.git_branch, `${candidateBranchPrefix}exp-cand-1`);
+  assert.equal(promotedEntry.metadata.trial_contract.commit_hash, candidateCommit);
+  assert.equal(promotedEntry.metadata.trial_contract.decision, "advance");
   const packet = JSON.parse(
     await fs.readFile(
       path.join(projectRoot, "researcher", "papernexus", "EXPERIMENT_MEMORY_PACKET.json"),
@@ -333,6 +337,106 @@ test("research_workflow enforces multi-agent review before creating and promotin
     )
   );
   assert.equal(syncStatus.status, "pending");
+});
+
+test("research_workflow runs a reviewed experiment trial in one runtime pass", async (t) => {
+  const { projectRoot, trackId, incumbentCommit, incumbentBranch, candidateBranchPrefix } =
+    await makeSearchGitProject();
+  const tool = createResearchWorkflowTool(projectRoot);
+  const candidateWorktreePath = path.join(
+    os.tmpdir(),
+    `openclaw-managed-candidate-${Date.now()}`
+  );
+  t.after(async () => {
+    await fs.rm(candidateWorktreePath, { recursive: true, force: true });
+  });
+
+  const bundleDir = path.join(projectRoot, "coder", "experiments", trackId, "exp-cand-1");
+  await writeText(
+    path.join(bundleDir, "train.py"),
+    [
+      "import argparse, json, os",
+      "parser = argparse.ArgumentParser()",
+      "parser.add_argument('--seed', type=int, required=True)",
+      "parser.add_argument('--output', required=True)",
+      "args = parser.parse_args()",
+      "os.makedirs(os.path.dirname(args.output), exist_ok=True)",
+      "with open(args.output, 'w', encoding='utf8') as handle:",
+      "    json.dump({",
+      "        'run_id': f'managed-seed-{args.seed}',",
+      "        'experiment_id': 'exp-cand-1',",
+      "        'status': 'completed',",
+      "        'baseline': {'known_accuracy': 0.70, 'novel_accuracy': 0.40, 'h_score': 0.5091},",
+      "        'proposed': {'known_accuracy': 0.75, 'novel_accuracy': 0.50, 'h_score': 0.6000},",
+      "        'ablations': {'minus_gate': {'h_score': 0.55}},",
+      "    }, handle)",
+      "",
+    ].join("\n")
+  );
+  await writeText(path.join(bundleDir, "README.md"), "# managed candidate\n");
+  await writeJson(path.join(bundleDir, "EXPERIMENT_MANIFEST.json"), {
+    experiment_id: "exp-cand-1",
+    track_id: trackId,
+    status: "ready",
+    hypothesis: "A managed candidate improves the local primary metric.",
+    one_change_signature: "managed candidate gate threshold only",
+    datasets: ["local-gcd-reference-benchmark"],
+  });
+
+  await executeWorkflowTool(tool, {
+    action: "request_experiment_git_op",
+    experimentGitRequest: {
+      action_type: "create_candidate_worktree",
+      experiment_id: "exp-cand-1",
+      track_id: trackId,
+      incumbent_branch: incumbentBranch,
+      incumbent_commit: incumbentCommit,
+      candidate_branch: `${candidateBranchPrefix}exp-cand-1`,
+      candidate_worktree_path: candidateWorktreePath,
+    },
+  });
+  await executeWorkflowTool(tool, {
+    action: "set_experiment_git_review",
+    experimentGitReview: {
+      planner_status: "ready",
+      analyzer_status: "ready",
+      analyzer_verdict: "pass",
+      cross_reviewer_status: "ready",
+      cross_reviewer_verdict: "pass",
+      action_approved: true,
+      promotion_basis_signals: ["primary_metric_win", "promotion_rule_satisfied"],
+      promotion_evidence_summary: "The managed trial is allowed inside the fixed budget.",
+    },
+  });
+
+  const result = await executeWorkflowTool(tool, {
+    action: "run_experiment_trial",
+    trigger: "test-managed-trial",
+  });
+  assert.equal(result.status, "trial_completed");
+  assert.equal(result.gitActionApplied, true);
+  assert.equal(result.gitResult.actionType, "create_candidate_worktree");
+  assert.equal(result.localExecution.executed, true);
+  assert.equal(result.localExecution.experimentId, "exp-cand-1");
+  assert.equal(result.promotionGate.readyForAnalysis, true);
+  assert.equal(result.promotionGate.lastTrialOutcome, "keep");
+  await fs.access(candidateWorktreePath);
+
+  const ledger = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "researcher", "EXPERIMENT_LEDGER.json"), "utf8")
+  );
+  const entry = ledger.experiments.find(
+    (candidate) => (candidate.experimentId ?? candidate.experiment_id) === "exp-cand-1"
+  );
+  assert.ok(entry, JSON.stringify(ledger, null, 2));
+  assert.equal(entry.metadata.trial_contract.source, "local_experiment_execution_materializer");
+  assert.equal(entry.metadata.trial_contract.worktree_path, candidateWorktreePath);
+  assert.equal(entry.metadata.trial_contract.seed, 42);
+  assert.equal(entry.metadata.trial_contract.fixed_budget_minutes, 5);
+  assert.equal(entry.metadata.trial_contract.primary_metric.name, "h_score");
+  assert.equal(entry.metadata.trial_contract.keep_discard_decision, "keep");
+  assert.equal(entry.metadata.trial_contract.cost.local_execution, true);
+  assert.equal(entry.metadata.trial_contract.failure_reason, null);
 });
 
 test("experiment git promotion rejects stale shared incumbent CAS", async () => {
@@ -492,6 +596,10 @@ test("research_workflow can discard a reviewed candidate and keep the loss in wo
   );
   assert.equal(discardedEntry.decision, "discard");
   assert.equal(discardedEntry.status, "completed");
+  assert.equal(discardedEntry.metadata.trial_contract.source, "experiment_git_op");
+  assert.equal(discardedEntry.metadata.trial_contract.git_branch, `${candidateBranchPrefix}exp-cand-2`);
+  assert.equal(discardedEntry.metadata.trial_contract.commit_hash, candidateCommit);
+  assert.equal(discardedEntry.metadata.trial_contract.decision, "discard");
 });
 
 test("research_workflow blocks promotion when the recorded basis only cites non-promotion signals", async () => {

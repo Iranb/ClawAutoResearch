@@ -1538,27 +1538,52 @@ async function reconcileSatisfiedLiteratureDiscoveryRequisition(params: {
 
   const state = normalizePaperIngestionState(params.manifest.paper_ingestion);
   const now = new Date().toISOString();
+  const packetResolvedPath = resolveProjectArtifactPath(
+    params.projectRoot,
+    DEFAULT_LITERATURE_DISCOVERY_PACKET_PATH
+  );
+  const packet =
+    packetResolvedPath && (await pathExists(packetResolvedPath))
+      ? ((await readJsonIfExists<Record<string, unknown>>(packetResolvedPath)) ?? {})
+      : {};
+  const selectedPapers = Array.isArray(packet.selected_papers)
+    ? packet.selected_papers
+    : [];
+  const candidatePapers = Array.isArray(packet.candidate_papers)
+    ? packet.candidate_papers
+    : [];
+  if (
+    !hasLiteratureDiscoveryCurrentGraphCoverageEvidence({
+      selectedPapers,
+      candidatePapers,
+    })
+  ) {
+    return { manifest: params.manifest, updated: false };
+  }
+
   let updated = false;
+  const satisfactionReportPathsByRequestId = new Map<string, string>();
   const queuedRequests = state.queuedRequests.map((request) => {
-    const dormantQueued =
-      request.status === "queued" &&
-      !request.startedAt &&
-      !request.lastRunId &&
-      !request.lastSessionKey &&
-      request.attemptCount === 0;
+    const dormantQueued = isUnlaunchedLiteratureDiscoveryRequisition(request);
     const obsoleteRepair = request.status === "needs_repair";
     if (
       !isLiteratureDiscoveryTriggerKind(request.triggerKind) ||
-      (!dormantQueued && !obsoleteRepair)
+        (!dormantQueued && !obsoleteRepair)
     ) {
       return request;
     }
+    const validationReportPath = deriveLiteratureDiscoverySatisfactionReportPath(request);
+    satisfactionReportPathsByRequestId.set(request.requestId, validationReportPath);
     updated = true;
     return {
       ...request,
       status: "completed" as const,
       updatedAt: now,
       finishedAt: request.finishedAt ?? now,
+      validationStatus: "warning" as const,
+      validationSummary:
+        "Current workflow evidence explicitly satisfied this dormant literature discovery requisition before launch.",
+      validationReportPath,
       detail:
         request.detail ??
         "Literature discovery request was satisfied by current workflow state before launch.",
@@ -1567,13 +1592,7 @@ async function reconcileSatisfiedLiteratureDiscoveryRequisition(params: {
     };
   });
 
-  const packetResolvedPath = resolveProjectArtifactPath(
-    params.projectRoot,
-    DEFAULT_LITERATURE_DISCOVERY_PACKET_PATH
-  );
   if (packetResolvedPath && (await pathExists(packetResolvedPath))) {
-    const packet =
-      (await readJsonIfExists<Record<string, unknown>>(packetResolvedPath)) ?? {};
     if (packet.evidence_gap_closed !== true) {
       updated = true;
       await writeJsonEnsured(packetResolvedPath, {
@@ -1588,6 +1607,33 @@ async function reconcileSatisfiedLiteratureDiscoveryRequisition(params: {
 
   if (!updated) {
     return { manifest: params.manifest, updated: false };
+  }
+
+  for (const [requestId, reportPath] of satisfactionReportPathsByRequestId) {
+    const request = queuedRequests.find((entry) => entry.requestId === requestId);
+    const resolvedReportPath = resolveProjectArtifactPath(params.projectRoot, reportPath);
+    if (!request || !resolvedReportPath) {
+      continue;
+    }
+    await writeJsonEnsured(resolvedReportPath, {
+      schema_version: 1,
+      status: "warning",
+      decision: "workflow_state_satisfied",
+      request_id: request.requestId,
+      trigger_kind: request.triggerKind,
+      origin_stage: params.stage,
+      evidence_gap_closed: true,
+      reason:
+        "The current workflow state already contains the graph-backed evidence required by this dormant literature discovery requisition, so no PaperNexus import was launched.",
+      selected_paper_count: selectedPapers.length,
+      candidate_paper_count: candidatePapers.length,
+      limitations: [
+        "No additional PaperNexus import was credited to this requisition.",
+        "This report is the explicit terminal evidence that allows canonical workflow control to treat the requisition as satisfied.",
+      ],
+      created_at: now,
+      updated_at: now,
+    });
   }
 
   const manifest = {
@@ -1724,6 +1770,25 @@ function deriveLiteratureDiscoverySatisfactionReportPath(request: {
   return `researcher/literature-discovery/requisition/${request.requestId}/REQUISITION_SATISFACTION_REPORT.json`;
 }
 
+function hasLiteratureDiscoveryCurrentGraphCoverageEvidence(params: {
+  selectedPapers: unknown[];
+  candidatePapers: unknown[];
+}): boolean {
+  return params.selectedPapers.length > 0 || params.candidatePapers.length > 0;
+}
+
+function isUnlaunchedLiteratureDiscoveryRequisition(
+  request: ReturnType<typeof normalizePaperIngestionState>["queuedRequests"][number]
+): boolean {
+  return (
+    request.status === "queued" &&
+    !request.startedAt &&
+    !request.lastRunId &&
+    !request.lastSessionKey &&
+    request.attemptCount === 0
+  );
+}
+
 async function reconcileStaleLiteratureDiscoveryRequisition(params: {
   projectRoot: string;
   manifest: ManifestLike;
@@ -1751,6 +1816,11 @@ async function reconcileStaleLiteratureDiscoveryRequisition(params: {
   const candidatePapers = Array.isArray(packet.candidate_papers)
     ? packet.candidate_papers
     : [];
+  const hasCurrentGraphCoverageEvidence =
+    hasLiteratureDiscoveryCurrentGraphCoverageEvidence({
+      selectedPapers,
+      candidatePapers,
+    });
   const staleRequests = state.queuedRequests.filter((request) =>
     isStaleUnresolvedLiteratureDiscoveryRequisition(request, nowMs)
   );
@@ -1777,6 +1847,90 @@ async function reconcileStaleLiteratureDiscoveryRequisition(params: {
       "graph_presence_report_path",
       "graphPresenceReportPath",
     ]) ?? "graph/GRAPH_PRESENCE_CHECK.json";
+
+  if (!hasCurrentGraphCoverageEvidence) {
+    const requestsToRepair = staleRequests.filter(
+      (request) => !isUnlaunchedLiteratureDiscoveryRequisition(request)
+    );
+    if (requestsToRepair.length === 0) {
+      return { manifest: params.manifest, updated: false };
+    }
+    const repairRequestIds = new Set(
+      requestsToRepair.map((request) => request.requestId)
+    );
+    const repairReason =
+      "Current graph readiness cannot satisfy this literature requisition without request-specific source-backed coverage evidence.";
+    for (const request of requestsToRepair) {
+      const reportPath = deriveLiteratureDiscoverySatisfactionReportPath(request);
+      const resolvedReportPath = resolveProjectArtifactPath(params.projectRoot, reportPath);
+      if (!resolvedReportPath) {
+        continue;
+      }
+      await writeJsonEnsured(resolvedReportPath, {
+        schema_version: 1,
+        status: "failed",
+        decision: "needs_repair_missing_requisition_import_evidence",
+        request_id: request.requestId,
+        trigger_kind: request.triggerKind,
+        previous_status: request.status,
+        graph_presence_status: "ready",
+        graph_presence_report_path: graphPresencePath,
+        selected_paper_count: selectedPapers.length,
+        candidate_paper_count: candidatePapers.length,
+        reason: repairReason,
+        limitations: [
+          "Graph presence is source-backed at the corpus level, but no validation evidence shows that it covers this requisition intent.",
+          "The workflow must rerun or repair literature discovery before downstream stages consume this missing evidence.",
+        ],
+        created_at: now,
+        updated_at: now,
+      });
+    }
+    const queuedRequests = state.queuedRequests.map((request) => {
+      if (!repairRequestIds.has(request.requestId)) {
+        return request;
+      }
+      const reportPath = deriveLiteratureDiscoverySatisfactionReportPath(request);
+      return {
+        ...request,
+        status: "needs_repair" as const,
+        updatedAt: now,
+        lastError: repairReason,
+        validationStatus: "invalid" as const,
+        validationSummary: repairReason,
+        validationReportPath: reportPath,
+        detail: repairReason,
+        nextRetryAt: null,
+        deadLetterAt: null,
+        deadLetterReason: null,
+      };
+    });
+    const paperIngestionRecord =
+      params.manifest.paper_ingestion &&
+      typeof params.manifest.paper_ingestion === "object" &&
+      !Array.isArray(params.manifest.paper_ingestion)
+        ? (params.manifest.paper_ingestion as Record<string, unknown>)
+        : {};
+    const manifest = {
+      ...params.manifest,
+      paper_ingestion: {
+        ...paperIngestionRecord,
+        ...serializePaperIngestionState({
+          ...state,
+          runtimeStatus: "blocked",
+          waitingReason: repairReason,
+          queuedRequests,
+          lastUpdatedAt: now,
+        }),
+      },
+    };
+    await writeJsonEnsured(
+      resolveProjectArtifactPath(params.projectRoot, "PROJECT_MANIFEST.json") ??
+        `${params.projectRoot}/PROJECT_MANIFEST.json`,
+      manifest
+    );
+    return { manifest, updated: true };
+  }
 
   const updatedRequestIds = new Set(requestsToDegrade.map((request) => request.requestId));
   for (const request of requestsToDegrade) {
@@ -1890,6 +2044,14 @@ async function reconcileUnverifiedCompletedLiteratureDiscoveryRequisition(params
   const candidatePapers = Array.isArray(packet.candidate_papers)
     ? packet.candidate_papers
     : [];
+  if (
+    !hasLiteratureDiscoveryCurrentGraphCoverageEvidence({
+      selectedPapers,
+      candidatePapers,
+    })
+  ) {
+    return { manifest: params.manifest, updated: false };
+  }
   const graphPresencePath =
     readManifestString(params.manifest.paper_ingestion, [
       "graph_presence_report_path",

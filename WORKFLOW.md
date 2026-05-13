@@ -30,33 +30,54 @@ The agent will then run like autoresearch — loop forever, never ask, human int
 
 This workflow is a **state machine**, not just an ordered checklist.
 
-Every project is controlled by four mandatory state files:
+Every project is controlled by one canonical workflow contract plus durable
+evidence artifacts:
 
-- `{PROJ}/PROJECT_MANIFEST.json` — coarse stage, micro-stage, budget, gate state, graph ingestion state, and idle-research background topic policy
-- `{PROJ}/TRACK_REGISTRY.json` — candidate / active / parked / killed hypothesis tracks
-- `{PROJ}/CLAIM_POLICY.md` — how support labels constrain writing and advancement
-- `{PROJ}/researcher/EXPERIMENT_LEDGER.json` — restart-safe structured memory for queued, running, completed, failed, and PaperNexus-synced experiments
+- `{PROJ}/PROJECT_MANIFEST.json.workflow_control` is the canonical source for stage, owner, next action, blocker, completion status, and runtime summary.
+- Top-level manifest fields such as `current_stage`, `owner_agent`, `next_action`, and `blocking_reason` are mirrors of `workflow_control`, not independent authorities.
+- Stage resolvers may read evidence files such as `TRACK_REGISTRY.json`, `CLAIM_POLICY.md`, PaperNexus packets, experiment ledgers, writing QC, and review reports, but those files do not directly advance the workflow.
+- The reconciler is the only writer that should turn resolver output into `workflow_control` and controlled manifest mirror repair.
+- Runtime queue/session files answer whether owner work is active, queued, idle, degraded, or stale; they must not decide whether a stage is semantically complete.
 
 When coder-driven local experiment search is enabled, the workflow also expects:
 
 - `{PROJ}/planner/EXPERIMENT_SEARCH_SPEC.json` — approved search envelope, git retention policy, and non-promotion signals
 - `{PROJ}/coder/experiments/<track-id>/<experiment-id>__<slug>/SEARCH_STATE.json` — incumbent/candidate runtime state for the active search session
 
-The workflow advances only when:
+The workflow advances only when the reconciled `workflow_control` says the
+current stage is complete or dispatchable. The resolver evidence behind that
+decision must show:
 
-1. the current stage's mandatory artifacts exist
-2. `PROJECT_MANIFEST.json` reflects the correct `current_stage` and `current_micro_stage`
-3. track decisions are explicit (`advance` / `merge` / `park` / `kill`)
-4. experiment history is durably reconciled before leaving the EXPERIMENT stage
-5. claim support satisfies the current gate
+1. the current stage's mandatory artifacts exist and pass their contract checks
+2. track decisions are explicit (`advance` / `merge` / `park` / `kill`)
+3. experiment history is durably reconciled before leaving the EXPERIMENT stage
+4. claim support satisfies the current gate
+5. owner runtime state is either safely dispatchable or already active/queued
 
 For survey-only work, the workflow may create a lightweight project whose primary durable contract is:
 
 - `{PROJ}/PROJECT_MANIFEST.json.survey_review`
 
 The survey loop still uses the same manifest/snapshot/runtime infrastructure, but it does not enter `plan`, `code`, or `experiment`.
+`survey_review` remains resolver evidence; it is not a second workflow control plane.
 
 Advisory writing signals are tracked separately and never block draft generation.
+
+### Canonical Agent Contract
+
+Agent ownership is a workflow contract, not an informal convention. Agents may
+write their own evidence artifacts and handoff summaries, but only the
+workflow reconciler may convert those artifacts into canonical stage completion
+or manifest mirror repair.
+
+| Agent | Owns | Does not own | Required durable outputs | Handoff rule |
+| --- | --- | --- | --- | --- |
+| Researcher | topic search, literature discovery, PaperNexus graph evidence, Idea-Catalyst packets, experiment monitoring, evidence reconciliation | implementation patches, final paper claims without support, direct completion writes | literature discovery packet, PaperNexus/Idea-Catalyst packet bundle, innovation/evidence traces, experiment ledger updates | hand off only through `research_workflow.prepare_stage_handoff` or auto-iterator dispatch after reconciled completion |
+| Orchestrator | experiment plan, budget, risks, task decomposition, promotion policy | launching code, editing experiment results, claiming runtime completion | plan packet, TODOs, risk/budget register, innovation-to-experiment trace | hand off to Coder only when the plan contract is complete |
+| Coder | bounded implementation, reproducibility harness, launch commands, local/remote experiment artifacts | literature scope, novelty claims, unsupported metric promotion, shared dataset mutation | experiment bundle, run manifest, logs, git/search state when enabled | return to Researcher/Analyzer through durable run evidence, not by editing completion fields |
+| Analyzer | result QC, figures/tables, claim-evidence matrix, unsupported-claim report | new experiments, plan rewrites, paper polishing | analysis report, metric tables, figure receipts, claim-evidence matrix, anomaly notes | hand off only when ledger/result evidence supports the analysis decision |
+| Academic Writer | manuscript package, template mapping, conservative claim wording, citation preflight | new scientific claims, figure/result mutation, final acceptance decisions | paper source/PDF when available, writing package, QC receipts, citation preflight | hand off to Reviewer when writing QC is non-failing and required packets exist |
+| Reviewer | internal peer review, PaperGuru six-pass gate, citation/reference/integrity review | code execution, hidden scope changes, proactive background browsing without a packet | review findings, PaperGuru pass receipts, citation/integrity reports, submit blockers | hand off to Orchestrator/submission only after review gates are complete |
 
 ### Gate Types
 

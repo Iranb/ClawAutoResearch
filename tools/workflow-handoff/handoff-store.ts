@@ -352,13 +352,19 @@ export async function upsertWorkflowHandoffIntent(params: {
     const matchingIntents = store.intents.filter(
       (entry) => entry.idempotencyKey === params.idempotencyKey
     );
-    const terminalExisting = matchingIntents.find((entry) =>
+    const terminalIntents = matchingIntents.filter((entry) =>
       isWorkflowHandoffTerminalStatus(entry.status)
     );
-    if (terminalExisting) {
+    const blockingTerminalExisting = terminalIntents.find(
+      (entry) => entry.status !== "expired"
+    );
+    const expiredTerminalExisting = terminalIntents.find(
+      (entry) => entry.status === "expired"
+    );
+    if (blockingTerminalExisting) {
       const duplicateActiveIntents = matchingIntents.filter(
         (entry) =>
-          entry.intentId !== terminalExisting.intentId &&
+          entry.intentId !== blockingTerminalExisting.intentId &&
           isWorkflowHandoffActiveStatus(entry.status)
       );
       if (duplicateActiveIntents.length > 0) {
@@ -390,24 +396,24 @@ export async function upsertWorkflowHandoffIntent(params: {
             summary:
               "Superseded duplicate active handoff because the same idempotency key already reached a terminal state.",
             details: {
-              terminalIntentId: terminalExisting.intentId,
-              terminalStatus: terminalExisting.status,
+              terminalIntentId: blockingTerminalExisting.intentId,
+              terminalStatus: blockingTerminalExisting.status,
             },
           });
         }
       }
       await appendWorkflowHandoffEvent({
         projectRoot,
-        projectId: terminalExisting.projectId,
-        intentId: terminalExisting.intentId,
-        idempotencyKey: terminalExisting.idempotencyKey,
+        projectId: blockingTerminalExisting.projectId,
+        intentId: blockingTerminalExisting.intentId,
+        idempotencyKey: blockingTerminalExisting.idempotencyKey,
         kind: "terminal_intent_reused",
-        fromStatus: terminalExisting.status,
-        toStatus: terminalExisting.status,
+        fromStatus: blockingTerminalExisting.status,
+        toStatus: blockingTerminalExisting.status,
         summary:
           "Reused terminal handoff intent for duplicate idempotency key instead of creating a new intent.",
       });
-      return { intent: terminalExisting, created: false };
+      return { intent: blockingTerminalExisting, created: false };
     }
     const existing = matchingIntents.find((entry) =>
       isWorkflowHandoffActiveStatus(entry.status)
@@ -545,6 +551,22 @@ export async function upsertWorkflowHandoffIntent(params: {
       toStatus: intent.status,
       summary: intent.summary ?? `Created ${intent.reason} handoff for ${intent.toRole}.`,
     });
+    if (expiredTerminalExisting) {
+      await appendWorkflowHandoffEvent({
+        projectRoot,
+        projectId: intent.projectId,
+        intentId: intent.intentId,
+        idempotencyKey: intent.idempotencyKey,
+        kind: "expired_terminal_intent_reissued",
+        fromStatus: expiredTerminalExisting.status,
+        toStatus: intent.status,
+        summary:
+          "Created a fresh handoff intent because the previous matching intent expired before delivery completed.",
+        details: {
+          expiredIntentId: expiredTerminalExisting.intentId,
+        },
+      });
+    }
     return { intent, created: true };
   });
 }

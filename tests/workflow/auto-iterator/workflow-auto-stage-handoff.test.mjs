@@ -264,6 +264,11 @@ test("maybeDispatchAutoIteratorTask waits on a fresh orphan owner session instea
   assert.equal(result.dispatched, false);
   assert.equal(result.blockedByRuntimeReconciliation, true);
   assert.equal(result.runtimeDispatchStatus.status, "waiting_for_owner");
+  assert.equal(result.ownerRuntimeStatus.status, "active");
+  assert.equal(
+    result.ownerRuntimeStatus.sessionKey,
+    "agent:researcher:discord:group:paper-lab:subagent:experiment"
+  );
   const queue = await readWorkflowRuntimeQueueStore(projectRoot);
   assert.equal(queue.entries.length, 0);
 });

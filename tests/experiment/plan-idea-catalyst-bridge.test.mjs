@@ -102,6 +102,11 @@ test("plan materializer projects Idea-Catalyst fragments into planner bridge and
   assert.deepEqual(bridge.fragments[0].paper_ids, ["paper-fixmatch"]);
   assert.deepEqual(bridge.fragments[0].paragraph_ids, ["para-fixmatch-method"]);
   assert.equal(bridge.claim_mappings[0].claim_id, "claim-confidence-gate");
+  assert.equal(manifest.workflow_control.stage, "plan");
+  assert.equal(manifest.workflow_control.owner, "orchestrator");
+  assert.equal(manifest.workflow_control.next_action, "/experiment-phase");
+  assert.equal(manifest.workflow_control.completion.status, "complete");
+  assert.equal(manifest.workflow_control.completion.source, "plan_completion");
 
   const loopState = JSON.parse(
     await fs.readFile(

@@ -42,6 +42,7 @@ function formatUsage() {
     "  --topic <text>        Research topic.",
     "  --projects-root <dir> Project root for generated workflow projects.",
     "  --project-id <id>     Explicit project id.",
+    "  --reuse-project       Use the configured projects root instead of a run-local one.",
     "  --timeout-ms <ms>     Overall child-run timeout.",
     "  --max-iterations <n>  Live auto-iterator budget.",
     "  --bootstrap-transport local|discord",
@@ -352,13 +353,17 @@ export async function resolveAutoWorkflowProjectsRoot(params) {
   if (explicitProjectsRoot) {
     return path.resolve(expandHomePath(explicitProjectsRoot));
   }
+  const fallbackRoot = path.resolve(expandHomePath(params?.fallback ?? process.cwd()));
+  if (params?.mode === "live" && params?.isolatedGateway === true && !params?.reuseProject) {
+    return fallbackRoot;
+  }
   if (params?.mode === "live" && params?.sourceConfigPath) {
     const configuredProjectsRoot = await readConfiguredProjectsRoot(params.sourceConfigPath);
     if (configuredProjectsRoot) {
       return path.resolve(expandHomePath(configuredProjectsRoot));
     }
   }
-  return path.resolve(expandHomePath(params?.fallback ?? process.cwd()));
+  return fallbackRoot;
 }
 
 async function readJson(filePath, fallback = null) {
@@ -396,6 +401,223 @@ async function findExecutable(name) {
     }
   }
   return null;
+}
+
+function readString(value) {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+}
+
+function readNumber(value) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function readRecord(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : null;
+}
+
+function safeUrlForDetail(value) {
+  const raw = readString(value);
+  if (!raw) {
+    return "unset";
+  }
+  try {
+    const parsed = new URL(raw);
+    parsed.username = "";
+    parsed.password = "";
+    for (const key of [...parsed.searchParams.keys()]) {
+      if (/token|key|secret|auth|credential|password/i.test(key)) {
+        parsed.searchParams.set(key, "[REDACTED]");
+      }
+    }
+    return parsed.toString();
+  } catch {
+    return "invalid_url";
+  }
+}
+
+function envPresenceDetail(env, names) {
+  return names
+    .map((name) => `${name}=${readString(env?.[name]) ? "set" : "unset"}`)
+    .join(" ");
+}
+
+function resolveGatewayTokenSource(params) {
+  if (readString(params.gatewayToken)) {
+    return "cli";
+  }
+  if (readString(params.env?.OPENCLAW_GATEWAY_TOKEN)) {
+    return "environment";
+  }
+  if (readString(params.config?.gateway?.auth?.token)) {
+    return "config";
+  }
+  return "missing";
+}
+
+function resolvePapernexusTokenValue(localPapernexus, env) {
+  const tokenEnv =
+    readString(localPapernexus?.summary?.tokenEnv) ??
+    readString(localPapernexus?.pluginOverrides?.papernexusApiTokenEnv);
+  if (!tokenEnv) {
+    return null;
+  }
+  return (
+    readString(localPapernexus?.envOverrides?.[tokenEnv]) ??
+    readString(env?.[tokenEnv]) ??
+    null
+  );
+}
+
+async function probeHttpReachability(params) {
+  const url = readString(params.url);
+  if (!url) {
+    return { ok: false, detail: "endpoint=unset" };
+  }
+  const fetchImpl = params.fetchImpl ?? globalThis.fetch;
+  if (typeof fetchImpl !== "function") {
+    return { ok: false, detail: "fetch=unavailable" };
+  }
+  const controller = new AbortController();
+  const timeout = setTimeout(
+    () => controller.abort(),
+    Number.isFinite(params.timeoutMs) ? params.timeoutMs : 2500
+  );
+  const headers = {};
+  const token = readString(params.token);
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  }
+  try {
+    const response = await fetchImpl(url, {
+      method: "GET",
+      headers,
+      signal: controller.signal,
+    });
+    return {
+      ok: response.status < 500,
+      detail: `endpoint=${safeUrlForDetail(url)} status=${response.status}`,
+    };
+  } catch (error) {
+    const reason =
+      error?.name === "AbortError"
+        ? "timeout"
+        : readString(error?.code) ?? readString(error?.name) ?? "error";
+    return {
+      ok: false,
+      detail: `endpoint=${safeUrlForDetail(url)} error=${reason}`,
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+export async function collectAutoWorkflowEnvironmentPreflight(params = {}) {
+  const env = params.env ?? process.env;
+  const root = params.repoRoot ?? repoRoot;
+  const checks = [];
+  const packageJsonPath = path.join(root, "package.json");
+  const packageLockPath = path.join(root, "package-lock.json");
+  const nodeModulesPath = path.join(root, "node_modules");
+  const typescriptPackagePath = path.join(nodeModulesPath, "typescript", "package.json");
+  const [packageJsonExists, packageLockExists, nodeModulesExists, typescriptExists] =
+    await Promise.all([
+      pathExists(packageJsonPath),
+      pathExists(packageLockPath),
+      pathExists(nodeModulesPath),
+      pathExists(typescriptPackagePath),
+    ]);
+  checks.push({
+    name: "repo_package_json",
+    ok: packageJsonExists,
+    detail: packageJsonPath,
+  });
+  const nodeMajor = Number(process.versions.node.split(".")[0]);
+  checks.push({
+    name: "node_version",
+    ok: Number.isFinite(nodeMajor) && nodeMajor >= 18,
+    detail: process.versions.node,
+  });
+  checks.push({
+    name: "node_dependencies",
+    ok: params.mode !== "live" || (nodeModulesExists && packageLockExists && typescriptExists),
+    detail: `required=${params.mode === "live"} node_modules=${nodeModulesExists ? "present" : "missing"} package_lock=${packageLockExists ? "present" : "missing"} typescript=${typescriptExists ? "present" : "missing"}`,
+  });
+  checks.push({
+    name: "runtime_env",
+    ok: Boolean(readString(env.HOME) && readString(env.PATH)),
+    detail: envPresenceDetail(env, [
+      "HOME",
+      "PATH",
+      "OPENCLAW_GATEWAY_TOKEN",
+      "PAPERNEXUS_API_TOKEN",
+      "PAPERNEXUS_CORPUS",
+    ]),
+  });
+
+  const localPapernexus = params.localPapernexus ?? {};
+  const paperSummary = localPapernexus.summary ?? null;
+  if (localPapernexus.enabled && paperSummary) {
+    const endpoint = readString(paperSummary.mcpUrl) ?? readString(paperSummary.apiBaseUrl);
+    const tokenProvidedBy = readString(paperSummary.tokenProvidedBy) ?? "missing";
+    checks.push({
+      name: "papernexus_config",
+      ok: Boolean(endpoint),
+      detail: `enabled accessMode=${paperSummary.accessMode ?? "unset"} endpoint=${safeUrlForDetail(endpoint)} token=${tokenProvidedBy} corpus=${paperSummary.corpusProvidedBy ?? "missing"} sshTarget=${readString(paperSummary.sshTarget) ? "set" : "unset"} remoteStagingRoot=${readString(paperSummary.remoteStagingRoot) ? "set" : "unset"}`,
+    });
+    if (endpoint) {
+      const reachability = await probeHttpReachability({
+        url: endpoint,
+        token: resolvePapernexusTokenValue(localPapernexus, env),
+        timeoutMs: params.papernexusProbeTimeoutMs,
+        fetchImpl: params.fetchImpl,
+      });
+      checks.push({
+        name: "papernexus_reachability",
+        ok: reachability.ok,
+        detail: reachability.detail,
+      });
+    }
+  } else {
+    checks.push({
+      name: "papernexus_config",
+      ok: true,
+      detail: "not_requested_by_e2e_override",
+    });
+  }
+
+  if (params.mode === "live") {
+    const bootstrapTransport = normalizeAutoWorkflowBootstrapTransport(
+      params.bootstrapTransport ?? "local"
+    );
+    const config = await readJson(params.sourceConfigPath, {});
+    const tokenSource = resolveGatewayTokenSource({
+      gatewayToken: params.gatewayToken,
+      env,
+      config,
+    });
+    if (bootstrapTransport === "discord" && !params.isolatedGateway) {
+      checks.push({
+        name: "discord_readiness",
+        ok: tokenSource !== "missing",
+        detail: `transport=discord isolated_gateway=false gateway_token_source=${tokenSource}`,
+      });
+    } else if (bootstrapTransport === "discord") {
+      checks.push({
+        name: "discord_readiness",
+        ok: true,
+        detail: "transport=discord isolated_gateway=true native_slash_replay=true external_discord_token=not_required",
+      });
+    } else {
+      checks.push({
+        name: "discord_readiness",
+        ok: true,
+        detail: "transport=local not_required",
+      });
+    }
+  }
+
+  return checks;
 }
 
 function splitListArg(value) {
@@ -1090,6 +1312,12 @@ function summarizeLane(name, value) {
   if (!value) {
     return null;
   }
+  const finalTurn = Array.isArray(value.turns) ? value.turns.at(-1) : null;
+  const finalManifest = finalTurn?.manifest ?? value.manifest ?? value.finalManifest ?? null;
+  const workflowControl =
+    finalManifest?.workflow_control && typeof finalManifest.workflow_control === "object"
+      ? finalManifest.workflow_control
+      : null;
   return {
     lane: name,
     transport: value.transport ?? null,
@@ -1119,6 +1347,30 @@ function summarizeLane(name, value) {
     timelinePath: value.harness?.timelinePath ?? null,
     qualityScore100: value.harness?.qualityScore100 ?? value.harness?.scorecard?.quality_score?.score_100 ?? null,
     claimStrengthCap: value.harness?.claimStrengthCap ?? value.harness?.scorecard?.verdict?.claim_strength_cap ?? null,
+    finalStage:
+      finalManifest?.current_stage ?? workflowControl?.stage ?? null,
+    finalOwner:
+      finalManifest?.owner_agent ?? workflowControl?.owner ?? null,
+    nextAction:
+      finalManifest?.next_action ?? workflowControl?.nextAction ?? workflowControl?.next_action ?? null,
+    blockingReason:
+      finalManifest?.blocking_reason ??
+      workflowControl?.blockingReason ??
+      workflowControl?.blocking_reason ??
+      null,
+    workflowControl: workflowControl
+      ? {
+          stage: workflowControl.stage ?? null,
+          owner: workflowControl.owner ?? null,
+          nextAction: workflowControl.nextAction ?? workflowControl.next_action ?? null,
+          blockingReason:
+            workflowControl.blockingReason ?? workflowControl.blocking_reason ?? null,
+          completionStatus:
+            workflowControl.completionStatus ?? workflowControl.completion_status ?? null,
+          runtimeState: workflowControl.runtimeState ?? workflowControl.runtime_state ?? null,
+          contractSource: workflowControl.contractSource ?? workflowControl.contract_source ?? null,
+        }
+      : null,
     turnCount: Array.isArray(value.turns) ? value.turns.length : null,
     turns: Array.isArray(value.turns)
       ? value.turns.map((turn) => ({
@@ -1130,6 +1382,536 @@ function summarizeLane(name, value) {
       : [],
     handoffCount: Array.isArray(value.handoffs) ? value.handoffs.length : null,
   };
+}
+
+function compactLaneTrace(lane) {
+  const turns = Array.isArray(lane.turns) ? lane.turns : [];
+  const progressedTurnCount = turns.filter((turn) => turn.progressed === true).length;
+  return {
+    lane: lane.lane,
+    transport: lane.transport,
+    projectRoot: lane.projectRoot,
+    finalVerdict: lane.finalVerdict,
+    failureReason: lane.failureReason,
+    finalStage: lane.finalStage,
+    finalOwner: lane.finalOwner,
+    nextAction: lane.nextAction,
+    blockingReason: lane.blockingReason,
+    workflowControl: lane.workflowControl,
+    turnCount: lane.turnCount,
+    progressedTurnCount,
+    lastTurn: turns.at(-1) ?? null,
+    handoffCount: lane.handoffCount,
+    qualityScore100: lane.qualityScore100,
+    claimStrengthCap: lane.claimStrengthCap,
+  };
+}
+
+export function buildAutoWorkflowTraceEvalScorecard(params) {
+  const resultSummary = params?.resultSummary ?? {};
+  const lanes = Array.isArray(resultSummary.lanes) ? resultSummary.lanes : [];
+  const preflight = Array.isArray(params?.preflight) ? params.preflight : [];
+  const failedPreflight = preflight.filter((entry) => entry?.ok === false);
+  return {
+    generatedAt: params?.generatedAt ?? new Date().toISOString(),
+    status: params?.status ?? null,
+    failureReason: params?.failureReason ?? null,
+    command: params?.command?.displayCommand ?? params?.command?.canonicalCommand ?? null,
+    topic: params?.topic ?? null,
+    mode: params?.mode ?? null,
+    bootstrapTransport: params?.bootstrapTransport ?? null,
+    preflight: {
+      passed: failedPreflight.length === 0,
+      failed: failedPreflight.map((entry) => ({
+        name: entry.name,
+        detail: entry.detail,
+      })),
+      totalCount: preflight.length,
+      failedCount: failedPreflight.length,
+    },
+    transportParity: params?.transportParity ?? null,
+    lanes: lanes.map(compactLaneTrace),
+  };
+}
+
+function readManifestStageStatus(manifest, snakeName, camelName = snakeName) {
+  const snake = manifest?.[snakeName];
+  const camel = manifest?.[camelName];
+  const value = snake && typeof snake === "object" ? snake : camel;
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  return value.status ?? value.stage ?? value.verdict ?? null;
+}
+
+function readQueuedPaperIngestionRequests(manifest) {
+  const paperIngestion = readRecord(manifest?.paper_ingestion) ?? readRecord(manifest?.paperIngestion);
+  const queuedRequests = paperIngestion?.queued_requests ?? paperIngestion?.queuedRequests;
+  return Array.isArray(queuedRequests) ? queuedRequests.filter((entry) => readRecord(entry)) : [];
+}
+
+function isWorkflowOwnedLiteratureRequisition(request) {
+  const requestKind = readString(request.request_kind ?? request.requestKind);
+  const triggerKind = readString(request.trigger_kind ?? request.triggerKind);
+  const category = readString(request.category);
+  const manifestPath = readString(request.manifest_path ?? request.manifestPath);
+  const commandText = readString(request.command_text ?? request.commandText);
+  return Boolean(
+    requestKind === "requisition" ||
+      category === "literature_discovery" ||
+      /literature|idea_catalyst|investigation_requisition/i.test(triggerKind ?? "") ||
+      /INVESTIGATION_REQUISITION\.json|literature-discovery/i.test(manifestPath ?? "") ||
+      /literature_discovery|schedule_papernexus_import/i.test(commandText ?? "")
+  );
+}
+
+function readQueueProgressSummary(request) {
+  const queueProgress = readRecord(request.queue_progress) ?? readRecord(request.queueProgress) ?? {};
+  return {
+    sequence: readNumber(queueProgress.sequence ?? queueProgress.seq),
+    lastEventAt:
+      readString(queueProgress.last_event_at) ??
+      readString(queueProgress.lastEventAt) ??
+      readString(queueProgress.updated_at) ??
+      readString(queueProgress.updatedAt),
+    remaining: readNumber(queueProgress.remaining),
+    completed: readNumber(queueProgress.completed),
+    failed: readNumber(queueProgress.failed),
+    overallPercent: readNumber(queueProgress.overall_percent ?? queueProgress.overallPercent),
+  };
+}
+
+function queueProgressHasRemoteEvidence(queueProgress) {
+  return Boolean(
+    queueProgress.sequence !== null ||
+      queueProgress.lastEventAt ||
+      queueProgress.remaining !== null ||
+      queueProgress.completed !== null ||
+      queueProgress.failed !== null ||
+      queueProgress.overallPercent !== null
+  );
+}
+
+function selectLatestLiteratureRequisition(manifest) {
+  const requests = readQueuedPaperIngestionRequests(manifest).filter(
+    isWorkflowOwnedLiteratureRequisition
+  );
+  if (requests.length === 0) {
+    return null;
+  }
+  return requests
+    .map((request, index) => ({
+      request,
+      index,
+      timestamp:
+        Date.parse(
+          readString(request.updated_at ?? request.updatedAt) ??
+            readString(request.started_at ?? request.startedAt) ??
+            readString(request.created_at ?? request.createdAt) ??
+            ""
+        ) || 0,
+    }))
+    .sort((left, right) => right.timestamp - left.timestamp || right.index - left.index)[0]
+    .request;
+}
+
+function parsePaperSourceIndexEntries(raw) {
+  if (Array.isArray(raw)) {
+    return raw.filter((entry) => readRecord(entry));
+  }
+  const record = readRecord(raw);
+  if (!record) {
+    return [];
+  }
+  for (const key of ["papers", "entries", "items", "sources", "canonical_papers", "canonicalPapers"]) {
+    const value = record[key];
+    if (Array.isArray(value)) {
+      return value.filter((entry) => readRecord(entry));
+    }
+    const nested = readRecord(value);
+    if (nested) {
+      return Object.values(nested).filter((entry) => readRecord(entry));
+    }
+  }
+  return Object.values(record).filter((entry) => readRecord(entry));
+}
+
+function isSourceBackedPaperEntry(entry) {
+  const sourcePath =
+    readString(entry.source_path) ??
+    readString(entry.sourcePath) ??
+    readString(entry.local_path) ??
+    readString(entry.localPath);
+  if (sourcePath) {
+    return true;
+  }
+  const sourceKind = (
+    readString(entry.source_kind) ??
+    readString(entry.sourceKind) ??
+    ""
+  ).toLowerCase();
+  if (["markdown", "md", "pdf", "html", "xml"].includes(sourceKind)) {
+    return true;
+  }
+  const sourceProvider = (
+    readString(entry.source_provider) ??
+    readString(entry.sourceProvider) ??
+    ""
+  ).toLowerCase();
+  return Boolean(
+    sourceProvider &&
+      !["metadata", "metadata_only", "remote_corpus_summary", "unknown"].includes(sourceProvider)
+  );
+}
+
+async function readPaperSourceIndexEvidence(projectRoot) {
+  if (!projectRoot) {
+    return {
+      path: null,
+      paperCount: 0,
+      sourceBackedPaperCount: 0,
+    };
+  }
+  const relativePath = path.join("researcher", "PAPER_SOURCE_INDEX.json");
+  const sourceIndexPath = path.join(projectRoot, relativePath);
+  const raw = await readJson(sourceIndexPath, null);
+  const entries = parsePaperSourceIndexEntries(raw);
+  return {
+    path: entries.length > 0 ? relativePath : null,
+    paperCount: entries.length,
+    sourceBackedPaperCount: entries.filter(isSourceBackedPaperEntry).length,
+  };
+}
+
+function classifyLiteratureRequisition(request, sourceIndexEvidence) {
+  if (!request) {
+    return null;
+  }
+  const status = readString(request.status) ?? "unknown";
+  const startedAt = readString(request.started_at ?? request.startedAt);
+  const attemptCount = readNumber(request.attempt_count ?? request.attemptCount) ?? 0;
+  const lastRunId = readString(request.last_run_id ?? request.lastRunId);
+  const queueProgress = readQueueProgressSummary(request);
+  const validationStatus = readString(request.validation_status ?? request.validationStatus);
+  const hasSourceEvidence =
+    (sourceIndexEvidence?.sourceBackedPaperCount ?? 0) > 0 && validationStatus !== "invalid";
+
+  if (status === "completed" && hasSourceEvidence) {
+    return "literature_requisition_completed_source_indexed";
+  }
+  if (status === "failed" || status === "needs_repair" || validationStatus === "invalid") {
+    return "literature_requisition_failed_needs_repair";
+  }
+  if (status === "completed") {
+    return "literature_requisition_completed_no_sources";
+  }
+  if (queueProgressHasRemoteEvidence(queueProgress)) {
+    return "literature_requisition_remote_progress";
+  }
+  if (status === "running" || startedAt || attemptCount > 0 || lastRunId) {
+    return "literature_requisition_launched_waiting_remote";
+  }
+  if (status === "queued") {
+    return "literature_requisition_unlaunched";
+  }
+  return `literature_requisition_${status}`;
+}
+
+function summarizeLiteratureRequisition(manifest, sourceIndexEvidence) {
+  const request = selectLatestLiteratureRequisition(manifest);
+  if (!request) {
+    return null;
+  }
+  const queueProgress = readQueueProgressSummary(request);
+  return {
+    summaryStatus: classifyLiteratureRequisition(request, sourceIndexEvidence),
+    requestId: readString(request.request_id ?? request.requestId),
+    requestKind: readString(request.request_kind ?? request.requestKind),
+    triggerKind: readString(request.trigger_kind ?? request.triggerKind),
+    status: readString(request.status),
+    attemptCount: readNumber(request.attempt_count ?? request.attemptCount) ?? 0,
+    startedAt: readString(request.started_at ?? request.startedAt),
+    lastRunId: readString(request.last_run_id ?? request.lastRunId),
+    lastSessionKey: readString(request.last_session_key ?? request.lastSessionKey),
+    validationStatus: readString(request.validation_status ?? request.validationStatus),
+    validationReportPath: readString(request.validation_report_path ?? request.validationReportPath),
+    queueProgress,
+    sourceIndex: sourceIndexEvidence ?? {
+      path: null,
+      paperCount: 0,
+      sourceBackedPaperCount: 0,
+    },
+  };
+}
+
+function summarizeResearchHarnessLane(lane, manifest, scorecard, artifacts = {}) {
+  return {
+    lane: lane.lane,
+    projectRoot: lane.projectRoot,
+    finalVerdict: lane.finalVerdict,
+    finalStage: lane.finalStage ?? manifest?.current_stage ?? null,
+    finalOwner: lane.finalOwner ?? manifest?.owner_agent ?? null,
+    topic: {
+      status:
+        readManifestStageStatus(manifest, "topic_search") ??
+        readManifestStageStatus(manifest, "literature_discovery") ??
+        scorecard?.literature_research_controller?.status ??
+        null,
+    },
+    literature: {
+      status:
+        readManifestStageStatus(manifest, "literature_review") ??
+        scorecard?.literature_research_controller?.status ??
+        null,
+      decision: scorecard?.literature_research_controller?.decision ?? null,
+      coverageScore100:
+        scorecard?.literature_research_controller?.coverage_score_100 ?? null,
+      papernexusStatus: scorecard?.papernexus_certification?.status ?? null,
+      sourceBackedGraphClaim:
+        scorecard?.papernexus_certification?.source_backed_graph_claim ?? null,
+      requisition: summarizeLiteratureRequisition(
+        manifest,
+        artifacts.paperSourceIndexEvidence
+      ),
+    },
+    ideation: {
+      status:
+        readManifestStageStatus(manifest, "ideation") ??
+        readManifestStageStatus(manifest, "idea_catalyst", "ideaCatalyst") ??
+        readManifestStageStatus(manifest, "innovation_synthesis_state", "innovationSynthesisState") ??
+        null,
+    },
+    experiment: {
+      status:
+        readManifestStageStatus(manifest, "experiment_search", "experimentSearch") ??
+        readManifestStageStatus(manifest, "experiment_loop", "experimentLoop") ??
+        scorecard?.experiment_lease_contract?.status ??
+        null,
+      benchmarkStatus: scorecard?.benchmark_adapter?.status ?? null,
+      ledgerCount: scorecard?.evidence_coverage?.experiment_ledger_count ?? null,
+      claimGuardrail: scorecard?.experiment_lease_contract?.claim_guardrail ?? null,
+    },
+    writing: {
+      status:
+        readManifestStageStatus(manifest, "writing") ??
+        readManifestStageStatus(manifest, "paper_qc", "paperQc") ??
+        scorecard?.verdict?.final_verdict ??
+        null,
+      claimStrengthCap: scorecard?.verdict?.claim_strength_cap ?? lane.claimStrengthCap ?? null,
+      qualityScore100: scorecard?.quality_score?.score_100 ?? lane.qualityScore100 ?? null,
+      copyeditStatus: scorecard?.copyedit_style_audit?.status ?? null,
+      reviewerCalibrationStatus: scorecard?.reviewer_calibration?.status ?? null,
+    },
+    artifactPaths: {
+      scorecardPath: lane.scorecardPath ?? null,
+      reportPath: lane.reportPath ?? null,
+      checklistPath: lane.checklistPath ?? null,
+      timelinePath: lane.timelinePath ?? null,
+    },
+  };
+}
+
+export async function buildAutoWorkflowResearchHarnessScorecard(params) {
+  const resultSummary = params?.resultSummary ?? {};
+  const lanes = Array.isArray(resultSummary.lanes) ? resultSummary.lanes : [];
+  const laneSummaries = [];
+  for (const lane of lanes) {
+    const manifest = lane.projectRoot
+      ? await readJson(path.join(lane.projectRoot, "PROJECT_MANIFEST.json"), {})
+      : {};
+    const scorecard = lane.scorecardPath
+      ? await readJson(lane.scorecardPath, {})
+      : {};
+    const paperSourceIndexEvidence = await readPaperSourceIndexEvidence(lane.projectRoot);
+    laneSummaries.push(
+      summarizeResearchHarnessLane(lane, manifest, scorecard, {
+        paperSourceIndexEvidence,
+      })
+    );
+  }
+  return {
+    generatedAt: params?.generatedAt ?? new Date().toISOString(),
+    status: params?.status ?? null,
+    topic: params?.topic ?? resultSummary.topic ?? null,
+    mode: params?.mode ?? resultSummary.mode ?? null,
+    bootstrapTransport: params?.bootstrapTransport ?? resultSummary.bootstrapTransport ?? null,
+    lanes: laneSummaries,
+  };
+}
+
+function compactArtifactPaths(paths) {
+  return Object.fromEntries(
+    Object.entries(paths).filter(([, value]) => readString(value))
+  );
+}
+
+function summarizeChecklistLanes(resultSummary) {
+  const lanes = Array.isArray(resultSummary?.lanes) ? resultSummary.lanes : [];
+  return lanes.map((lane) => ({
+    lane: lane.lane ?? null,
+    transport: lane.transport ?? null,
+    projectRoot: lane.projectRoot ?? null,
+    finalVerdict: lane.finalVerdict ?? null,
+    finalStage: lane.finalStage ?? null,
+    finalOwner: lane.finalOwner ?? null,
+    blockingReason: lane.blockingReason ?? lane.failureReason ?? null,
+  }));
+}
+
+function buildPrChecklistResidualRisks(params) {
+  const risks = [];
+  const failedPreflight = Array.isArray(params.preflight)
+    ? params.preflight.filter((entry) => entry?.ok === false)
+    : [];
+  if (failedPreflight.length > 0) {
+    risks.push(`preflight_failed:${failedPreflight.map((entry) => entry.name).join(",")}`);
+  }
+  if (params.status !== "pass") {
+    risks.push(`run_status_${params.status ?? "unknown"}`);
+  }
+  if (params.mode !== "live") {
+    risks.push("fixture_mode_does_not_prove_live_runtime_dispatch");
+  }
+  if (params.bootstrapTransport !== "discord") {
+    risks.push("discord_transport_parity_not_covered_by_this_run");
+  }
+  const lanes = Array.isArray(params.resultSummary?.lanes) ? params.resultSummary.lanes : [];
+  if (!lanes.some((lane) => lane.finalStage === "writing" || lane.finalStage === "write")) {
+    risks.push("writing_stage_not_reached_by_this_run");
+  }
+  return risks.length > 0
+    ? risks
+    : ["no_run_level_residual_risk_detected_by_checklist"];
+}
+
+export function buildAutoWorkflowPrChecklist(params = {}) {
+  const preflight = Array.isArray(params.preflight) ? params.preflight : [];
+  const failedPreflight = preflight.filter((entry) => entry?.ok === false);
+  const lanes = summarizeChecklistLanes(params.resultSummary);
+  const artifactPaths = compactArtifactPaths({
+    summaryPath: params.summaryPath,
+    markdownSummaryPath: params.markdownSummaryPath,
+    traceEvalScorecardPath: params.traceEvalScorecardPath,
+    researchHarnessScorecardPath: params.researchHarnessScorecardPath,
+    projectsDashboardPath: params.projectsDashboardPath,
+    projectsDashboardHtmlPath: params.projectsDashboardHtmlPath,
+    payloadPath: params.payloadPath,
+    stdoutPath: params.stdoutPath,
+    stderrPath: params.stderrPath,
+  });
+  return {
+    generatedAt: params.generatedAt ?? new Date().toISOString(),
+    status: params.status ?? null,
+    failureReason: params.failureReason ?? null,
+    command: params.command?.displayCommand ?? params.command?.canonicalCommand ?? null,
+    topic: params.topic ?? null,
+    mode: params.mode ?? null,
+    bootstrapTransport: params.bootstrapTransport ?? null,
+    changeSummary: [
+      "AutoWorkflow E2E runner produced durable run summary, trace/eval scorecard, research harness scorecard, and PR checklist artifacts.",
+    ],
+    validationEvidence: [
+      {
+        name: "environment_preflight",
+        status: failedPreflight.length === 0 ? "pass" : "fail",
+        detail: `${preflight.length} checks, ${failedPreflight.length} failed`,
+        failed: failedPreflight.map((entry) => ({
+          name: entry.name,
+          detail: entry.detail,
+        })),
+      },
+      {
+        name: "trace_eval_scorecard",
+        status: readString(params.traceEvalScorecardPath) ? "available" : "missing",
+        artifactPath: params.traceEvalScorecardPath ?? null,
+      },
+      {
+        name: "research_harness_scorecard",
+        status: readString(params.researchHarnessScorecardPath) ? "available" : "missing",
+        artifactPath: params.researchHarnessScorecardPath ?? null,
+      },
+      {
+        name: "transport_parity",
+        status:
+          params.transportParity?.userPathAligned === false
+            ? "fail"
+            : params.transportParity
+              ? "recorded"
+              : "missing",
+        profile: params.transportParity?.profile ?? null,
+        expectedCommandSource: params.transportParity?.expectedCommandSource ?? null,
+      },
+      {
+        name: "lane_final_verdicts",
+        status: lanes.length > 0 && lanes.every((lane) => lane.finalVerdict === "pass")
+          ? "pass"
+          : lanes.length > 0
+            ? "partial"
+            : "missing",
+        lanes,
+      },
+    ],
+    artifactPaths,
+    externalSideEffects: {
+      liveRuntimeDispatch: params.mode === "live",
+      papernexusNetworkProbe: preflight.some((entry) => entry?.name === "papernexus_reachability"),
+      discordGatewayUse: params.bootstrapTransport === "discord",
+      writes: [params.runRoot, params.projectsRoot].filter(Boolean),
+      secretsRedacted: true,
+      statement:
+        params.mode === "live"
+          ? "Live mode may create or resume workflow projects, dispatch runtime work, and probe configured PaperNexus/Gateway endpoints."
+          : "Fixture mode writes only local run artifacts and does not dispatch live workflow work.",
+    },
+    rollback: {
+      strategy:
+        "Revert the code diff, remove or archive the generated run root, and do not reuse live project state as clean evidence without inspecting runtime sessions first.",
+      liveProjectState:
+        "If live mode dispatched work, back up the project .openclaw-research state before marking stale queue/session/mailbox entries terminal or superseded.",
+    },
+    residualRisks: buildPrChecklistResidualRisks(params),
+  };
+}
+
+export function formatAutoWorkflowPrChecklistMarkdown(checklist) {
+  const validation = Array.isArray(checklist.validationEvidence)
+    ? checklist.validationEvidence
+    : [];
+  const artifacts = checklist.artifactPaths ?? {};
+  return [
+    "# AutoWorkflow PR Checklist",
+    "",
+    `- Status: ${checklist.status ?? "unknown"}`,
+    `- Command: ${checklist.command ?? "unknown"}`,
+    `- Topic: ${checklist.topic ?? "unknown"}`,
+    `- Mode: ${checklist.mode ?? "unknown"}`,
+    `- Bootstrap transport: ${checklist.bootstrapTransport ?? "unknown"}`,
+    "",
+    "## Validation Evidence",
+    "",
+    ...validation.map((entry) => `- ${entry.name}: ${entry.status}`),
+    "",
+    "## Artifacts",
+    "",
+    ...Object.entries(artifacts).map(([name, value]) => `- ${name}: ${value}`),
+    "",
+    "## External Side Effects",
+    "",
+    `- Live runtime dispatch: ${checklist.externalSideEffects?.liveRuntimeDispatch ? "yes" : "no"}`,
+    `- PaperNexus network probe: ${checklist.externalSideEffects?.papernexusNetworkProbe ? "yes" : "no"}`,
+    `- Discord/Gateway use: ${checklist.externalSideEffects?.discordGatewayUse ? "yes" : "no"}`,
+    `- Statement: ${checklist.externalSideEffects?.statement ?? "unknown"}`,
+    "",
+    "## Residual Risks",
+    "",
+    ...(checklist.residualRisks ?? []).map((risk) => `- ${risk}`),
+    "",
+    "## Rollback",
+    "",
+    `- Strategy: ${checklist.rollback?.strategy ?? "unknown"}`,
+    `- Live project state: ${checklist.rollback?.liveProjectState ?? "unknown"}`,
+    "",
+  ].join("\n");
 }
 
 function transportProfileForBootstrapTransport(bootstrapTransport) {
@@ -1335,18 +2117,13 @@ async function collectProjectSnapshots(params) {
 }
 
 async function preflight(params) {
-  const checks = [];
-  const packageJsonPath = path.join(repoRoot, "package.json");
-  checks.push({
-    name: "repo_package_json",
-    ok: await pathExists(packageJsonPath),
-    detail: packageJsonPath,
-  });
-  const nodeMajor = Number(process.versions.node.split(".")[0]);
-  checks.push({
-    name: "node_version",
-    ok: Number.isFinite(nodeMajor) && nodeMajor >= 18,
-    detail: process.versions.node,
+  const checks = await collectAutoWorkflowEnvironmentPreflight({
+    mode: params.mode,
+    bootstrapTransport: params.bootstrapTransport,
+    sourceConfigPath: params.sourceConfigPath,
+    isolatedGateway: params.isolatedGateway,
+    gatewayToken: params.gatewayToken,
+    localPapernexus: params.localPapernexus,
   });
 
   if (params.mode === "live") {
@@ -1479,6 +2256,9 @@ function formatHumanSummary(summary) {
     `run root: ${summary.runRoot}`,
     `projects root: ${summary.projectsRoot}`,
     `summary: ${summary.summaryPath}`,
+    `trace/eval scorecard: ${summary.traceEvalScorecardPath ?? "unknown"}`,
+    `research harness scorecard: ${summary.researchHarnessScorecardPath ?? "unknown"}`,
+    `PR checklist: ${summary.prChecklistPath ?? "unknown"}`,
     `projects dashboard: ${summary.projectsDashboardHtmlPath ?? "unknown"}`,
     `projects dashboard json: ${summary.projectsDashboardPath ?? "unknown"}`,
   ];
@@ -1530,6 +2310,16 @@ function formatHumanSummary(summary) {
     }
     if (lane.failureReason) {
       lines.push(`lane failure: ${lane.failureReason}`);
+    }
+    const harnessLane = (summary.researchHarnessScorecard?.lanes ?? []).find(
+      (entry) => entry?.lane === lane.lane
+    );
+    const requisition = harnessLane?.literature?.requisition;
+    if (requisition) {
+      const progress = requisition.queueProgress ?? {};
+      lines.push(
+        `literature requisition: ${requisition.summaryStatus ?? "unknown"} status=${requisition.status ?? "unknown"} attempt=${requisition.attemptCount ?? "unknown"} started_at=${requisition.startedAt ?? "null"} run=${requisition.lastRunId ?? "null"} queue_sequence=${progress.sequence ?? "null"} remaining=${progress.remaining ?? "null"} completed=${progress.completed ?? "null"} failed=${progress.failed ?? "null"}`
+      );
     }
   }
   const failedPreflight = summary.preflight.filter((entry) => !entry.ok);
@@ -1607,6 +2397,8 @@ async function main(argv = process.argv) {
     sourceConfigPath,
     projectsRoot: argValue(argv, "--projects-root", null),
     fallback: path.join(runRoot, "projects"),
+    isolatedGateway,
+    reuseProject,
   });
   const conversationId = argValue(
     argv,
@@ -1681,6 +2473,8 @@ async function main(argv = process.argv) {
     codeReviewLocalFallbackAfterMs,
     autoModeDiscussionLocalFallbackAfterMs,
   });
+  const gatewayUrl = argValue(argv, "--gateway-url", null);
+  const gatewayToken = argValue(argv, "--gateway-token", null);
 
   await fs.mkdir(runRoot, { recursive: true });
   await fs.mkdir(projectsRoot, { recursive: true });
@@ -1696,6 +2490,9 @@ async function main(argv = process.argv) {
         skipGatewayRestartAfterAgentSync,
         agentAuthRoles,
         agentAuthProviders,
+        bootstrapTransport,
+        gatewayToken,
+        localPapernexus,
       });
   const preflightOk = preflightChecks.every((entry) => entry.ok);
 
@@ -1723,8 +2520,6 @@ async function main(argv = process.argv) {
   if (effectiveSourceConfig.configPath) {
     childArgs.push("--source-config-path", effectiveSourceConfig.configPath);
   }
-  const gatewayUrl = argValue(argv, "--gateway-url", null);
-  const gatewayToken = argValue(argv, "--gateway-token", null);
   if (gatewayUrl) {
     childArgs.push("--gateway-url", gatewayUrl);
   }
@@ -1875,6 +2670,13 @@ async function main(argv = process.argv) {
   const finishedAt = new Date().toISOString();
   const summaryPath = path.join(runRoot, "AUTO_WORKFLOW_E2E_SUMMARY.json");
   const markdownSummaryPath = path.join(runRoot, "AUTO_WORKFLOW_E2E_SUMMARY.md");
+  const traceEvalScorecardPath = path.join(runRoot, "TRACE_EVAL_SCORECARD.json");
+  const researchHarnessScorecardPath = path.join(runRoot, "RESEARCH_HARNESS_SCORECARD.json");
+  const prChecklistPath = path.join(runRoot, "PR_CHECKLIST.json");
+  const prChecklistMarkdownPath = path.join(runRoot, "PR_CHECKLIST.md");
+  const stdoutPath = path.join(runRoot, "stdout.log");
+  const stderrPath = path.join(runRoot, "stderr.log");
+  const payloadPath = path.join(runRoot, "payload.json");
   const snapshots = await collectProjectSnapshots({ runRoot, resultSummary });
   let projectsDashboard = null;
   try {
@@ -1884,6 +2686,61 @@ async function main(argv = process.argv) {
       error: error instanceof Error ? error.message : String(error),
     };
   }
+  const transportParity = buildAutoWorkflowTransportParityScorecard({
+    command,
+    mode,
+    bootstrapTransport,
+    conversationId,
+    resultSummary,
+    workflowLocalFallback: workflowLocalFallback.summary,
+    projectIdArg,
+    generatedProjectId,
+    explicitProjectId,
+  });
+  const traceEvalScorecard = buildAutoWorkflowTraceEvalScorecard({
+    generatedAt: finishedAt,
+    status,
+    failureReason,
+    command,
+    topic,
+    mode,
+    bootstrapTransport,
+    preflight: preflightChecks,
+    resultSummary,
+    transportParity,
+  });
+  const researchHarnessScorecard = await buildAutoWorkflowResearchHarnessScorecard({
+    generatedAt: finishedAt,
+    status,
+    topic,
+    mode,
+    bootstrapTransport,
+    resultSummary,
+  });
+  const prChecklist = buildAutoWorkflowPrChecklist({
+    generatedAt: finishedAt,
+    status,
+    failureReason,
+    command,
+    topic,
+    mode,
+    bootstrapTransport,
+    preflight: preflightChecks,
+    resultSummary,
+    transportParity,
+    summaryPath,
+    markdownSummaryPath,
+    traceEvalScorecardPath,
+    researchHarnessScorecardPath,
+    projectsDashboardPath: projectsDashboard.projectsDashboardPath ?? null,
+    projectsDashboardHtmlPath: projectsDashboard.projectsDashboardHtmlPath ?? null,
+    payloadPath,
+    stdoutPath,
+    stderrPath,
+    runRoot,
+    projectsRoot,
+  });
+  const prChecklistMarkdown = formatAutoWorkflowPrChecklistMarkdown(prChecklist);
   const summary = {
     status,
     failureReason,
@@ -1906,17 +2763,14 @@ async function main(argv = process.argv) {
       timedOut: child.timedOut,
     },
     result: resultSummary,
-    transportParity: buildAutoWorkflowTransportParityScorecard({
-      command,
-      mode,
-      bootstrapTransport,
-      conversationId,
-      resultSummary,
-      workflowLocalFallback: workflowLocalFallback.summary,
-      projectIdArg,
-      generatedProjectId,
-      explicitProjectId,
-    }),
+    transportParity,
+    traceEvalScorecardPath,
+    traceEvalScorecard,
+    researchHarnessScorecardPath,
+    researchHarnessScorecard,
+    prChecklistPath,
+    prChecklistMarkdownPath,
+    prChecklist,
     snapshots,
     snapshotRoot: path.join(runRoot, "snapshots"),
     projectsDashboardPath: projectsDashboard.projectsDashboardPath ?? null,
@@ -1924,9 +2778,9 @@ async function main(argv = process.argv) {
     projectsDashboard: projectsDashboard.summary ?? projectsDashboard,
     summaryPath,
     markdownSummaryPath,
-    stdoutPath: path.join(runRoot, "stdout.log"),
-    stderrPath: path.join(runRoot, "stderr.log"),
-    payloadPath: path.join(runRoot, "payload.json"),
+    stdoutPath,
+    stderrPath,
+    payloadPath,
     localPapernexus: localPapernexus.summary,
     workflowLocalFallback: workflowLocalFallback.summary,
     modelOverride: modelOverrideSummary,
@@ -1936,6 +2790,13 @@ async function main(argv = process.argv) {
     writeText(summary.stdoutPath, child.stdout ?? ""),
     writeText(summary.stderrPath, child.stderr ?? ""),
     writeText(summaryPath, `${JSON.stringify(summary, null, 2)}\n`),
+    writeText(traceEvalScorecardPath, `${JSON.stringify(traceEvalScorecard, null, 2)}\n`),
+    writeText(
+      researchHarnessScorecardPath,
+      `${JSON.stringify(researchHarnessScorecard, null, 2)}\n`
+    ),
+    writeText(prChecklistPath, `${JSON.stringify(prChecklist, null, 2)}\n`),
+    writeText(prChecklistMarkdownPath, prChecklistMarkdown),
     writeText(summary.payloadPath, payload ? `${JSON.stringify(payload, null, 2)}\n` : "null\n"),
     writeText(markdownSummaryPath, formatHumanSummary(summary)),
   ]);

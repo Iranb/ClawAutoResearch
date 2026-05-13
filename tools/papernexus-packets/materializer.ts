@@ -52,6 +52,8 @@ export const DEFAULT_GRAPH_STORYLINE_PACKET_SOURCE_PATH =
   "researcher/papernexus/GRAPH_STORYLINE_PACKET.json";
 export const DEFAULT_LITERATURE_DISCOVERY_PACKET_PATH =
   "researcher/literature-discovery/LITERATURE_DISCOVERY_PACKET.json";
+export const DEFAULT_INNOVATION_PACKET_PATH =
+  "orchestrator/INNOVATION_PACKET.json";
 
 function nowIso() {
   return new Date().toISOString();
@@ -105,6 +107,10 @@ function readRecordList(value: unknown): Record<string, unknown>[] {
     .filter((entry): entry is Record<string, unknown> => Boolean(entry));
 }
 
+function readFirstRecord(value: unknown): Record<string, unknown> | null {
+  return readRecordList(value)[0] ?? null;
+}
+
 function unwrapPacketBundle(value: unknown): Record<string, unknown> | null {
   const record = asRecord(value);
   if (!record) {
@@ -115,6 +121,280 @@ function unwrapPacketBundle(value: unknown): Record<string, unknown> | null {
     asRecord(record.packetBundle) ??
     record
   );
+}
+
+function slugify(value: string | null | undefined): string {
+  return String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "") || "idea";
+}
+
+function pickFirstString(...values: Array<string | null | undefined>): string | null {
+  for (const value of values) {
+    const normalized = asString(value);
+    if (normalized) {
+      return normalized;
+    }
+  }
+  return null;
+}
+
+function readIdeaFragmentString(
+  fragment: Record<string, unknown>,
+  keys: string[]
+): string | null {
+  const direct = pickString(fragment, keys);
+  if (direct) {
+    return direct;
+  }
+  const nested = asRecord(fragment.idea_fragment ?? fragment.ideaFragment);
+  return nested ? pickString(nested, keys) : null;
+}
+
+function readIdeaFragmentId(
+  fragment: Record<string, unknown>,
+  index: number
+): string {
+  return (
+    pickString(fragment, [
+      "idea_fragment_id",
+      "ideaFragmentId",
+      "fragment_id",
+      "fragmentId",
+      "id",
+      "candidate_id",
+      "candidateId",
+    ]) ??
+    `${slugify(readIdeaFragmentString(fragment, ["source_domain", "sourceDomain"]))}-${index + 1}`
+  );
+}
+
+function collectEvidenceRefNodeIds(value: unknown): string[] {
+  return readRecordList(value)
+    .map((entry) => pickString(entry, ["node_id", "nodeId", "ref_id", "refId"]))
+    .filter((entry): entry is string => Boolean(entry));
+}
+
+function collectSourceSpanIds(value: unknown): string[] {
+  return readRecordList(value)
+    .map((entry) =>
+      pickString(entry, [
+        "span_id",
+        "spanId",
+        "snippet_node_id",
+        "snippetNodeId",
+        "node_id",
+        "nodeId",
+      ])
+    )
+    .filter((entry): entry is string => Boolean(entry));
+}
+
+function deriveInnovationPacketFromBundle(params: {
+  manifest: Record<string, unknown>;
+  existingPacket: Record<string, unknown> | null;
+  bundle: Record<string, unknown> | null;
+  mechanismBridgePacket: Record<string, unknown> | null;
+  challengeInsightPacket: Record<string, unknown> | null;
+  ideaCatalystPacketBundlePath: string;
+  mechanismBridgePacketPath: string;
+  challengeInsightPacketPath: string;
+  projectRoot: string;
+}): Record<string, unknown> | null {
+  const bundle = params.bundle;
+  if (!bundle) {
+    return null;
+  }
+  const ideaFragments = readRecordList(bundle.idea_fragments ?? bundle.ideaFragments);
+  const selectedIdeaFragment = ideaFragments[0] ?? null;
+  if (!selectedIdeaFragment) {
+    return null;
+  }
+
+  const researchProgram = asRecord(params.manifest.research_program) ?? {};
+  const decomposition = asRecord(bundle.decomposition) ?? {};
+  const targetAnalysis = readFirstRecord(
+    bundle.target_domain_analysis ?? bundle.targetDomainAnalysis
+  );
+  const challenge = readFirstRecord(
+    targetAnalysis?.remaining_challenges ?? targetAnalysis?.remainingChallenges
+  );
+  const question =
+    readFirstRecord(decomposition.research_questions) ??
+    readFirstRecord(decomposition.questions);
+  const sourceAnalyses = readRecordList(
+    bundle.source_domain_analyses ?? bundle.sourceDomainAnalyses ?? bundle.cross_domain_analysis
+  );
+
+  const selectedIdeaFragmentId = readIdeaFragmentId(selectedIdeaFragment, 0);
+  const sourceDomains = uniqueStrings([
+    ...asStringArray(params.existingPacket?.source_domains),
+    ...asStringArray(params.existingPacket?.sourceDomains),
+    ...readPacketList(params.mechanismBridgePacket ?? {}, [
+      "selected_domains",
+      "selectedDomains",
+      "source_domains",
+      "sourceDomains",
+    ]),
+    ...sourceAnalyses
+      .map((entry) => pickString(entry, ["source_domain", "sourceDomain", "domain"]))
+      .filter((entry): entry is string => Boolean(entry)),
+    readIdeaFragmentString(selectedIdeaFragment, ["source_domain", "sourceDomain"]),
+  ].filter((entry): entry is string => Boolean(entry)));
+  const supportingPapers = uniqueStrings([
+    ...asStringArray(params.existingPacket?.supporting_papers),
+    ...asStringArray(params.existingPacket?.supportingPapers),
+    ...readPacketList(selectedIdeaFragment, ["supporting_papers", "supportingPapers"]),
+    ...sourceAnalyses.flatMap((entry) =>
+      readPacketList(entry, ["supporting_papers", "supportingPapers"])
+    ),
+  ]);
+  const supportingKgNodes = uniqueStrings([
+    ...asStringArray(params.existingPacket?.supporting_kg_nodes),
+    ...asStringArray(params.existingPacket?.supportingKgNodes),
+    ...asStringArray(selectedIdeaFragment.bridge_path_ids),
+    ...asStringArray(selectedIdeaFragment.bridgePathIds),
+    ...collectEvidenceRefNodeIds(
+      selectedIdeaFragment.evidence_chain_refs ?? selectedIdeaFragment.evidenceChainRefs
+    ),
+    ...collectSourceSpanIds(
+      selectedIdeaFragment.source_spans ?? selectedIdeaFragment.sourceSpans
+    ),
+    ...readRecordList(params.mechanismBridgePacket?.bridge_nodes)
+      .map((entry) => pickString(entry, ["node_id", "nodeId"]))
+      .filter((entry): entry is string => Boolean(entry)),
+  ]);
+  const evidencePaths = uniqueStrings([
+    path.relative(params.projectRoot, params.ideaCatalystPacketBundlePath),
+    path.relative(params.projectRoot, params.mechanismBridgePacketPath),
+    path.relative(params.projectRoot, params.challengeInsightPacketPath),
+    ...asStringArray(params.existingPacket?.evidence_paths),
+    ...asStringArray(params.existingPacket?.evidencePaths),
+  ]);
+
+  const baseline = pickFirstString(
+    asString(params.existingPacket?.baseline),
+    pickString(researchProgram, ["baseline_reference", "baselineReference", "baseline"])
+  );
+  const primaryMetric = pickFirstString(
+    asString(params.existingPacket?.primary_metric),
+    asString(params.existingPacket?.primaryMetric),
+    pickString(researchProgram, ["primary_metric", "primaryMetric", "metric"])
+  );
+  const fixedBudget = pickFirstString(
+    asString(params.existingPacket?.fixed_budget),
+    asString(params.existingPacket?.fixedBudget),
+    pickString(researchProgram, [
+      "fixed_budget",
+      "fixedBudget",
+      "compute_budget",
+      "computeBudget",
+      "trial_time_budget",
+      "trialTimeBudget",
+    ])
+  );
+  const integrationMechanism = readIdeaFragmentString(selectedIdeaFragment, [
+    "integration_mechanism",
+    "integrationMechanism",
+  ]);
+  const ablationPlan = uniqueStrings([
+    ...asStringArray(params.existingPacket?.ablation_plan),
+    ...asStringArray(params.existingPacket?.ablationPlan),
+    ...asStringArray(researchProgram.ablation_plan),
+    ...asStringArray(researchProgram.ablationPlan),
+    baseline && integrationMechanism
+      ? `Compare ${baseline} against ${integrationMechanism} under the fixed budget.`
+      : null,
+  ].filter((entry): entry is string => Boolean(entry)));
+  const riskFlags = uniqueStrings([
+    ...asStringArray(params.existingPacket?.risk_flags),
+    ...asStringArray(params.existingPacket?.riskFlags),
+    baseline ? null : "baseline_missing",
+    primaryMetric ? null : "primary_metric_missing",
+    fixedBudget ? null : "fixed_budget_missing",
+    supportingKgNodes.length > 0 ? null : "kg_node_trace_missing",
+  ].filter((entry): entry is string => Boolean(entry)));
+  const ready =
+    Boolean(baseline && primaryMetric && fixedBudget) &&
+    supportingPapers.length > 0 &&
+    supportingKgNodes.length > 0;
+
+  return {
+    ...(params.existingPacket ?? {}),
+    contract_version: "innovation-packet-v1",
+    status: ready ? "ready" : "incomplete",
+    generated_from: "papernexus_idea_catalyst_packet_bundle",
+    selected_idea_fragment_id: selectedIdeaFragmentId,
+    supporting_idea_fragment_ids: uniqueStrings([
+      selectedIdeaFragmentId,
+      ...asStringArray(params.existingPacket?.supporting_idea_fragment_ids),
+      ...asStringArray(params.existingPacket?.supportingIdeaFragmentIds),
+    ]),
+    research_problem:
+      pickString(researchProgram, ["problem_statement", "problemStatement", "goal"]) ??
+      pickString(decomposition, ["core_challenge", "coreChallenge"]) ??
+      readIdeaFragmentString(selectedIdeaFragment, ["target_challenge", "targetChallenge"]),
+    target_domain:
+      pickString(decomposition, ["fine_grained_domain", "fineGrainedDomain"]) ??
+      pickString(bundle, ["target_domain", "targetDomain"]) ??
+      pickString(params.mechanismBridgePacket ?? {}, ["target_domain", "targetDomain"]),
+    target_challenge:
+      readIdeaFragmentString(selectedIdeaFragment, ["target_challenge", "targetChallenge"]) ??
+      pickString(challenge ?? {}, [
+        "domain_specific_challenge_question",
+        "domainSpecificChallengeQuestion",
+      ]) ??
+      pickString(decomposition, ["core_challenge", "coreChallenge"]),
+    domain_agnostic_challenge:
+      pickString(challenge ?? {}, [
+        "domain_agnostic_challenge_question",
+        "domainAgnosticChallengeQuestion",
+      ]) ??
+      pickString(question ?? {}, [
+        "domain_agnostic_question",
+        "domainAgnosticQuestion",
+      ]),
+    source_domains: sourceDomains,
+    supporting_papers: supportingPapers,
+    supporting_kg_nodes: supportingKgNodes,
+    evidence_paths: evidencePaths,
+    integration_rationale:
+      readIdeaFragmentString(selectedIdeaFragment, [
+        "selection_rationale",
+        "integration_rationale",
+        "integrationRationale",
+      ]) ??
+      pickString(sourceAnalyses[0] ?? {}, ["selection_rationale", "selectionRationale"]),
+    hypothesis:
+      readIdeaFragmentString(selectedIdeaFragment, [
+        "challenge_resolution",
+        "challengeResolution",
+        "core_insight",
+        "coreInsight",
+      ]) ?? pickString(researchProgram, ["hypothesis"]),
+    baseline,
+    primary_metric: primaryMetric,
+    fixed_budget: fixedBudget,
+    ablation_plan: ablationPlan,
+    risk_flags: riskFlags,
+    trace: {
+      idea_catalyst_packet_bundle_path: path.relative(
+        params.projectRoot,
+        params.ideaCatalystPacketBundlePath
+      ),
+      mechanism_bridge_packet_path: path.relative(
+        params.projectRoot,
+        params.mechanismBridgePacketPath
+      ),
+      challenge_insight_packet_path: path.relative(
+        params.projectRoot,
+        params.challengeInsightPacketPath
+      ),
+    },
+    last_updated_at: nowIso(),
+  };
 }
 
 function deriveBridgeEvidenceTierFromBundle(bundle: Record<string, unknown>) {
@@ -586,13 +866,22 @@ export async function materializePapernexusPacketContracts(params: {
         "idea_catalyst_packet_bundle_path",
       ]) ?? DEFAULT_IDEA_CATALYST_PACKET_BUNDLE_PATH
     ) ?? path.join(projectRoot, DEFAULT_IDEA_CATALYST_PACKET_BUNDLE_PATH);
+  const innovationPacketPath =
+    resolveProjectArtifactPath(
+      projectRoot,
+      pickString(packetPaths, [
+        "innovationPacketPath",
+        "innovation_packet_path",
+      ]) ?? DEFAULT_INNOVATION_PACKET_PATH
+    ) ?? path.join(projectRoot, DEFAULT_INNOVATION_PACKET_PATH);
 
-  const [rawMechanismBridgePacket, rawChallengeInsightPacket, graphStorylinePacket, rawIdeaCatalystPacketBundle] =
+  const [rawMechanismBridgePacket, rawChallengeInsightPacket, graphStorylinePacket, rawIdeaCatalystPacketBundle, rawInnovationPacket] =
     await Promise.all([
       readJsonIfExists<Record<string, unknown>>(mechanismBridgePacketPath),
       readJsonIfExists<Record<string, unknown>>(challengeInsightPacketPath),
       readJsonIfExists<Record<string, unknown>>(graphStorylinePacketSourcePath),
       readJsonIfExists<Record<string, unknown>>(ideaCatalystPacketBundlePath),
+      readJsonIfExists<Record<string, unknown>>(innovationPacketPath),
     ]);
   const ideaCatalystPacketBundle = unwrapPacketBundle(rawIdeaCatalystPacketBundle);
   const derivedMechanismBridgePacket = ideaCatalystPacketBundle
@@ -617,6 +906,21 @@ export async function materializePapernexusPacketContracts(params: {
   if (ideaCatalystPacketBundle && challengeInsightPacket) {
     await writeJsonEnsured(challengeInsightPacketPath, challengeInsightPacket);
     generatedFiles.push(path.relative(projectRoot, challengeInsightPacketPath));
+  }
+  const innovationPacket = deriveInnovationPacketFromBundle({
+    manifest,
+    existingPacket: rawInnovationPacket,
+    bundle: ideaCatalystPacketBundle,
+    mechanismBridgePacket,
+    challengeInsightPacket,
+    ideaCatalystPacketBundlePath,
+    mechanismBridgePacketPath,
+    challengeInsightPacketPath,
+    projectRoot,
+  });
+  if (innovationPacket) {
+    await writeJsonEnsured(innovationPacketPath, innovationPacket);
+    generatedFiles.push(path.relative(projectRoot, innovationPacketPath));
   }
 
   const currentIdeation = normalizeIdeationContractState(manifest.ideation_contract);
@@ -848,6 +1152,8 @@ export async function materializePapernexusPacketContracts(params: {
       challengeInsightPacketReady: Boolean(challengeInsightPacket),
       graphStorylinePacketReady: Boolean(graphStorylinePacket),
       ideaCatalystPacketBundleReady: Boolean(ideaCatalystPacketBundle),
+      innovationPacketReady:
+        normalizeStage(innovationPacket?.status) === "ready",
       transferBridgeCount: transferBridges.length,
       selectedSourceDomainCount: selectedSourceDomains.length,
       bridgeEvidenceTier,

@@ -1161,6 +1161,56 @@ export async function materializeLocalExperimentExecutionImpl(params: {
   await writeJsonEnsured(path.join(bundle.bundleDir, "REMOTE_RUN.json"), remoteRun);
   generatedFiles.push(`${bundle.bundleRelativeDir}/REMOTE_RUN.json`);
 
+  const trialContract = {
+    contract_version: 1,
+    source: "local_experiment_execution_materializer",
+    action_type: "local_execution",
+    status: terminalStatus,
+    decision: candidatePromoted ? "advance" : "discard",
+    search_session_id: searchState.searchSessionId ?? normalizedSpec.searchSessionId,
+    experiment_id: experimentId,
+    track_id: trackId,
+    run_id: enrichedSummary.run_id,
+    attempt_id: attemptId,
+    stage_run_id: stageRunId,
+    git_branch: searchState.lastCandidateBranch,
+    worktree_path: searchState.candidateWorktreePath ?? projectRoot,
+    commit_hash: candidateCommit ?? gitAfter ?? gitBefore,
+    base_commit: searchState.candidateBaseCommit,
+    incumbent_branch: searchState.incumbentBranch,
+    incumbent_commit: searchState.incumbentCommit,
+    fixed_budget_minutes: innerLoop.trialTimeBudgetMinutes,
+    fixed_budget:
+      innerLoop.trialTimeBudgetMinutes == null
+        ? null
+        : `${innerLoop.trialTimeBudgetMinutes}m`,
+    seed,
+    primary_metric: {
+      name: primaryMetricName,
+      value: primaryMetricValue,
+      baseline: metrics.baseline_h_score,
+      delta: metrics.delta_h_score,
+      direction: "higher_is_better",
+    },
+    metrics,
+    result_paths: resultPaths,
+    keep_discard_rule: innerLoop.keepDiscardRule,
+    keep_discard_decision: lastTrialOutcome,
+    comparable_trial_budget_status: comparableTrialBudgetStatus,
+    cost: {
+      measured_trial_duration_minutes: measuredTrialDurationMinutes,
+      timeout_seconds: timeoutSeconds,
+      local_execution: true,
+    },
+    failure_reason:
+      terminalStatus === "improved_promoted_candidate" ||
+      terminalStatus === "no_improvement_reverted"
+        ? null
+        : attemptRecord.terminal_reason,
+    one_change_signature: oneChangeSignature,
+    completed_at: now,
+  };
+
   const bundleManifest = {
     ...bundle.manifest,
     status: "completed",
@@ -1221,6 +1271,7 @@ export async function materializeLocalExperimentExecutionImpl(params: {
         datasets: validatedDatasetEnvelope,
         validation_datasets: validatedDatasetEnvelope,
         one_change_signature: oneChangeSignature,
+        trial_contract: trialContract,
         karpathy_inner_loop: {
           mode: innerLoop.mode,
           trial_time_budget_minutes: innerLoop.trialTimeBudgetMinutes,

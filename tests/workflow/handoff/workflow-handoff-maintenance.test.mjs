@@ -273,3 +273,67 @@ test("runWorkflowHandoffMaintenancePass supersedes duplicate active handoffs", a
     "superseded"
   );
 });
+
+test("runWorkflowHandoffMaintenancePass preserves active reissue after expired duplicate", async (t) => {
+  const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-handoff-reissue-"));
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  const first = await upsertWorkflowHandoffIntent({
+    projectRoot,
+    projectId: "demo",
+    idempotencyKey: "stage:demo:plan:orchestrator:revision-1",
+    toRole: "orchestrator",
+    reason: "stage_owner_change",
+    stageBefore: "idea",
+    stageAfter: "plan",
+  });
+  await transitionWorkflowHandoffIntent({
+    projectRoot,
+    intentId: first.intent.intentId,
+    toStatus: "expired",
+    terminalReason: "expiresAt elapsed",
+  });
+  const reissued = await upsertWorkflowHandoffIntent({
+    projectRoot,
+    projectId: "demo",
+    idempotencyKey: "stage:demo:plan:orchestrator:revision-1",
+    toRole: "orchestrator",
+    reason: "stage_owner_change",
+    stageBefore: "idea",
+    stageAfter: "plan",
+  });
+
+  await fs.writeFile(
+    path.join(projectRoot, "PROJECT_MANIFEST.json"),
+    `${JSON.stringify(
+      {
+        project_id: "demo",
+        current_stage: "idea",
+        orchestration_state: {
+          pending_handoff_id: reissued.intent.intentId,
+        },
+      },
+      null,
+      2
+    )}\n`,
+    "utf8"
+  );
+
+  const result = await runWorkflowHandoffMaintenancePass({
+    projectRoot,
+    now: new Date(),
+  });
+
+  assert.deepEqual(result.supersededIntentIds, []);
+  const store = await readWorkflowHandoffIntentStore(projectRoot);
+  assert.equal(
+    store.intents.find((intent) => intent.intentId === first.intent.intentId)?.status,
+    "expired"
+  );
+  assert.equal(
+    store.intents.find((intent) => intent.intentId === reissued.intent.intentId)?.status,
+    "prepared"
+  );
+});

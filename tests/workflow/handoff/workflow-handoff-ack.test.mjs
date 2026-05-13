@@ -187,6 +187,10 @@ test("prepare_stage_handoff creates a real prepared handoff intent without switc
 
   assert.equal(prepared.created, true);
   assert.equal(prepared.intent.status, "prepared");
+  assert.equal(prepared.ownerRuntimeStatus.status, "blocked");
+  assert.equal(prepared.ownerRuntimeStatus.reason, "owner_runtime_dispatch_unavailable");
+  assert.equal(prepared.ownerRuntimeStatus.stage, "write");
+  assert.equal(prepared.ownerRuntimeStatus.owner, "academic_writer");
 
   const manifest = JSON.parse(
     await fs.readFile(path.join(projectRoot, "PROJECT_MANIFEST.json"), "utf8")

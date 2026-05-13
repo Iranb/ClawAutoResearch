@@ -14,6 +14,7 @@ import { materializeLiteratureDiscoveryPacket } from "../../tools/literature-dis
 import { queueIdeaCatalystRequisition } from "../../tools/idea-catalyst/workflow-bridge.ts";
 import { queueLiteratureDiscoveryRequisition } from "../../tools/literature-discovery/workflow-bridge.ts";
 import { materializePapernexusPacketContracts } from "../../tools/papernexus-packets/materializer.ts";
+import { resolveExperimentPlanCompletion } from "../../tools/workflow-stage-completion.ts";
 
 async function writeJson(targetPath, value) {
   await fs.mkdir(path.dirname(targetPath), { recursive: true });
@@ -382,6 +383,7 @@ async function makeProjectRoot() {
         "Generalized category discovery still lacks a disciplined cross-domain and story-grounded workflow.",
       baseline_reference: "SimGCD",
       primary_metric: "ACC",
+      fixed_budget: "5 minute CPU trial",
       datasets: ["CIFAR100"],
       success_criteria: ["Beat baseline ACC by 2 points"],
       zotero_project_path: "bot/packet-demo",
@@ -836,6 +838,8 @@ test("research_workflow materialize_papernexus_packet_contracts accepts a PaperN
   assert.equal(result.state.ideaCatalystPacketBundleReady, true);
   assert.equal(result.state.mechanismBridgePacketReady, true);
   assert.equal(result.state.challengeInsightPacketReady, true);
+  assert.equal(result.state.innovationPacketReady, true);
+  assert.ok(result.generatedFiles.includes("orchestrator/INNOVATION_PACKET.json"));
 
   const manifest = JSON.parse(
     await fs.readFile(path.join(projectRoot, "PROJECT_MANIFEST.json"), "utf8")
@@ -858,6 +862,34 @@ test("research_workflow materialize_papernexus_packet_contracts accepts a PaperN
     ),
     true
   );
+
+  const innovationPacket = JSON.parse(
+    await fs.readFile(
+      path.join(projectRoot, "orchestrator", "INNOVATION_PACKET.json"),
+      "utf8"
+    )
+  );
+  assert.match(innovationPacket.selected_idea_fragment_id, /^psychology-1$/);
+  assert.equal(innovationPacket.baseline, "SimGCD");
+  assert.equal(innovationPacket.primary_metric, "ACC");
+  assert.equal(innovationPacket.fixed_budget, "5 minute CPU trial");
+  assert.equal(innovationPacket.source_domains.includes("Psychology"), true);
+  assert.equal(
+    innovationPacket.supporting_papers.includes("Belief Updating Under Uncertainty"),
+    true
+  );
+  assert.equal(innovationPacket.supporting_kg_nodes.includes("bridge-psy"), true);
+  assert.equal(
+    innovationPacket.evidence_paths.includes(
+      "researcher/papernexus/IDEA_CATALYST_PACKET_BUNDLE.json"
+    ),
+    true
+  );
+
+  const experimentPlanCompletion =
+    await resolveExperimentPlanCompletion(projectRoot);
+  assert.equal(experimentPlanCompletion.completionStatus, "complete");
+  assert.equal(experimentPlanCompletion.nextAction, "/run-experiment");
 
   const derivedMechanismPacket = JSON.parse(
     await fs.readFile(

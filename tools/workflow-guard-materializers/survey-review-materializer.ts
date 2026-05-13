@@ -23,6 +23,7 @@ import {
 } from "../survey-review-artifacts";
 import { materializeSurveyReviewDiagnostics } from "../survey-review-diagnostics.js";
 import { materializeWorkflowPanelDiscussionState } from "../workflow-panel-discussion";
+import { reconcileWorkflowControl } from "../workflow-control-reconciler";
 import { materializePapernexusSurveyReadModel } from "./papernexus-survey-read-model";
 
 function hasNonWhitespaceContent(text: string | null | undefined): boolean {
@@ -751,9 +752,13 @@ export async function materializeSurveyReviewStateImpl(params: {
     );
   }
   await writeJsonEnsured(manifestPath, manifest);
+  const reconciled = await reconcileWorkflowControl({
+    projectRoot,
+    manifest,
+  });
 
   return {
-    state: getSurveyReviewStateSummary(manifest).state,
+    state: getSurveyReviewStateSummary(reconciled.manifest).state,
     generatedFiles,
   };
 }

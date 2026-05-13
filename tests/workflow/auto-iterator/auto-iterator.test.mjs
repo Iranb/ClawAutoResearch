@@ -48,6 +48,9 @@ import {
   buildPapernexusSyncStateFromGraphPresence,
   writePapernexusSyncState,
 } from "../../../tools/papernexus-sync-state.ts";
+import {
+  buildWorkflowControlContract,
+} from "../../../tools/workflow-control-contract.ts";
 
 async function makeTempProject() {
   const projectRoot = await fs.mkdtemp(
@@ -493,6 +496,24 @@ test("runWorkflowAutoIterator writes structured diagnostics for stage evaluation
         event.component === "auto_iterator" &&
         event.action === "tick_completed" &&
         typeof event.details?.nextAction === "string"
+    )
+  );
+  const manifest = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "PROJECT_MANIFEST.json"), "utf8")
+  );
+  assert.equal(manifest.workflow_control.schema_version, 1);
+  assert.equal(manifest.workflow_control.stage, manifest.current_stage);
+  assert.equal(manifest.workflow_control.owner, manifest.owner_agent);
+  assert.equal(manifest.workflow_control.next_action, manifest.next_action);
+  assert.equal(
+    manifest.workflow_control.blocking_reason,
+    manifest.blocking_reason ?? null
+  );
+  assert.match(manifest.workflow_control.contract_id, /^.+$/);
+  assert.match(manifest.workflow_control.completion.source, /_completion$/);
+  assert.ok(
+    ["complete", "incomplete", "blocked", "failed"].includes(
+      manifest.workflow_control.completion.status
     )
   );
 });
@@ -1197,6 +1218,46 @@ async function seedProjectReadyForCode(projectRoot) {
     present_paper_count: 1,
     missing_paper_count: 0,
   });
+  const seededSourcePath = path.join(
+    projectRoot,
+    "researcher",
+    "paper_source",
+    "md",
+    "2501.00001--demo-evidence.md"
+  );
+  await writeText(seededSourcePath, "# Demo Evidence\n\nGraph-backed support source.\n");
+  await seedPaperSourceIndex(projectRoot, [
+    {
+      canonical_id: "arxiv:2501.00001",
+      arxiv_id: "2501.00001",
+      title: "Demo Evidence",
+      source_kind: "markdown",
+      source_provider: "local-fixture",
+      retrieval_providers: ["test-fixture"],
+      source_path: seededSourcePath,
+    },
+  ]);
+  await seedGraphCorpus(projectRoot, [
+    {
+      sourceKey: path.join(sharedCorpusRoot, "md", "2501.00001--demo-evidence.md"),
+      inputPath: path.join(sharedCorpusRoot, "md", "2501.00001--demo-evidence.md"),
+      kind: "markdown",
+      paperId: "paper:demo-evidence",
+      paperTitle: "Demo Evidence",
+      sourcePath: path.join(sharedCorpusRoot, "md", "2501.00001--demo-evidence.md"),
+      sourceMarkdownPath: path.join(
+        sharedCorpusRoot,
+        "md",
+        "2501.00001--demo-evidence.md"
+      ),
+      activeInGraph: true,
+      canonicalSourceKey: path.join(
+        sharedCorpusRoot,
+        "md",
+        "2501.00001--demo-evidence.md"
+      ),
+    },
+  ]);
   await fs.mkdir(path.join(projectRoot, "graph", "subgraphs"), { recursive: true });
   await writeText(path.join(projectRoot, "graph", "subgraphs", "cluster.md"));
 
@@ -1645,6 +1706,59 @@ async function seedProjectReadyForSubmit(projectRoot) {
     status: "ready",
     blocking_issue_count: 0,
   });
+  await writeJson(path.join(projectRoot, "researcher", "baseline_summary.json"), {
+    status: "ready",
+    metric: "acc",
+    baseline: "baseline-a",
+  });
+  await writeJson(path.join(projectRoot, "researcher", "research_summary.json"), {
+    status: "ready",
+    claims: ["claim-1"],
+  });
+  await writeJson(path.join(projectRoot, "researcher", "ablation_summary.json"), {
+    status: "ready",
+    ablations: ["ablation-a"],
+  });
+  await writeJson(path.join(projectRoot, "researcher", "evaluation_summary.json"), {
+    status: "ready",
+    metric: "acc",
+    value: 0.91,
+  });
+  await writeJson(path.join(projectRoot, "academic_writer", "FIGURE_PACK.json"), {
+    status: "ready",
+    figures: [{ figure_id: "fig-1", source: "researcher/evaluation_summary.json" }],
+  });
+  await writeJson(path.join(projectRoot, "academic_writer", "TABLE_PACK.json"), {
+    status: "ready",
+    tables: [{ table_id: "tab-1", source: "researcher/evaluation_summary.json" }],
+  });
+  await writeJson(path.join(projectRoot, "academic_writer", "CITATION_CANDIDATES.json"), {
+    status: "ready",
+    candidates: [{ key: "demo2026", source: "academic_writer/paper/refs.bib" }],
+  });
+  await writeJson(path.join(projectRoot, "academic_writer", "WRITE_PACKAGE.json"), {
+    schema_version: 1,
+    status: "ready",
+    assembly_status: "ready",
+    assembly_mode: "seeded_test_fixture",
+    winning_track_ids: [trackId],
+    source_artifacts: [
+      "analyzer/CLAIM_EVIDENCE_MATRIX.md",
+      "analyzer/NARRATIVE_REPORT.md",
+      "analyzer/TRACK_VERDICTS.md",
+      "analyzer/UNSUPPORTED_CLAIMS.md",
+      "researcher/baseline_summary.json",
+      "researcher/research_summary.json",
+      "researcher/ablation_summary.json",
+      "researcher/evaluation_summary.json",
+      "analyzer/proof-packets",
+    ],
+    derived_artifacts: [
+      "academic_writer/FIGURE_PACK.json",
+      "academic_writer/TABLE_PACK.json",
+      "academic_writer/CITATION_CANDIDATES.json",
+    ],
+  });
   await writeText(path.join(projectRoot, "academic_writer", "PARAGRAPH_LOGIC_AUDIT.md"));
   await writeText(
     path.join(projectRoot, "academic_writer", "PARAGRAPH_LOGIC_REVERSE_OUTLINE.md")
@@ -1931,6 +2045,11 @@ async function seedProjectReadyForSubmit(projectRoot) {
       table_pack_path: "academic_writer/TABLE_PACK.json",
       proof_packet_dir: "analyzer/proof-packets",
       citation_candidates_path: "academic_writer/CITATION_CANDIDATES.json",
+      package_manifest_path: "academic_writer/WRITE_PACKAGE.json",
+      source_artifact_count: 9,
+      derived_artifact_count: 3,
+      assembled_at: now,
+      last_updated_at: now,
     },
     review_issue_tracker: {
       status: "ready",
@@ -2292,6 +2411,8 @@ test("auto iterator reconciles stale literature discovery requisitions once trac
       discovery_reason: "idea_track_graph_evidence_gap",
       trigger_kind: "idea_literature_discovery",
       target_track_ids: [trackId],
+      candidate_papers: [{ title: "Graph-backed innovation evidence", track_id: trackId }],
+      selected_papers: [{ title: "Graph-backed innovation evidence", track_id: trackId }],
       evidence_gap_closed: false,
     }
   );
@@ -5988,6 +6109,23 @@ test("auto iterator reconciles completed literature requisitions once source-bac
   queuedManifest.paper_ingestion.papernexus_claim_level = "source_backed_graph";
   queuedManifest.paper_ingestion.papernexus_source_backed_graph_claim = true;
   await writeJson(manifestPath, queuedManifest);
+  await writeJson(
+    path.join(
+      projectRoot,
+      "researcher",
+      "literature-discovery",
+      "LITERATURE_DISCOVERY_PACKET.json"
+    ),
+    {
+      schema_version: 1,
+      discovery_id: "req-catalyst-imported",
+      discovery_reason: "idea_catalyst_requisition",
+      trigger_kind: "idea_catalyst_requisition",
+      candidate_papers: [{ title: "Pseudo-label calibration evidence" }],
+      selected_papers: [{ title: "Pseudo-label calibration evidence" }],
+      evidence_gap_closed: false,
+    }
+  );
   await writeJson(path.join(projectRoot, "graph", "PAPERNEXUS_TASK_CERTIFICATION.json"), {
     status: "ready",
     claim_level: "source_backed_graph",
@@ -6273,13 +6411,20 @@ test("auto iterator waits on fresh queued literature discovery requisitions afte
   assert.equal(result.stageBefore, "graph_build");
   assert.equal(result.stageAfter, "graph_build");
   assert.ok(
-    result.missingStageSignals.some((signal) =>
-      /workflow-owned graph enrichment requisition is still active/i.test(signal)
+    result.materializedArtifacts.some(
+      (artifact) =>
+        artifact.contract === "literature_discovery_requisition_advanced"
     )
+  );
+  assert.equal(result.ownerActivated, false);
+  const updatedManifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  assert.match(
+    String(updatedManifest.workflow_control?.blocking_reason ?? ""),
+    /workflow-owned graph enrichment requisition|paper source|graph_reentry_request_active/i
   );
 });
 
-test("auto iterator degrades stale queued literature discovery requisitions once graph presence is ready", async (t) => {
+test("auto iterator keeps stale unlaunched literature discovery requisitions queued without coverage evidence", async (t) => {
   const projectRoot = await makeTempProject();
   t.after(async () => {
     await fs.rm(projectRoot, { recursive: true, force: true });
@@ -6389,19 +6534,11 @@ test("auto iterator degrades stale queued literature discovery requisitions once
 
   const updatedManifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
   const request = updatedManifest.paper_ingestion.queued_requests[0];
-  assert.equal(request.status, "completed");
-  assert.equal(request.validation_status, "warning");
-  assert.match(
-    request.validation_report_path,
-    /REQUISITION_SATISFACTION_REPORT\.json$/
-  );
-  await fs.access(path.join(projectRoot, request.validation_report_path));
+  assert.equal(request.status, "queued");
+  assert.equal(request.validation_report_path, undefined);
   assert.equal(result.stageBefore, "graph_build");
-  assert.equal(result.stageAfter, "review");
-  assert.doesNotMatch(
-    updatedManifest.blocking_reason ?? "",
-    /workflow-owned graph enrichment requisition is still active/i
-  );
+  assert.equal(result.stageAfter, "graph_build");
+  assert.equal(updatedManifest.blocking_reason, "graph_reentry_request_active");
 });
 
 test("auto iterator ignores stale graph_build catch-up queue once graph presence is ready", async (t) => {
@@ -6778,7 +6915,7 @@ test("auto iterator keeps remote terminal PaperNexus upload failures blocked wit
   );
 });
 
-test("auto iterator degrades literature requisitions from creation time despite recent launch retries", async (t) => {
+test("auto iterator marks stale retried literature requisitions needs_repair without coverage evidence", async (t) => {
   const projectRoot = await makeTempProject();
   t.after(async () => {
     await fs.rm(projectRoot, { recursive: true, force: true });
@@ -6863,10 +7000,10 @@ test("auto iterator degrades literature requisitions from creation time despite 
 
   const updatedManifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
   const request = updatedManifest.paper_ingestion.queued_requests[0];
-  assert.equal(request.status, "completed");
-  assert.equal(request.validation_status, "warning");
+  assert.equal(request.status, "needs_repair");
+  assert.equal(request.validation_status, "failed");
   assert.equal(result.stageBefore, "graph_build");
-  assert.equal(result.stageAfter, "review");
+  assert.equal(result.stageAfter, "graph_build");
 });
 
 test("auto iterator resumes literature discovery reentry stage after graph build degradation", async (t) => {
@@ -6946,8 +7083,13 @@ test("auto iterator resumes literature discovery reentry stage after graph build
       request_id: "review-story-support-gap-review-story-support-gap",
       trigger_kind: "review_literature_discovery",
       graph_presence_status: "ready",
-      selected_paper_count: 0,
-      candidate_paper_count: 0,
+      selected_paper_count: 1,
+      candidate_paper_count: 1,
+      evidence_gap_closed: true,
+      remediation_pass: {
+        graph_ready: true,
+        can_proceed_with_existing_graph: true,
+      },
     }
   );
 
@@ -7012,7 +7154,7 @@ test("auto iterator resumes literature discovery reentry stage after graph build
   );
 });
 
-test("auto iterator degrades stale running literature discovery requisitions once graph presence is ready", async (t) => {
+test("auto iterator marks stale literature discovery requisitions needs_repair without coverage evidence", async (t) => {
   const projectRoot = await makeTempProject();
   t.after(async () => {
     await fs.rm(projectRoot, { recursive: true, force: true });
@@ -7131,22 +7273,25 @@ test("auto iterator degrades stale running literature discovery requisitions onc
 
   const updatedManifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
   const request = updatedManifest.paper_ingestion.queued_requests[0];
-  assert.equal(request.status, "completed");
-  assert.equal(request.validation_status, "warning");
+  assert.equal(request.status, "needs_repair");
+  assert.equal(request.validation_status, "failed");
   assert.match(
     request.validation_report_path,
     /REQUISITION_SATISFACTION_REPORT\.json$/
   );
-  await fs.access(path.join(projectRoot, request.validation_report_path));
-  assert.equal(result.stageBefore, "graph_build");
-  assert.equal(result.stageAfter, "review");
-  assert.doesNotMatch(
-    updatedManifest.blocking_reason ?? "",
-    /workflow-owned graph enrichment requisition is still active/i
+  const report = JSON.parse(
+    await fs.readFile(path.join(projectRoot, request.validation_report_path), "utf8")
   );
+  assert.equal(
+    report.decision,
+    "needs_repair_missing_requisition_import_evidence"
+  );
+  assert.equal(result.stageBefore, "graph_build");
+  assert.equal(result.stageAfter, "graph_build");
+  assert.equal(updatedManifest.blocking_reason, "graph_reentry_request_active");
 });
 
-test("auto iterator degrades empty dormant review literature discovery requisitions once graph presence is ready", async (t) => {
+test("auto iterator keeps empty dormant review literature discovery requisitions queued without coverage evidence", async (t) => {
   const projectRoot = await makeTempProject();
   t.after(async () => {
     await fs.rm(projectRoot, { recursive: true, force: true });
@@ -7281,22 +7426,14 @@ test("auto iterator degrades empty dormant review literature discovery requisiti
 
   const updatedManifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
   const request = updatedManifest.paper_ingestion.queued_requests[0];
-  assert.equal(request.status, "completed");
-  assert.equal(request.validation_status, "warning");
-  assert.match(
-    request.validation_report_path,
-    /REQUISITION_SATISFACTION_REPORT\.json$/
-  );
-  await fs.access(path.join(projectRoot, request.validation_report_path));
+  assert.equal(request.status, "queued");
+  assert.equal(request.validation_report_path, undefined);
   assert.equal(result.stageBefore, "graph_build");
-  assert.equal(result.stageAfter, "review");
-  assert.doesNotMatch(
-    updatedManifest.blocking_reason ?? "",
-    /workflow-owned graph enrichment requisition is still active/i
-  );
+  assert.equal(result.stageAfter, "graph_build");
+  assert.equal(updatedManifest.blocking_reason, "graph_reentry_request_active");
 });
 
-test("auto iterator degrades empty dormant submit literature discovery requisitions once graph presence is ready", async (t) => {
+test("auto iterator keeps empty dormant submit literature discovery requisitions queued without coverage evidence", async (t) => {
   const projectRoot = await makeTempProject();
   t.after(async () => {
     await fs.rm(projectRoot, { recursive: true, force: true });
@@ -7447,21 +7584,13 @@ test("auto iterator degrades empty dormant submit literature discovery requisiti
   const updatedManifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
   const request = updatedManifest.paper_ingestion.queued_requests[0];
   const writeRequest = updatedManifest.paper_ingestion.queued_requests[1];
-  assert.equal(request.status, "completed");
-  assert.equal(writeRequest.status, "completed");
-  assert.equal(writeRequest.validation_status, "warning");
-  assert.equal(request.validation_status, "warning");
-  assert.match(
-    request.validation_report_path,
-    /REQUISITION_SATISFACTION_REPORT\.json$/
-  );
-  await fs.access(path.join(projectRoot, request.validation_report_path));
+  assert.equal(request.status, "queued");
+  assert.equal(writeRequest.status, "queued");
+  assert.equal(request.validation_report_path, undefined);
+  assert.equal(writeRequest.validation_report_path, undefined);
   assert.equal(result.stageBefore, "graph_build");
-  assert.equal(result.stageAfter, "submit");
-  assert.doesNotMatch(
-    updatedManifest.blocking_reason ?? "",
-    /workflow-owned graph enrichment requisition is still active/i
-  );
+  assert.equal(result.stageAfter, "graph_build");
+  assert.equal(updatedManifest.blocking_reason, "graph_reentry_request_active");
 });
 
 test("auto iterator rejects completed literature requisitions without import evidence", async (t) => {
@@ -7529,11 +7658,18 @@ test("auto iterator rejects completed literature requisitions without import evi
   assert.equal(result.stageBefore, "graph_build");
   assert.equal(result.stageAfter, "graph_build");
   assert.ok(
-    result.missingStageSignals.some((signal) =>
-      /marked completed without durable import or requisition-satisfaction evidence/i.test(
-        signal
-      )
+    result.materializedArtifacts.some(
+      (artifact) =>
+        artifact.contract === "literature_discovery_requisition_advanced" &&
+        artifact.kind === "marked_needs_repair"
     )
+  );
+  const updatedManifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  const request = updatedManifest.paper_ingestion.queued_requests[0];
+  assert.equal(request.status, "needs_repair");
+  assert.match(
+    request.last_error ?? "",
+    /marked completed without durable import or requisition-satisfaction evidence/i
   );
 });
 
@@ -7588,7 +7724,6 @@ test("auto iterator advances analyze without theory appendix artifacts when proo
     mode: "test",
     queueMailbox: false,
   });
-
   assert.equal(result.stageBefore, "analyze");
   assert.equal(result.stageAfter, "review");
   assert.ok(
@@ -7668,7 +7803,6 @@ test("auto iterator commits ready experiment review stage without waiting for re
     mode: "test",
     queueMailbox: false,
   });
-
   assert.equal(result.stageBefore, "analyze");
   assert.equal(result.stageAfter, "review");
   assert.equal(result.pendingHandoff, false);
@@ -8484,6 +8618,20 @@ test("auto iterator clears stale submit gate timestamps after regression and res
 
   const recoveredManifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
   recoveredManifest.current_stage = "submit";
+  recoveredManifest.owner_agent = "reviewer";
+  recoveredManifest.workflow_control = buildWorkflowControlContract({
+    contractId: "wfctl-test-submit-reentry",
+    reconciledAt: "2026-03-28T11:00:00.000Z",
+    stage: "submit",
+    owner: "reviewer",
+    nextAction: "Re-enter submit and evaluate the final gate.",
+    status: "waiting",
+    blockingReason: null,
+    completionStatus: "incomplete",
+    completionSource: "submit_completion",
+    completionReason: "owner_work_required",
+    runtimeState: "idle",
+  });
   recoveredManifest.citation_integrity.verification_status = "verified";
   recoveredManifest.citation_integrity.hallucinated_citation_count = 0;
   await writeJson(manifestPath, recoveredManifest);

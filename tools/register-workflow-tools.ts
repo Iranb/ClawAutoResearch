@@ -76,6 +76,7 @@ import {
   runWorkflowAutoIterator,
   requestExperimentGitOp,
   applyExperimentGitOp,
+  runRuntimeManagedExperimentTrial,
   setBrainstormCycleState,
   setCitationCollectionState,
   setExperimentSearchState,
@@ -168,6 +169,7 @@ import {
   enqueueQueuedBackgroundWorkflowRun,
   startBackgroundWorkflowRun,
   type BackgroundRunRequest,
+  type BackgroundRunStartResult,
   type PapernexusWrapperRunRequest,
 } from "./workflow-fast-paths";
 import {
@@ -261,6 +263,12 @@ import {
   reconcileWorkflowRuntimeDispatchState,
   verifyWorkflowRuntimeDispatchTerminality,
 } from "./workflow-runtime-recovery.js";
+import { reconcileWorkflowControl } from "./workflow-control-reconciler";
+import { normalizeWorkflowControlContract } from "./workflow-control-contract.js";
+import {
+  ensureWorkflowOwnerRuntime,
+  type EnsureWorkflowOwnerRuntimeResult,
+} from "./workflow-owner-runtime";
 import {
   claimAndActivateWorkflowHandoffForAgent,
   syncPreparedWorkflowHandoffToManifest,
@@ -1587,6 +1595,7 @@ const WORKFLOW_ACTION_FUNCTIONS: Record<string, string> = {
   request_experiment_git_op: "requestExperimentGitOp",
   set_experiment_git_review: "setExperimentGitReviewState",
   apply_experiment_git_op: "applyExperimentGitOp",
+  run_experiment_trial: "runRuntimeManagedExperimentTrial",
   set_experiment_review_state: "setExperimentReviewState",
   materialize_experiment_memory_packet: "materializeExperimentMemoryPacket",
   materialize_experiment_review_state: "materializeExperimentReviewState",
@@ -2219,7 +2228,11 @@ async function prepareAutoIteratorDispatchPreflight(params: {
   owner?: string | null;
   command?: string | null;
   staleSessionAgeMs?: number;
-}) {
+}): Promise<{
+  queueKey: string;
+  runtimeReconciliation: Awaited<ReturnType<typeof reconcileWorkflowRuntimeDispatchState>>;
+  ownerRuntimeStatus: EnsureWorkflowOwnerRuntimeResult;
+}> {
   const queueKey = buildAutoStageDispatchQueueKey({
     projectRoot: params.projectRoot,
     stage: params.stage,
@@ -2234,7 +2247,137 @@ async function prepareAutoIteratorDispatchPreflight(params: {
     queueKey,
     staleSessionAgeMs: params.staleSessionAgeMs,
   });
-  return { queueKey, runtimeReconciliation };
+  const ownerRuntimeStatus = await ensureWorkflowOwnerRuntime({
+    projectRoot: params.projectRoot,
+    projectId: params.projectId,
+    stage: params.stage ?? null,
+    owner: params.owner ?? null,
+    nextAction: params.command ?? null,
+    queueKey,
+    staleRuntimeAgeMs: params.staleSessionAgeMs,
+    writeRuntimeEvent: false,
+  });
+  return { queueKey, runtimeReconciliation, ownerRuntimeStatus };
+}
+
+async function resolveBackgroundRunOwnerRuntimeStatus(params: {
+  result: BackgroundRunStartResult;
+  snapshot: WorkflowSnapshot;
+  ctx: ToolContext;
+  backgroundRun: BackgroundRunRequest;
+}): Promise<EnsureWorkflowOwnerRuntimeResult | null> {
+  const projectRoot = params.result.projectRoot ?? params.snapshot.projectRoot;
+  if (!projectRoot) {
+    return null;
+  }
+  return ensureWorkflowOwnerRuntime({
+    projectRoot,
+    projectId: params.result.projectId ?? params.snapshot.projectId ?? null,
+    stage:
+      params.snapshot.currentStage ??
+      readString(params.backgroundRun.kind) ??
+      null,
+    owner: params.snapshot.role ?? params.ctx.agentId ?? null,
+    nextAction:
+      readString(params.backgroundRun.commandText) ??
+      params.snapshot.nextAction ??
+      readString(params.backgroundRun.kind) ??
+      null,
+    summary: params.result.summary,
+    queueKey: params.result.queueKey,
+    writeRuntimeEvent: false,
+    dispatch: async () => ({
+      started: params.result.started,
+      queued: params.result.queued,
+      blocked: !params.result.started && !params.result.queued,
+      reason: params.result.reason,
+      queueKey: params.result.queueKey,
+      sessionKey: params.result.sessionKey,
+      runId: params.result.runId,
+    }),
+  });
+}
+
+function readLatestHandoffDeliveryAttempt(intent: {
+  deliveryAttempts?: unknown;
+}): {
+  status: string | null;
+  queueKey: string | null;
+  sessionKey: string | null;
+  runId: string | null;
+  error: string | null;
+} | null {
+  if (!Array.isArray(intent.deliveryAttempts) || intent.deliveryAttempts.length === 0) {
+    return null;
+  }
+  const latest = asObject(intent.deliveryAttempts.at(-1));
+  if (!latest) {
+    return null;
+  }
+  return {
+    status: readString(latest.status) ?? null,
+    queueKey: readString(latest.queueKey) ?? null,
+    sessionKey: readString(latest.sessionKey) ?? null,
+    runId: readString(latest.runId) ?? null,
+    error: readString(latest.error) ?? null,
+  };
+}
+
+async function resolvePreparedHandoffOwnerRuntimeStatus(params: {
+  projectRoot: string;
+  projectId: string | null | undefined;
+  stageAfter: string;
+  toRole: DispatchableWorkflowRole;
+  command: string | null;
+  summary: string | null;
+  deliveryResult: Awaited<ReturnType<typeof deliverWorkflowHandoffIntent>> | null;
+}): Promise<EnsureWorkflowOwnerRuntimeResult> {
+  const latestIntent = params.deliveryResult?.intent ?? null;
+  const latestAttempt = latestIntent
+    ? readLatestHandoffDeliveryAttempt(latestIntent)
+    : null;
+  return ensureWorkflowOwnerRuntime({
+    projectRoot: params.projectRoot,
+    projectId: params.projectId ?? null,
+    stage: params.stageAfter,
+    owner: params.toRole,
+    nextAction: params.command,
+    summary: params.summary,
+    queueKey: latestAttempt?.queueKey ?? null,
+    writeRuntimeEvent: false,
+    dispatch: params.deliveryResult
+      ? async () => {
+          if (params.deliveryResult?.delivered) {
+            const queued =
+              latestIntent?.status === "queued" ||
+              (Boolean(latestAttempt?.queueKey) && !latestAttempt?.sessionKey);
+            return {
+              started: !queued,
+              queued,
+              reason: queued ? "handoff_queued" : "handoff_delivered",
+              queueKey: latestAttempt?.queueKey ?? null,
+              sessionKey:
+                latestAttempt?.sessionKey ??
+                latestIntent?.toSessionKey ??
+                null,
+              runId: latestAttempt?.runId ?? null,
+              error: latestAttempt?.error ?? null,
+            };
+          }
+          return {
+            blocked: true,
+            reason: params.deliveryResult?.reason ?? "handoff_not_delivered",
+            queueKey: latestAttempt?.queueKey ?? null,
+            sessionKey:
+              latestAttempt?.sessionKey ??
+              latestIntent?.toSessionKey ??
+              null,
+            runId: latestAttempt?.runId ?? null,
+            error: latestAttempt?.error ?? null,
+          };
+        }
+      : undefined,
+  });
 }
 
 function buildStageHandoffAcceptanceChecks(params: {
@@ -2536,6 +2679,7 @@ export async function maybeDispatchAutoIteratorTask(params: {
         sameOwnerRepairDispatch: true,
         queueKey: dispatchPreflight.queueKey,
         runtimeDispatchStatus: dispatchPreflight.runtimeReconciliation,
+        ownerRuntimeStatus: dispatchPreflight.ownerRuntimeStatus,
         error:
           dispatchPreflight.runtimeReconciliation.detectedCondition ===
           "active_dispatch_chain_exists"
@@ -2648,6 +2792,7 @@ export async function maybeDispatchAutoIteratorTask(params: {
         queueKey: queued.entry.queueKey,
         queuePosition: queued.queuePosition,
         runtimeDispatchStatus: dispatchPreflight.runtimeReconciliation,
+        ownerRuntimeStatus: dispatchPreflight.ownerRuntimeStatus,
         dispatchTerminality: terminality,
       };
     }
@@ -2669,6 +2814,7 @@ export async function maybeDispatchAutoIteratorTask(params: {
         owner: ownerAfter,
         sameOwnerRepairDispatch: true,
         runtimeDispatchStatus: dispatchPreflight.runtimeReconciliation,
+        ownerRuntimeStatus: dispatchPreflight.ownerRuntimeStatus,
         dispatchTerminality: terminality,
         error:
           "Dispatch completed without a durable queue/session/handoff mapping; blocked for runtime recovery.",
@@ -2681,6 +2827,7 @@ export async function maybeDispatchAutoIteratorTask(params: {
       owner: ownerAfter,
       sameOwnerRepairDispatch: true,
       runtimeDispatchStatus: dispatchPreflight.runtimeReconciliation,
+      ownerRuntimeStatus: dispatchPreflight.ownerRuntimeStatus,
       dispatchTerminality: terminality,
     };
   }
@@ -2731,6 +2878,7 @@ export async function maybeDispatchAutoIteratorTask(params: {
       owner: ownerAfter,
       queueKey: dispatchPreflight.queueKey,
       runtimeDispatchStatus: dispatchPreflight.runtimeReconciliation,
+      ownerRuntimeStatus: dispatchPreflight.ownerRuntimeStatus,
       error:
         dispatchPreflight.runtimeReconciliation.detectedCondition ===
         "active_dispatch_chain_exists"
@@ -3012,6 +3160,7 @@ export async function maybeDispatchAutoIteratorTask(params: {
       queueKey: queued.entry.queueKey,
       queuePosition: queued.queuePosition,
       runtimeDispatchStatus: dispatchPreflight.runtimeReconciliation,
+      ownerRuntimeStatus: dispatchPreflight.ownerRuntimeStatus,
       dispatchTerminality: terminality,
     };
   }
@@ -3038,6 +3187,7 @@ export async function maybeDispatchAutoIteratorTask(params: {
       handoffIntentId: handoffIntent.intent.intentId,
       handoffStatus: deliveryResult?.intent.status ?? handoffIntent.intent.status,
       runtimeDispatchStatus: dispatchPreflight.runtimeReconciliation,
+      ownerRuntimeStatus: dispatchPreflight.ownerRuntimeStatus,
       dispatchTerminality: terminality,
       error:
         "Dispatch completed without a durable queue/session/handoff mapping; blocked for runtime recovery.",
@@ -3051,6 +3201,7 @@ export async function maybeDispatchAutoIteratorTask(params: {
     handoffIntentId: handoffIntent.intent.intentId,
     handoffStatus: deliveryResult?.intent.status ?? handoffIntent.intent.status,
     runtimeDispatchStatus: dispatchPreflight.runtimeReconciliation,
+    ownerRuntimeStatus: dispatchPreflight.ownerRuntimeStatus,
     dispatchTerminality: terminality,
   };
 }
@@ -3188,6 +3339,7 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               "request_experiment_git_op",
               "set_experiment_git_review",
               "apply_experiment_git_op",
+              "run_experiment_trial",
               "set_experiment_review_state",
               "materialize_experiment_memory_packet",
               "get_external_review_state",
@@ -4492,6 +4644,13 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               });
               const resolvedProjectId = result.projectId ?? snapshot.projectId;
               const resolvedProjectRoot = result.projectRoot ?? projectRoot;
+              const ownerRuntimeStatus =
+                await resolveBackgroundRunOwnerRuntimeStatus({
+                  result,
+                  snapshot,
+                  ctx,
+                  backgroundRun,
+                });
               const statusBroadcast =
                 resolvedProjectRoot && ctx.sessionKey
                   ? await maybeBroadcastWorkflowStatusUpdate({
@@ -4525,6 +4684,7 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                 JSON.stringify(
                   {
                     ...result,
+                    ownerRuntimeStatus,
                     statusBroadcast,
                   },
                   null,
@@ -5824,7 +5984,11 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                 paper_type: "survey",
               });
               const surveyReview = asObject(surveyIdentity.manifest.survey_review);
-              const currentStage = readString(manifest.current_stage);
+              const workflowControl = normalizeWorkflowControlContract(manifest.workflow_control);
+              const currentStage =
+                workflowControl?.stage ?? readString(manifest.current_stage);
+              const currentOwner =
+                workflowControl?.owner ?? readString(manifest.owner_agent);
               const recoveredStage =
                 resolveStageForWorkflowLine({
                   stage: currentStage ?? null,
@@ -5832,9 +5996,9 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                 }) ?? "survey_review";
               const recoveredOwner =
                 recoveredStage === "write"
-                  ? readString(manifest.owner_agent) ?? "academic_writer"
+                  ? currentOwner ?? "academic_writer"
                   : recoveredStage === "submit"
-                    ? readString(manifest.owner_agent) ?? "reviewer"
+                    ? currentOwner ?? "reviewer"
                     : "researcher";
               const nextManifest = {
                 ...manifest,
@@ -5848,21 +6012,28 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                 next_action:
                   recoveredStage === "survey_review"
                     ? "Materialize survey_review state, then produce survey taxonomy, coverage matrix, and outline before write."
-                    : readString(manifest.next_action) ??
+                    : workflowControl?.next_action ??
+                      readString(manifest.next_action) ??
                       "Continue the current survey workflow stage.",
                 blocking_reason: null,
                 updated_at: new Date().toISOString(),
               };
               await writeJsonAtomicEnsured(manifestPath, nextManifest);
+              const reconciledControl = await reconcileWorkflowControl({
+                projectRoot: resolvedProjectRoot,
+                policy: { allowProjectionRepair: true },
+                manifest: nextManifest,
+              });
+              const recoveredManifest = reconciledControl.manifest;
               return textResponse(
                 JSON.stringify(
                   {
 	                    recovered: true,
 	                    action,
-	                    stage: nextManifest.current_stage,
-	                    workflowLine: (nextManifest as Record<string, unknown>).workflow_line,
-	                    paperType: (nextManifest as Record<string, unknown>).paper_type,
-	                  },
+	                    stage: recoveredManifest.current_stage,
+	                    workflowLine: (recoveredManifest as Record<string, unknown>).workflow_line,
+	                    paperType: (recoveredManifest as Record<string, unknown>).paper_type,
+                  },
                   null,
                   2
                 )
@@ -6853,6 +7024,15 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               });
               return textResponse(JSON.stringify(result, null, 2));
             }
+            case "run_experiment_trial": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const result = await runRuntimeManagedExperimentTrial({
+                projectRoot: resolvedProjectRoot,
+                agentId: state.bindingRole,
+                trigger: readString(params.trigger) ?? "research_workflow.run_experiment_trial",
+              });
+              return textResponse(JSON.stringify(result, null, 2));
+            }
             case "set_experiment_review_state": {
               const resolvedProjectRoot = requireWorkflowProjectRoot(state);
               const result = await setExperimentReviewState({
@@ -6987,14 +7167,17 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
             }
             case "prepare_stage_handoff": {
               const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const reconciledControl = await reconcileWorkflowControl({
+                projectRoot: resolvedProjectRoot,
+                policy: {
+                  allowProjectionRepair: true,
+                },
+              });
               const actorRole = snapshot.role ?? ctx.agentId ?? null;
               if (!actorRole) {
                 throw new Error("Current workflow role is required to prepare a stage handoff.");
               }
-              const currentManifest =
-                (await readJsonIfExists<Record<string, unknown>>(
-                  path.join(resolvedProjectRoot, "PROJECT_MANIFEST.json")
-                )) ?? null;
+              const currentManifest = reconciledControl.manifest;
               const handoffPatch = asObject(params.handoff) ?? {};
               const explicitToRole = inferTargetRoleFromToolParams({
                 agentId:
@@ -7105,6 +7288,7 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                 stageBefore:
                   readString(handoffPatch.stageBefore) ??
                   autoIteratorResult?.stageBefore ??
+                  reconciledControl.contract.stage ??
                   snapshot.currentStage,
                 stageAfter,
                 ownerBefore: actorRole,
@@ -7132,6 +7316,8 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                   (autoIteratorResult?.missingStageSignals ?? []).slice(),
                 manifestRevision:
                   autoIteratorResult?.pendingHandoffExecutionId ??
+                  reconciledControl.contract.contract_id ??
+                  reconciledControl.contract.reconciled_at ??
                   readString((snapshot as Record<string, unknown>).manifestUpdatedAt) ??
                   readString((snapshot as Record<string, unknown>).manifest_updated_at),
                 hookGate: stageGate.hookGate ?? prepareGate.hookGate,
@@ -7204,6 +7390,16 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                   }
                 }
               }
+              const ownerRuntimeStatus =
+                await resolvePreparedHandoffOwnerRuntimeStatus({
+                  projectRoot: resolvedProjectRoot,
+                  projectId: snapshot.projectId,
+                  stageAfter,
+                  toRole,
+                  command,
+                  summary,
+                  deliveryResult,
+                });
               return textResponse(
                 JSON.stringify(
                   {
@@ -7211,6 +7407,8 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                     created: handoff.created,
                     dispatched: deliveryResult?.delivered ?? false,
                     terminal: deliveryResult?.terminal ?? false,
+                    ownerRuntimeStatus,
+                    workflowControl: reconciledControl.contract,
                     prepareBroadcast,
                     dispatchBroadcast,
                   },

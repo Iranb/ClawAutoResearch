@@ -240,3 +240,47 @@ test("survey orchestration mutation toward code is repaired to survey_review", a
 
   assert.equal(result.state.nextTransitionCandidate, "survey_review");
 });
+
+test("survey orchestration guard uses canonical control before stale stage projection", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  t.after(() => fs.rm(projectRoot, { recursive: true, force: true }));
+
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "gcd-survey-tpami-2026",
+    current_stage: "plan",
+    owner_agent: "orchestrator",
+    workflow_control: {
+      schema_version: 1,
+      contract_id: "workflow-control:test",
+      reconciled_at: "2026-05-12T12:00:00.000Z",
+      stage: "survey_review",
+      owner: "researcher",
+      next_action: "/survey-pipeline",
+      status: "ready",
+      blocking_reason: null,
+      completion: {
+        status: "incomplete",
+        source: "survey_review_completion",
+        reason: null,
+      },
+      runtime_state: "idle",
+      queue_key: null,
+      session_key: null,
+    },
+  });
+
+  const result = await setOrchestrationState({
+    projectRoot,
+    orchestrationState: {
+      status: "running",
+      current_owner: "researcher",
+      next_transition_candidate: "code",
+    },
+  });
+
+  assert.equal(result.state.nextTransitionCandidate, "survey_review");
+  assert.match(
+    result.validationErrors[0] ?? "",
+    /current_stage=survey_review/
+  );
+});

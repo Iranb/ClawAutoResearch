@@ -61,6 +61,7 @@ import {
   type GraphPresenceStatus,
 } from "./graph-presence";
 import { maybeMaterializeGraphBuildPaperSources } from "./graph-build-source-catchup";
+import { advanceLiteratureDiscoveryRequisition } from "./literature-discovery/requisition-executor";
 import {
   auditLiteratureCoverage,
   planCitationExpansion,
@@ -123,6 +124,9 @@ import {
 import {
   resolveWorkflowStageLeadRole,
 } from "./workflow-kernel/stage-registry";
+import {
+  reconcileWorkflowControl,
+} from "./workflow-control-reconciler";
 import {
   loadPapernexusProgress,
   summarizePapernexusProgress,
@@ -375,6 +379,7 @@ import { materializePapernexusPacketContracts } from "./papernexus-packets/mater
 import { materializeIdeationContractImpl } from "./workflow-guard-materializers/ideation-contract-materializer";
 import { materializeExperimentMemoryPacketImpl } from "./workflow-guard-materializers/experiment-memory-materializer.js";
 import { materializeExperimentReviewStateImpl } from "./workflow-guard-materializers/experiment-review-materializer";
+import { materializeLocalExperimentExecutionImpl } from "./workflow-guard-materializers/experiment-execution-materializer";
 import {
   applyExperimentGitOpImpl,
   getExperimentGitReviewSummaryImpl,
@@ -1628,6 +1633,8 @@ export type PaperIngestionRemoteTaskProgress = {
 };
 
 export type PaperIngestionQueueProgress = {
+  sequence?: number | null;
+  lastEventAt?: string | null;
   total: number | null;
   pending: number | null;
   running: number | null;
@@ -1789,6 +1796,16 @@ export type WorkflowSnapshot = {
   nextAction: string | null;
   resumeAction: string | null;
   blockingReason: string | null;
+  workflowControlSchemaVersion: number | null;
+  workflowControlContractId: string | null;
+  workflowControlReconciledAt: string | null;
+  workflowControlStatus: string | null;
+  workflowControlCompletionStatus: string | null;
+  workflowControlCompletionSource: string | null;
+  workflowControlCompletionReason: string | null;
+  workflowControlRuntimeState: string | null;
+  workflowControlQueueKey: string | null;
+  workflowControlSessionKey: string | null;
   stateRevision: string | null;
   stateUpdatedAt: string | null;
   autoIteratorAuditStatus: string | null;
@@ -6692,11 +6709,23 @@ export async function buildWorkflowSnapshot(params: {
     role: params.agentId,
     invalidEnvProjectRootMode: "ignore",
   });
+  const reconciledProjectState =
+    projectState.projectRoot
+      ? {
+          ...projectState,
+          manifest: (
+            await reconcileWorkflowControl({
+              projectRoot: projectState.projectRoot,
+              policy: { allowProjectionRepair: true },
+            })
+          ).manifest,
+        }
+      : projectState;
   return await buildWorkflowSnapshotFromProjectState(
     {
       policy,
       agentId: params.agentId,
-      projectState,
+      projectState: reconciledProjectState,
     },
     {
       getMissingStageSignals:
@@ -8351,6 +8380,11 @@ export async function applyExperimentGitOp(params: {
             return "scientific";
           })()
         : null;
+    const fixedBudgetMinutes = result.searchState.trialTimeBudgetMinutes;
+    const trialContractDecision =
+      result.gitResult.actionType === "promote_candidate" ? "advance" : "discard";
+    const trialContractStatus =
+      result.gitResult.actionType === "promote_candidate" ? "merged" : "completed";
     const ledgerResult = await upsertExperimentLedgerEntry({
       projectRoot: params.projectRoot,
       agentId: params.agentId ?? undefined,
@@ -8372,6 +8406,34 @@ export async function applyExperimentGitOp(params: {
           result.reviewState.discardReason ??
           result.reviewState.pendingReason,
         metadata: {
+          trial_contract: {
+            contract_version: 1,
+            source: "experiment_git_op",
+            action_type: result.gitResult.actionType,
+            status: trialContractStatus,
+            decision: trialContractDecision,
+            search_session_id:
+              result.reviewState.searchSessionId ??
+              result.searchState.searchSessionId,
+            experiment_id: experimentId,
+            track_id: result.reviewState.trackId ?? result.searchState.trackId ?? null,
+            git_branch: result.gitResult.candidateBranch,
+            worktree_path: result.gitResult.candidateWorktreePath,
+            commit_hash: result.gitResult.candidateHeadCommit,
+            base_commit: result.gitResult.candidateBaseCommit,
+            incumbent_branch: result.gitResult.incumbentBranch,
+            incumbent_commit: result.gitResult.incumbentCommit,
+            fixed_budget_minutes: fixedBudgetMinutes,
+            fixed_budget:
+              fixedBudgetMinutes == null ? null : `${fixedBudgetMinutes}m`,
+            review_packet_path: result.reviewState.packetPath,
+            promotion_basis_signals: result.reviewState.promotionBasisSignals,
+            promotion_evidence_summary:
+              result.reviewState.promotionEvidenceSummary,
+            discard_reason: result.reviewState.discardReason,
+            failure_class: searchFailureClass,
+            applied_at: result.reviewState.appliedAt,
+          },
           searchGit: {
             actionType: result.gitResult.actionType,
             searchSessionId:
@@ -8403,6 +8465,99 @@ export async function applyExperimentGitOp(params: {
     reviewState: normalizeExperimentSearchReviewState(result.reviewState),
     searchState: refreshedSearch.state,
     ledgerEntry,
+  };
+}
+
+export async function runRuntimeManagedExperimentTrial(params: {
+  projectRoot: string;
+  agentId?: string | null;
+  trigger?: string | null;
+}): Promise<{
+  status: string;
+  gitActionApplied: boolean;
+  gitResult: Record<string, unknown> | null;
+  gitReviewState: ReturnType<typeof normalizeExperimentSearchReviewState> | null;
+  localExecution: {
+    generatedFiles: string[];
+    experimentId: string | null;
+    bundleDir: string | null;
+    executed: boolean;
+    skippedReason: string | null;
+  };
+  promotionGate: {
+    status: string | null;
+    readyForAnalysis: boolean;
+    lastDecision: string | null;
+    lastTrialOutcome: string | null;
+    multiSeedStatus: string | null;
+    plotPackStatus: string | null;
+  };
+  searchState: ExperimentSearchState;
+  ledgerEntry: ExperimentLedgerEntry | null;
+}> {
+  const beforeGitReview = await getExperimentGitReviewSummary({
+    projectRoot: params.projectRoot,
+  });
+  const pendingReviewedAction =
+    beforeGitReview.reviewState.actionType &&
+    beforeGitReview.reviewState.actionStatus !== "applied" &&
+    beforeGitReview.searchState.requestedGitOp !== null;
+  let appliedGitOp: Awaited<ReturnType<typeof applyExperimentGitOp>> | null = null;
+  if (pendingReviewedAction) {
+    appliedGitOp = await applyExperimentGitOp({
+      projectRoot: params.projectRoot,
+      agentId: params.agentId,
+    });
+  }
+
+  const appliedActionType =
+    typeof appliedGitOp?.gitResult?.actionType === "string"
+      ? appliedGitOp.gitResult.actionType
+      : null;
+  const shouldMaterializeLocalTrial =
+    !appliedActionType || appliedActionType === "create_candidate_worktree";
+  const localExecution = shouldMaterializeLocalTrial
+    ? await materializeLocalExperimentExecutionImpl({
+        projectRoot: params.projectRoot,
+        trigger: params.trigger ?? "run_experiment_trial",
+        agentId: params.agentId ?? null,
+      })
+    : {
+        generatedFiles: [],
+        experimentId: null,
+        bundleDir: null,
+        executed: false,
+      };
+  const afterSearch = await getExperimentSearchStateSummary({
+    projectRoot: params.projectRoot,
+  });
+  const status =
+    localExecution.executed || localExecution.generatedFiles.length > 0
+      ? "trial_completed"
+      : appliedGitOp
+        ? "git_action_applied"
+        : "waiting_for_trial_artifacts";
+  return {
+    status,
+    gitActionApplied: Boolean(appliedGitOp),
+    gitResult: appliedGitOp?.gitResult ?? null,
+    gitReviewState: appliedGitOp?.reviewState ?? beforeGitReview.reviewState,
+    localExecution: {
+      ...localExecution,
+      skippedReason: shouldMaterializeLocalTrial
+        ? null
+        : `git_action_${appliedActionType}_applied`,
+    },
+    promotionGate: {
+      status: afterSearch.state.status,
+      readyForAnalysis: afterSearch.readyForAnalysis,
+      lastDecision: afterSearch.state.lastDecision,
+      lastTrialOutcome: afterSearch.state.lastTrialOutcome,
+      multiSeedStatus: afterSearch.state.multiSeedStatus,
+      plotPackStatus: afterSearch.state.plotPackStatus,
+    },
+    searchState: afterSearch.state,
+    ledgerEntry: appliedGitOp?.ledgerEntry ?? null,
   };
 }
 
@@ -10169,6 +10324,7 @@ export async function runWorkflowAutoIterator(params: {
       assembleWritePackage,
       checkGraphPresenceForWorkflow,
       materializeGraphBuildPaperSources: maybeMaterializeGraphBuildPaperSources,
+      advanceLiteratureDiscoveryRequisition,
       getPreviousStagesForRegression,
       getMissingStageSignals,
       evaluateWorkflowAutoModeRisk,

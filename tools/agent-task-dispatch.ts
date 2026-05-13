@@ -19,6 +19,7 @@ import {
 } from "./workflow-handoff/agent-capabilities";
 import { readWorkflowRuntimeSessionsStore } from "./workflow-runtime-state.js";
 import { readJsonIfExists } from "./workflow-guard-core/fs";
+import { normalizeWorkflowControlContract } from "./workflow-control-contract.js";
 import {
   getPreferredWorkflowAgentSession,
   readWorkflowAgentSessionRegistry,
@@ -216,10 +217,13 @@ async function findActiveTargetOwnerSession(params: {
   const manifestPath = path.join(path.resolve(params.projectRoot), "PROJECT_MANIFEST.json");
   const manifest =
     (await readJsonIfExists<Record<string, unknown>>(manifestPath)) ?? {};
+  const workflowControl = normalizeWorkflowControlContract(manifest.workflow_control);
   const ownerAgent =
-    typeof manifest.owner_agent === "string" ? manifest.owner_agent.trim() : null;
+    workflowControl?.owner ??
+    (typeof manifest.owner_agent === "string" ? manifest.owner_agent.trim() : null);
   const currentStage =
-    typeof manifest.current_stage === "string" ? manifest.current_stage.trim() : null;
+    workflowControl?.stage ??
+    (typeof manifest.current_stage === "string" ? manifest.current_stage.trim() : null);
   if (ownerAgent !== params.toRole) {
     return null;
   }

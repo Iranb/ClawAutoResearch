@@ -65,18 +65,38 @@ export async function runWorkflowHandoffMaintenancePass(params: {
     if (duplicateGroup.length < 2) {
       continue;
     }
-    const terminalIntent = duplicateGroup.find((intent) =>
-      isWorkflowHandoffTerminalStatus(intent.status)
+    const blockingTerminalIntent = duplicateGroup.find(
+      (intent) =>
+        isWorkflowHandoffTerminalStatus(intent.status) &&
+        intent.status !== "expired"
     );
+    const expiredTerminalIntent = duplicateGroup.find(
+      (intent) =>
+        isWorkflowHandoffTerminalStatus(intent.status) &&
+        intent.status === "expired"
+    );
+    const pendingActiveIntent = duplicateGroup.find(
+      (intent) =>
+        pendingHandoffId &&
+        intent.intentId === pendingHandoffId &&
+        isWorkflowHandoffActiveStatus(intent.status)
+    );
+    const activeIntent =
+      pendingActiveIntent ??
+      duplicateGroup.find((intent) => isWorkflowHandoffActiveStatus(intent.status));
+    const terminalIntent = blockingTerminalIntent ?? expiredTerminalIntent;
     const survivor =
+      blockingTerminalIntent ??
+      activeIntent ??
       terminalIntent ??
-      duplicateGroup.find((intent) => pendingHandoffId && intent.intentId === pendingHandoffId) ??
       duplicateGroup
         .slice()
         .sort(
           (a, b) =>
             Date.parse(a.createdAt ?? "") - Date.parse(b.createdAt ?? "")
         )[0];
+    const terminalControlsDuplicate =
+      terminalIntent != null && survivor.intentId === terminalIntent.intentId;
     for (const duplicate of duplicateGroup) {
       if (
         duplicate.intentId === survivor.intentId ||
@@ -88,10 +108,10 @@ export async function runWorkflowHandoffMaintenancePass(params: {
         projectRoot: params.projectRoot,
         intentId: duplicate.intentId,
         toStatus: "superseded",
-        terminalReason: terminalIntent
+        terminalReason: terminalControlsDuplicate
           ? "duplicate_idempotency_key_already_terminal"
           : "duplicate_idempotency_key_superseded",
-        summary: terminalIntent
+        summary: terminalControlsDuplicate
           ? "Superseded duplicate handoff because the same idempotency key already reached a terminal state."
           : "Superseded duplicate handoff and kept the canonical active handoff for this idempotency key.",
       });

@@ -156,6 +156,8 @@ function normalizePaperIngestionQueueProgress(
     return null;
   }
   const normalized: PaperIngestionQueueProgress = {
+    sequence: normalizeOptionalCount(record.sequence),
+    lastEventAt: pickString(record, ["lastEventAt", "last_event_at"]),
     total: normalizeOptionalCount(record.total),
     pending: normalizeOptionalCount(record.pending),
     running: normalizeOptionalCount(record.running),
@@ -167,6 +169,8 @@ function normalizePaperIngestionQueueProgress(
     ),
   };
   return normalized.total !== null ||
+    normalized.sequence !== null ||
+    normalized.lastEventAt !== null ||
     normalized.pending !== null ||
     normalized.running !== null ||
     normalized.completed !== null ||
@@ -184,6 +188,8 @@ function serializePaperIngestionQueueProgress(
     return null;
   }
   return {
+    sequence: value.sequence ?? null,
+    last_event_at: value.lastEventAt ?? null,
     total: value.total,
     pending: value.pending,
     running: value.running,
@@ -204,12 +210,16 @@ function mergePaperIngestionQueueProgress(
   if (!patch) {
     return current;
   }
+  const maxCount = (left: number | null | undefined, right: number | null | undefined) =>
+    left == null ? right ?? null : right == null ? left : Math.max(left, right);
   return {
+    sequence: maxCount(current.sequence, patch.sequence),
+    lastEventAt: patch.lastEventAt ?? current.lastEventAt ?? null,
     total: patch.total ?? current.total,
     pending: patch.pending ?? current.pending,
     running: patch.running ?? current.running,
-    completed: patch.completed ?? current.completed,
-    failed: patch.failed ?? current.failed,
+    completed: maxCount(current.completed, patch.completed),
+    failed: maxCount(current.failed, patch.failed),
     remaining: patch.remaining ?? current.remaining,
     overallPercent: patch.overallPercent ?? current.overallPercent,
   };

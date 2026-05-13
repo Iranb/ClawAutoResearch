@@ -7,7 +7,7 @@ import {
   pickNumber,
   pickString,
 } from "../workflow-guard-core/coercion";
-import { readJsonIfExists, writeJsonEnsured } from "../workflow-guard-core/fs";
+import { readJsonIfExists } from "../workflow-guard-core/fs";
 import { resolveProjectArtifactPath } from "../workflow-guard-core/paths";
 import {
   deriveGraphBuildMicroStage,
@@ -17,17 +17,11 @@ import {
   normalizeExperimentReviewState,
   serializeExperimentReviewState,
 } from "../workflow-guard-state/experiment-review";
-import { normalizeRevisionControlState } from "../workflow-guard-state/revision-control";
 import { serializeAutoDispatchDiagnosticsState } from "../workflow-guard-state/auto-dispatch-diagnostics";
 import { normalizeIdeaCatalystState } from "../idea-catalyst/state";
 import {
   deriveIdeaCatalystMicroStage,
-  shouldRouteIdeaCatalystToGraphBuild,
 } from "../idea-catalyst/workflow-bridge";
-import {
-  isLiteratureDiscoveryTriggerKind,
-  shouldRouteLiteratureDiscoveryToGraphBuild,
-} from "../literature-discovery/workflow-bridge";
 import {
   deriveWorkflowGraphContext,
   shouldRefreshWorkflowGraphPresence,
@@ -35,7 +29,13 @@ import {
 import { DEFAULT_PAPERNEXUS_GRAPH_BUILD_RECEIPT_PATH } from "../papernexus-graph-build-receipt";
 import { readPapernexusSyncState } from "../papernexus-sync-state";
 import { summarizeEvidenceCloseoutState } from "../workflow-evidence/closeout-summary";
-import { evaluateExperimentSearchDecision } from "../workflow-experiment-decision";
+import {
+  reconcileWorkflowControl,
+} from "../workflow-control-reconciler";
+import {
+  advanceLiteratureDiscoveryRequisition,
+  type LiteratureDiscoveryRequisitionAdvanceResult,
+} from "../literature-discovery/requisition-executor";
 import { normalizeWritingContractState } from "../workflow-guard-state/writing-contract";
 import {
   buildWorkflowAutoModeRiskFingerprint,
@@ -211,53 +211,6 @@ function hasOutstandingGraphBuildIngestionWork(
   );
 }
 
-type AutoIteratorGraphContext = ReturnType<typeof deriveWorkflowGraphContext>;
-
-function graphPresenceIsNotReadyForDownstream(
-  context: AutoIteratorGraphContext
-): boolean {
-  return (
-    (context.graphPresenceStatus != null && context.graphPresenceStatus !== "ready") ||
-    (context.graphPresenceCheckStatus != null &&
-      context.graphPresenceCheckStatus !== "ready")
-  );
-}
-
-function graphPresenceRequiresGraphBuildReentry(
-  context: AutoIteratorGraphContext
-): boolean {
-  const missingSources =
-    context.graphPresenceStatus === "missing_sources" ||
-    context.graphPresenceCheckStatus === "missing_sources";
-  const canonicalPapersMissing =
-    context.graphPresenceStatus === "missing_papers" ||
-    context.graphPresenceCheckStatus === "missing_papers";
-  const blockedWithoutSourceRepairOnly =
-    graphPresenceIsNotReadyForDownstream(context) &&
-    !missingSources &&
-    (context.graphBuildWorkflowStatus === "blocked" ||
-      context.graphBuildCanContinue === false ||
-      context.graphBuildRequiresImport === true ||
-      context.graphBuildRequiresSourceRepair === true ||
-      context.repairRequired);
-  return canonicalPapersMissing || blockedWithoutSourceRepairOnly;
-}
-
-function graphBuildPresenceBlocksAdvance(
-  context: AutoIteratorGraphContext
-): boolean {
-  return (
-    graphPresenceIsNotReadyForDownstream(context) &&
-    (context.graphBuildCanContinue === false ||
-      context.graphBuildWorkflowStatus === "blocked" ||
-      context.graphPresenceStatus === "missing_corpus" ||
-      context.graphPresenceStatus === "missing_papers" ||
-      context.graphPresenceCheckStatus === "missing_corpus" ||
-      context.graphPresenceCheckStatus === "missing_papers" ||
-      context.repairRequired)
-  );
-}
-
 function paperIngestionRequestUsesStrictRemotePapernexus(
   request: ReturnType<typeof normalizePaperIngestionState>["queuedRequests"][number]
 ): boolean {
@@ -334,8 +287,6 @@ type ProjectsStateLike = {
 };
 
 const AUTO_ITERATOR_GRAPH_REFRESH_MIN_INTERVAL_MS = 15_000;
-const LITERATURE_DISCOVERY_REENTRY_WINDOW_MS = 10 * 60 * 1000;
-const LITERATURE_DISCOVERY_REENTRY_CLOCK_SKEW_MS = 60 * 1000;
 const TRANSITION_BOOTSTRAP_PREP_STAGES = new Set([
   "code",
   "experiment",
@@ -344,26 +295,7 @@ const TRANSITION_BOOTSTRAP_PREP_STAGES = new Set([
   "write",
   "submit",
 ]);
-const EXPERIMENT_LOCAL_TARGET_READY_COMMIT_STAGES = new Set([
-  "code",
-  "experiment",
-  "analyze",
-  "review",
-  "write",
-  "submit",
-]);
 type StagePreflightResult = Awaited<ReturnType<typeof maybePrepareWorkflowStageContracts>>;
-
-const EXPERIMENT_DECISIONS_HOLDING_STAGE = new Set([
-  "launch_pending",
-  "repair_implementation",
-  "continue_tuning",
-  "narrow_search",
-  "require_multi_seed",
-  "require_ablation",
-  "innovation_fragile",
-  "reconcile_runtime",
-]);
 
 function buildAutoIteratorStageHandoffAcceptanceChecks(params: {
   workflowLine: "experiment" | "survey";
@@ -470,428 +402,55 @@ function shouldBootstrapTransitionStage(params: {
   );
 }
 
-function parseTimestampMs(value: string | null | undefined): number | null {
-  if (!value) {
-    return null;
-  }
-  const parsed = Date.parse(value);
-  return Number.isFinite(parsed) ? parsed : null;
-}
-
-function normalizeStagePath(value: unknown): string[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return value
-    .map((entry) => normalizeStage(entry))
-    .filter((entry): entry is string => Boolean(entry));
-}
-
-function isLiteratureDiscoveryReentryTrigger(value: string | null | undefined): boolean {
-  const normalized = String(value ?? "").trim().toLowerCase();
-  return (
-    normalized !== "idea_catalyst_requisition" &&
-    isLiteratureDiscoveryTriggerKind(normalized)
-  );
-}
-
-function inferLiteratureDiscoveryOriginStage(params: {
-  request: ReturnType<typeof normalizePaperIngestionState>["queuedRequests"][number];
-  currentStage: string | null;
-  validStages: Set<string>;
-}): string | null {
-  const haystack = [
-    params.request.triggerKind,
-    params.request.requestId,
-    params.request.manifestPath,
-  ]
-    .filter((entry): entry is string => Boolean(entry))
-    .join(" ")
-    .toLowerCase();
-  const stage =
-    haystack.includes("submit")
-      ? "submit"
-      : haystack.includes("write")
-        ? "write"
-        : haystack.includes("review")
-          ? "review"
-          : null;
-  return stage && stage !== params.currentStage && params.validStages.has(stage)
-    ? stage
-    : null;
-}
-
-function filterProjectedOrchestrationSignals(params: {
-  signals: string[];
-  stageBefore: string | null;
-  stageAfter: string | null;
-}): string[] {
-  if (!params.stageAfter || params.stageAfter === params.stageBefore) {
-    return params.signals;
-  }
-  const projectedTransitionPattern = new RegExp(
-    `^orchestration_state\\.next_transition_candidate should .+ while current_stage=${params.stageAfter.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} \\(current: .+\\)$`
-  );
-  return params.signals.filter((signal) => !projectedTransitionPattern.test(signal));
-}
-
-async function resolveCompletedLiteratureDiscoveryReentryStage(params: {
-  projectRoot: string;
-  manifest: ManifestLike;
+function buildCanonicalStageSignals(params: {
   stage: string | null;
-  nowMs: number;
-  validStages: Set<string>;
-}): Promise<string | null> {
-  if (params.stage !== "graph_build") {
-    return null;
+  completionStatus: string | null | undefined;
+  blockingReason: string | null | undefined;
+  missingSignals?: string[] | null;
+}): string[] {
+  if (params.missingSignals && params.missingSignals.length > 0) {
+    return params.missingSignals;
   }
-  const state = normalizePaperIngestionState(params.manifest.paper_ingestion);
-  const hasActiveLiteratureRequest = state.queuedRequests.some(
-    (request) =>
-      isLiteratureDiscoveryReentryTrigger(request.triggerKind) &&
-      request.requestKind === "requisition" &&
-      ["queued", "launching", "running", "needs_repair"].includes(request.status)
-  );
-  if (hasActiveLiteratureRequest) {
-    return null;
+  if (params.blockingReason) {
+    return [params.blockingReason];
   }
-
-  const completedRequests = state.queuedRequests
-    .filter(
-      (request) =>
-        isLiteratureDiscoveryReentryTrigger(request.triggerKind) &&
-        request.requestKind === "requisition" &&
-        request.status === "completed" &&
-        request.manifestPath
-    )
-    .map((request) => ({
-      request,
-      finishedMs: parseTimestampMs(request.finishedAt ?? request.updatedAt),
-    }))
-    .filter(
-      (entry): entry is typeof entry & { finishedMs: number } =>
-        entry.finishedMs !== null &&
-        entry.finishedMs - params.nowMs <= LITERATURE_DISCOVERY_REENTRY_CLOCK_SKEW_MS &&
-        params.nowMs - entry.finishedMs <= LITERATURE_DISCOVERY_REENTRY_WINDOW_MS
-    )
-    .sort((left, right) => right.finishedMs - left.finishedMs);
-
-  for (const { request } of completedRequests) {
-    const requisitionPath = resolveProjectArtifactPath(
-      params.projectRoot,
-      request.manifestPath ?? ""
-    );
-    const requisition = requisitionPath
-      ? await readJsonIfExists<Record<string, unknown>>(requisitionPath)
-      : null;
-    const literatureDiscovery = asRecord(requisition?.literature_discovery);
-    const catalystRequisition = asRecord(requisition?.catalyst_requisition);
-    const reentry = normalizeStagePath(
-      literatureDiscovery?.required_stage_reentry ??
-        literatureDiscovery?.requiredStageReentry ??
-        catalystRequisition?.required_stage_reentry ??
-        catalystRequisition?.requiredStageReentry ??
-        requisition?.required_stage_reentry ??
-        requisition?.requiredStageReentry
-    );
-    const targetStage =
-      [...reentry]
-        .reverse()
-        .find(
-          (stage) =>
-            stage !== "graph_build" &&
-            stage !== params.stage &&
-            params.validStages.has(stage)
-        ) ?? null;
-    if (targetStage) {
-      return targetStage;
-    }
-    const originStage = inferLiteratureDiscoveryOriginStage({
-      request,
-      currentStage: params.stage,
-      validStages: params.validStages,
-    });
-    if (originStage) {
-      return originStage;
-    }
-  }
-  return null;
-}
-
-function hasDurableCurrentStageEvidence(params: {
-  currentStage: string | null;
-  previousStage: string | null;
-  manifest: ManifestLike;
-}): boolean {
-  const currentStage = normalizeStage(params.currentStage);
-  const previousStage = normalizeStage(params.previousStage);
-  if (!currentStage || !previousStage) {
-    return false;
-  }
-  const manifest = params.manifest;
-  switch (currentStage) {
-    case "code": {
-      if (previousStage !== "plan") {
-        return false;
-      }
-      const orchestration = asRecord(manifest.orchestration_state) ?? {};
-      const currentOwner = normalizeStage(
-        orchestration.current_owner ??
-          orchestration.currentOwner ??
-          manifest.owner_agent ??
-          manifest.ownerAgent
-      );
-      const nextTransitionCandidate = normalizeStage(
-        orchestration.next_transition_candidate ??
-          orchestration.nextTransitionCandidate
-      );
-      const currentMicroStage = normalizeStage(
-        manifest.current_micro_stage ?? manifest.currentMicroStage
-      );
-      const resumeCursor = normalizeStage(
-        pickString(orchestration, ["resumeCursor", "resume_cursor"])
-      );
-      return (
-        currentOwner === "coder" ||
-        nextTransitionCandidate === "code" ||
-        nextTransitionCandidate === "experiment" ||
-        [
-          "implementation_requested",
-          "bundles_implemented",
-          "implementation_ready",
-          "implementation_repair",
-        ].includes(currentMicroStage ?? "") ||
-        [
-          "implementation_requested",
-          "bundles_implemented",
-          "implementation_ready",
-          "implementation_repair",
-        ].includes(resumeCursor ?? "")
-      );
-    }
-    case "idea": {
-      if (!["graph_build", "frontier_mapping"].includes(previousStage)) {
-        return false;
-      }
-      const brainstormCycle = asRecord(manifest.brainstorm_cycle) ?? {};
-      const ideationContract = asRecord(manifest.ideation_contract) ?? {};
-      const ideaCatalyst = asRecord(manifest.idea_catalyst) ?? {};
-      return [
-        normalizeStage(brainstormCycle.status),
-        normalizeStage(ideationContract.status),
-        normalizeStage(ideaCatalyst.status),
-      ].some((status) =>
-        ["ready", "reconciled", "complete", "completed", "judging", "active"].includes(
-          status ?? ""
-        )
-      );
-    }
-    case "analyze": {
-      if (previousStage !== "experiment") {
-        return false;
-      }
-      const experimentSearch = asRecord(manifest.experiment_search) ?? {};
-      const executionProof = asRecord(manifest.execution_proof) ?? {};
-      return (
-        normalizeStage(experimentSearch.status) === "ready_for_analysis" &&
-        normalizeStage(executionProof.status) === "ready"
-      );
-    }
-    case "review": {
-      if (!["analyze", "write"].includes(previousStage)) {
-        return false;
-      }
-      const reviewSession = asRecord(manifest.review_session) ?? {};
-      const resultsStoryline = asRecord(manifest.results_storyline) ?? {};
-      return ["completed", "ready", "received"].includes(
-        normalizeStage(reviewSession.status) ?? ""
-      ) || normalizeStage(resultsStoryline.status) === "ready";
-    }
-    case "write": {
-      if (!["survey_review", "review", "revise", "analyze", "experiment"].includes(previousStage)) {
-        return false;
-      }
-      const writingSession = asRecord(manifest.writing_session) ?? {};
-      const paperStory = asRecord(manifest.paper_story_state) ?? {};
-      const resultsStoryline = asRecord(manifest.results_storyline) ?? {};
-      const titleWorkbench = asRecord(manifest.title_abstract_intro_workbench) ?? {};
-      return (
-        !["missing", "pending", "bootstrapping"].includes(
-          normalizeStage(writingSession.status) ?? "missing"
-        ) ||
-        normalizeStage(paperStory.status) === "ready" ||
-        normalizeStage(resultsStoryline.status) === "ready" ||
-        normalizeStage(titleWorkbench.status) === "ready"
-      );
-    }
-    case "submit": {
-      if (!["write", "review"].includes(previousStage)) {
-        return false;
-      }
-      const writingSession = asRecord(manifest.writing_session) ?? {};
-      const reviewSession = asRecord(manifest.review_session) ?? {};
-      return (
-        normalizeStage(writingSession.status) === "ready_for_submit" ||
-        ["completed", "ready"].includes(normalizeStage(reviewSession.status) ?? "")
-      );
-    }
-    default:
-      return false;
-  }
-}
-
-function resolveCriticalSubmitRollbackStage(manifest: ManifestLike): string | null {
-  const citationIntegrity = asRecord(manifest.citation_integrity) ?? {};
-  const verificationStatus = normalizeStage(citationIntegrity.verification_status);
-  const hallucinatedCitationCount = pickNumber(citationIntegrity, [
-    "hallucinated_citation_count",
-    "hallucinatedCitationCount",
-  ]) ?? 0;
-  const allCitationsReal = citationIntegrity.all_citations_real === true;
   if (
-    verificationStatus &&
-    verificationStatus !== "verified" &&
-    verificationStatus !== "ready"
+    params.completionStatus &&
+    params.completionStatus !== "complete" &&
+    params.completionStatus !== "blocked" &&
+    params.completionStatus !== "failed"
   ) {
-    return "review";
+    return [`${params.stage ?? "workflow"}_completion_incomplete`];
   }
-  if (!allCitationsReal || hallucinatedCitationCount > 0) {
-    return "review";
-  }
-  return null;
+  return [];
 }
 
-function resolveCriticalAnalyzeRollbackStage(manifest: ManifestLike): string | null {
-  const executionProof = asRecord(manifest.execution_proof) ?? {};
-  const status = normalizeStage(executionProof.status);
-  if (status && status !== "ready") {
-    return "experiment";
-  }
-  return null;
-}
-
-function resolveExperimentRollbackStage(params: {
-  decision: string | null;
-  experimentSearchSpec: Record<string, unknown> | null;
-  manifest: ManifestLike;
-}): string | null {
-  const decision = normalizeStage(params.decision);
-  if (decision === "rollback_to_idea") {
-    return "idea";
-  }
-  if (decision === "rollback_to_plan") {
-    return "plan";
-  }
-  if (decision !== "innovation_invalidated") {
-    return null;
-  }
-  const criteria =
-    asRecord(
-    params.experimentSearchSpec?.innovationInvalidityCriteria ??
-      params.experimentSearchSpec?.innovation_invalidity_criteria
-    ) ?? {};
-  const orchestration = asRecord(params.manifest.orchestration_state) ?? {};
-  const rollbackCandidate =
-    pickString(criteria, ["rollbackTarget", "rollback_target"]) ??
-    pickString(orchestration, ["rollbackTargetStage", "rollback_target_stage"]) ??
-    "plan";
-  const normalized = normalizeStage(rollbackCandidate);
-  return normalized === "idea" ? "idea" : "plan";
-}
-
-function buildExperimentDecisionCommand(params: {
-  decision: string | null;
-  rationale: string | null;
-  monitorCommand: string;
-  searchLoopActive: boolean;
-  validationStage: string | null;
-}): {
-  ownerOverride: AutoIteratorAction["owner"] | null;
-  command: string | null;
-  summary: string | null;
-} {
-  const decision = normalizeStage(params.decision);
-  switch (decision) {
-    case "launch_pending":
-      return {
-        ownerOverride: "researcher",
-        command:
-          "Run /experiment-phase to schedule the first baseline-faithful launch group, initialize EXPERIMENT_REGISTRY.md and EXPERIMENT_LEDGER.json, and delegate atomic bundle launches to Coder /run-experiment. If a bounded search envelope is already approved, let Researcher wake Coder /search-experiment from inside experiment-phase instead of treating the stage as a coder-side repair.",
-        summary:
-          "No experiment launch has started yet; Researcher should orchestrate the first launch group before any coder-side runtime repair loop begins.",
-      };
-    case "reconcile_runtime":
-      return {
-        ownerOverride: "researcher",
-        command: params.monitorCommand,
-        summary:
-          "Reconcile finished or likely-finished experiment runs from durable runtime signals before any new launch work.",
-      };
-    case "repair_implementation":
-      return {
-        ownerOverride:
-          normalizeStage(params.validationStage) === "review_blockers"
-            ? "researcher"
-            : "coder",
-        command:
-          normalizeStage(params.validationStage) === "review_blockers"
-            ? "Run /experiment-phase to resolve the outstanding experiment review blockers, reopen planner/analyzer/cross-reviewer if needed, and only hand back to Coder after the reviewed packet is coherent again."
-            : params.searchLoopActive
-              ? "Run /search-experiment to repair the bounded runtime / implementation issue inside the approved search envelope, keep the baseline protocol fair, and persist watcher artifacts with research_workflow.record_experiment_runtime_signal before handing back to Researcher."
-              : "Use /resume-pipeline or /search-experiment to repair the bounded runtime / implementation issue, keep the baseline protocol fair, and persist watcher artifacts with research_workflow.record_experiment_runtime_signal before handing back to Researcher.",
-        summary:
-          normalizeStage(params.validationStage) === "review_blockers"
-            ? "Experiment review blockers must be resolved before the search loop can continue."
-            : "Bounded implementation or runtime repair is required before experiment evidence is trustworthy.",
-      };
-    case "require_multi_seed":
-      return {
-        ownerOverride: "researcher",
-        command:
-          "Run /experiment-phase to schedule multi-seed validation on the current incumbent, then reconcile EXPERIMENT_LEDGER.json and experiment_search before analysis.",
-        summary:
-          "A promising incumbent exists, but multi-seed validation is still required before analysis.",
-      };
-    case "require_ablation":
-      return {
-        ownerOverride: "researcher",
-        command:
-          "Run /experiment-phase to execute the missing ablation bundle(s), record the results in EXPERIMENT_LEDGER.json, and keep experiment_search blocked until attribution is clean.",
-        summary:
-          "The innovation is not isolated yet; the missing ablation pass must complete before analysis.",
-      };
-    case "narrow_search":
-      return {
-        ownerOverride: params.searchLoopActive ? "coder" : "researcher",
-        command: params.searchLoopActive
-          ? "Run /search-experiment and narrow the bounded search neighborhood around the incumbent instead of widening the envelope or inventing a new branch."
-          : "Run /experiment-phase and narrow the bounded search neighborhood around the best incumbent instead of widening the envelope or inventing a new branch.",
-        summary:
-          "The current envelope looks exhausted; narrow the search neighborhood before declaring the innovation invalid.",
-      };
-    case "continue_tuning":
-      return {
-        ownerOverride: params.searchLoopActive ? "coder" : "researcher",
-        command: params.searchLoopActive
-          ? "Run /search-experiment and continue the approved bounded search loop from the current incumbent without widening the envelope."
-          : "Run /experiment-phase and continue the approved bounded search loop; prefer waking Coder /search-experiment for the next candidate rather than hand-editing the envelope.",
-        summary:
-          "Stay in the approved bounded tuning loop; the evidence is not strong enough for analysis yet.",
-      };
-    case "innovation_fragile":
-      return {
-        ownerOverride: "researcher",
-        command:
-          "Run /experiment-phase to add one more robustness slice or a tighter incumbent neighborhood before analysis, and do not over-claim the innovation yet.",
-        summary:
-          "The innovation looks promising but still fragile; collect one more robustness slice before analysis.",
-      };
+function stageFromCanonicalNextAction(action: string | null | undefined): string | null {
+  const normalized = String(action ?? "").trim().toLowerCase();
+  switch (normalized) {
+    case "/frontier-map":
+      return "frontier_mapping";
+    case "/idea-catalyst":
+      return "idea";
+    case "/plan-phase":
+    case "/plan-experiment":
+      return "plan";
+    case "/run-experiment":
+      return "code";
+    case "/monitor-experiment":
+      return "experiment";
+    case "/analyze-results":
+      return "analyze";
+    case "/review-paper":
+      return "review";
+    case "/write-paper":
+      return "write";
+    case "/submit-ready":
+      return "submit";
+    case "/done":
+      return "done";
     default:
-      return {
-        ownerOverride: null,
-        command: null,
-        summary: params.rationale ? `Experiment decision: ${params.rationale}` : null,
-      };
+      return null;
   }
 }
 
@@ -960,6 +519,9 @@ function canDispatchOwnerStageWithMissingSignals(params: {
   ) {
     return true;
   }
+  if (params.stage === "experiment" && params.owner === "coder") {
+    return true;
+  }
   if (params.owner !== "researcher") {
     return false;
   }
@@ -1014,6 +576,12 @@ type AutoIteratorDeps = {
     } | null;
     now?: string;
   }) => Promise<GraphBuildSourceCatchupResult>;
+  advanceLiteratureDiscoveryRequisition?: (params: {
+    projectRoot: string;
+    projectId?: string | null;
+    workflowPolicy?: WorkflowGuardPolicy | null;
+    now?: string;
+  }) => Promise<LiteratureDiscoveryRequisitionAdvanceResult>;
   getPreviousStagesForRegression: (params: {
     currentStage: string | null;
     manifest: ManifestLike;
@@ -1257,7 +825,170 @@ type AutoIteratorDeps = {
   }) => Promise<unknown>;
 };
 
-const MAX_REGRESSION_DEPTH = 3;
+async function finishAutoIteratorAfterRequisitionAdvance(params: {
+  projectRoot: string;
+  projectId: string | null;
+  mode: string;
+  configuredAutoMode: NonNullable<WorkflowGuardPolicy["autoMode"]>;
+  stageBefore: string | null;
+  ownerBefore: AutoIteratorAction["owner"];
+  actorRole: AutoIteratorAction["owner"];
+  stagePreflight: StagePreflightResult;
+  advance: LiteratureDiscoveryRequisitionAdvanceResult;
+  deps: AutoIteratorDeps;
+}): Promise<AutoIteratorResult> {
+  const manifest =
+    (await readJsonIfExists<ManifestLike>(
+      path.join(params.projectRoot, "PROJECT_MANIFEST.json")
+    )) ?? {};
+  const workflowControl = asRecord(manifest.workflow_control);
+  const stageAfter =
+    normalizeStage(workflowControl?.stage) ??
+    normalizeStage(manifest.current_stage) ??
+    params.stageBefore;
+  const ownerAfter = params.deps.normalizeRole(
+    workflowControl?.owner ?? manifest.owner_agent ?? "researcher"
+  );
+  const nextAction =
+    asString(workflowControl?.next_action) ??
+    asString(manifest.next_action) ??
+    "/graph-build";
+  const blockingReason =
+    asString(workflowControl?.blocking_reason) ??
+    asString(manifest.blocking_reason) ??
+    params.advance.summary;
+  const missingStageSignals = blockingReason ? [blockingReason] : [];
+  let projectsStateUpdated = false;
+  if (params.projectId) {
+    projectsStateUpdated = await params.deps.syncProjectsStateEntry({
+      projectRoot: params.projectRoot,
+      projectId: params.projectId,
+      manifest,
+      trackRegistry: null,
+      stage: stageAfter,
+      nextAction,
+      blockingReason,
+    });
+  }
+  const materializedArtifacts = [
+    ...params.stagePreflight.materializedArtifacts,
+    {
+      contract: "literature_discovery_requisition_advanced",
+      artifactPath: params.advance.batchManifestPath ?? "PROJECT_MANIFEST.json",
+      fingerprint: null,
+      action: "reconciled" as const,
+      kind: params.advance.reason,
+    },
+  ];
+  const recommendedActions: AutoIteratorAction[] = [
+    {
+      kind: "background",
+      stage: stageAfter,
+      owner: "researcher",
+      summary:
+        params.advance.summary ??
+        "Workflow-owned literature discovery requisition advanced; wait for the next tick before dispatching owner work.",
+      command: nextAction,
+      mailboxQueued: false,
+      mailboxMessageId: null,
+      cooldownRemainingSeconds: null,
+      blocking: false,
+    },
+  ];
+  const result: AutoIteratorResult = {
+    projectRoot: params.projectRoot,
+    projectId: params.projectId,
+    mode: params.mode,
+    configuredAutoMode: params.configuredAutoMode,
+    effectiveAutoMode: params.configuredAutoMode,
+    autoModeRiskLevel: "stable",
+    autoModeReasons: [],
+    autoModeRiskFingerprint: null,
+    autoModeMitigationStatus: null,
+    autoModeMitigationRoundsStarted: 0,
+    autoModeMitigationRoundsRemaining: 0,
+    stageBefore: params.stageBefore,
+    stageEffective: stageAfter,
+    stageAfter,
+    stageChanged: stageAfter !== params.stageBefore,
+    regressed: stageAfter !== params.stageBefore,
+    gateBlocking: false,
+    gateReason: null,
+    timedDefaultTriggered: false,
+    missingStageSignals,
+    ownerBefore: params.ownerBefore,
+    ownerAfter,
+    ownerActivated: false,
+    pendingHandoff: false,
+    pendingHandoffPhase: null,
+    pendingHandoffExecutionId: null,
+    nextAction,
+    resumeAction: nextAction,
+    blockingReason,
+    experimentDecision: null,
+    experimentDecisionRationale: null,
+    experimentRollbackStage: null,
+    graphPresenceCheck: null,
+    projectsStateUpdated,
+    auditPath: null,
+    materializedArtifacts,
+    hookEvents: params.stagePreflight.emittedHookEvents,
+    recommendedActions,
+  };
+  result.auditPath = await params.deps.writeAutoIteratorAudit(
+    params.projectRoot,
+    result
+  );
+  await params.deps.appendWorkflowTraceEvent({
+    projectRoot: params.projectRoot,
+    projectId: params.projectId,
+    kind: "auto_iterator",
+    action: "literature_requisition_advanced",
+    functionName: "runWorkflowAutoIterator",
+    stage: stageAfter,
+    owner: ownerAfter,
+    agentId: params.actorRole,
+    sessionKey: null,
+    summary: `Auto iterator advanced literature requisition ${params.advance.requestId ?? "unknown"}.`,
+    details: {
+      reason: params.advance.reason,
+      requestId: params.advance.requestId,
+      status: params.advance.status,
+      attemptCount: params.advance.attemptCount,
+      startedAt: params.advance.startedAt,
+      runId: params.advance.runId,
+      queueProgress: params.advance.queueProgress,
+      sourceIndexPath: params.advance.sourceIndexPath,
+      materializedPaperCount: params.advance.materializedPaperCount,
+    },
+  });
+  await appendWorkflowDiagnosticEvent({
+    projectRoot: params.projectRoot,
+    projectId: params.projectId,
+    component: "auto_iterator",
+    action: "literature_requisition_advanced",
+    status:
+      params.advance.reason === "blocked" ||
+      params.advance.reason === "marked_needs_repair"
+        ? "blocked"
+        : "waiting",
+    stage: stageAfter,
+    owner: ownerAfter,
+    summary:
+      params.advance.summary ??
+      "Advanced a workflow-owned literature discovery requisition and stopped this tick before owner dispatch.",
+    details: {
+      requestId: params.advance.requestId,
+      status: params.advance.status,
+      attemptCount: params.advance.attemptCount,
+      startedAt: params.advance.startedAt,
+      runId: params.advance.runId,
+      queueProgress: params.advance.queueProgress,
+      catchup: params.advance.catchup,
+    },
+  });
+  return result;
+}
 
 export async function runWorkflowAutoIteratorImpl(
   params: {
@@ -1284,6 +1015,7 @@ export async function runWorkflowAutoIteratorImpl(
     ({
       maxMitigationRounds: 0,
     } as NonNullable<WorkflowGuardPolicy["autoGate"]>);
+  const now = params.now ?? new Date().toISOString();
   const agentContactCooldownSeconds =
     typeof workflowPolicy.agentContactCooldownSeconds === "number" &&
     Number.isFinite(workflowPolicy.agentContactCooldownSeconds)
@@ -1294,15 +1026,34 @@ export async function runWorkflowAutoIteratorImpl(
     readJsonIfExists<TrackRegistryLike>(path.join(projectRoot, "TRACK_REGISTRY.json")),
     deps.loadExperimentLedgerIfExists(projectRoot),
   ]);
-  let manifest = { ...(manifestRaw ?? {}) };
+  const rawWorkflowControl = asRecord(manifestRaw?.workflow_control);
+  const rawControlStage =
+    rawWorkflowControl?.schema_version === 1
+      ? normalizeStage(rawWorkflowControl.stage)
+      : null;
+  const rawStageBefore = rawControlStage ?? normalizeStage(manifestRaw?.current_stage);
+  const initialReconcile = await reconcileWorkflowControl({
+    projectRoot,
+    policy: { allowProjectionRepair: true },
+    now,
+  });
+  let manifest = { ...(manifestRaw ?? {}), ...initialReconcile.manifest };
+  if (rawStageBefore) {
+    manifest.current_stage = rawStageBefore;
+    if (rawWorkflowControl?.schema_version === 1) {
+      manifest.workflow_control = rawWorkflowControl;
+    } else {
+      delete manifest.workflow_control;
+    }
+  }
   let trackRegistry = initialTrackRegistry;
   let experimentLedger = initialExperimentLedger;
   const gateState = await deps.readGateState(projectRoot);
   const actorRole = deps.normalizeRole(params.agentId);
-  const now = params.now ?? new Date().toISOString();
   const projectId = deps.inferProjectId(projectRoot, manifest);
   const mode = asString(params.mode) ?? "manual";
-  let stageBefore = normalizeStage(manifest.current_stage) ?? gateState.currentStage ?? "setup";
+  let stageBefore =
+    rawStageBefore ?? normalizeStage(manifest.current_stage) ?? gateState.currentStage ?? "setup";
   if (deps.ensureSurveyWorkflowIdentity) {
     const surveyIdentity = deps.ensureSurveyWorkflowIdentity(manifest);
     if (surveyIdentity.updated) {
@@ -1393,12 +1144,36 @@ export async function runWorkflowAutoIteratorImpl(
       hookEvents: initialStagePreflight.emittedHookEvents,
     },
   });
-  let revisionControlState = normalizeRevisionControlState(
-    asRecord(manifest.revision_control_state)
-  );
   trackRegistry =
     (await readJsonIfExists<TrackRegistryLike>(path.join(projectRoot, "TRACK_REGISTRY.json"))) ??
     trackRegistry;
+  const preflightHadSideEffect =
+    initialStagePreflight.materializedArtifacts.length > 0 ||
+    initialStagePreflight.emittedHookEvents.length > 0;
+  if (!preflightHadSideEffect && deps.advanceLiteratureDiscoveryRequisition) {
+    const advance = await deps.advanceLiteratureDiscoveryRequisition({
+      projectRoot,
+      projectId,
+      workflowPolicy,
+      now,
+    });
+    if (advance.advanced) {
+      return finishAutoIteratorAfterRequisitionAdvance({
+        projectRoot,
+        projectId,
+        mode,
+        configuredAutoMode,
+        stageBefore,
+        ownerBefore: deps.normalizeRole(
+          manifest.owner_agent ?? deps.stageOwner(stageBefore) ?? "researcher"
+        ),
+        actorRole,
+        stagePreflight,
+        advance,
+        deps,
+      });
+    }
+  }
   const writePackageBefore = deps.normalizeWritePackageState(manifest.write_package);
   const surveyWorkflow = deps.isSurveyWorkflow(manifest);
   if (
@@ -1638,169 +1413,32 @@ export async function runWorkflowAutoIteratorImpl(
     papernexusSyncState = await readPapernexusSyncState(projectRoot);
   }
 
-  const graphContextBeforeRouting = deriveWorkflowGraphContext({
-    manifest,
-    stage: stageBefore,
-    nowIso: now,
-    minRefreshIntervalMs: AUTO_ITERATOR_GRAPH_REFRESH_MIN_INTERVAL_MS,
-    graphPresenceCheck,
-    papernexusSyncState,
-  });
-  const paperIngestionStateBeforeRouting = graphContextBeforeRouting.paperIngestionState;
-  const ideaCatalystStateBeforeRouting = normalizeIdeaCatalystState(manifest.idea_catalyst);
-  const catalystRequestedGraphReentry = shouldRouteIdeaCatalystToGraphBuild({
-    currentStage: stageBefore,
-    ideaCatalyst: ideaCatalystStateBeforeRouting,
-    paperIngestion: paperIngestionStateBeforeRouting,
-  });
-  const literatureDiscoveryRequestedGraphReentry =
-    shouldRouteLiteratureDiscoveryToGraphBuild({
-      currentStage: stageBefore,
-      paperIngestion: paperIngestionStateBeforeRouting,
-      graphPresenceStatus: graphContextBeforeRouting.graphPresenceStatus,
-    });
-  const graphPresenceRequestedGraphReentry =
-    !surveyWorkflow &&
-    stageBefore !== "setup" &&
-    stageBefore !== "graph_build" &&
-    stageBefore !== "done" &&
-    graphContextBeforeRouting.graphSensitive &&
-    graphPresenceRequiresGraphBuildReentry(graphContextBeforeRouting);
-  const requestedGraphReentry =
-    !surveyWorkflow &&
-    (catalystRequestedGraphReentry ||
-      literatureDiscoveryRequestedGraphReentry ||
-      graphPresenceRequestedGraphReentry);
-  if (graphPresenceRequestedGraphReentry) {
-    await appendWorkflowDiagnosticEvent({
-      projectRoot,
-      projectId,
-      component: "auto_iterator",
-      action: "graph_presence_reentry_requested",
-      status: "waiting",
-      stage: stageBefore,
-      owner: asString(manifest.owner_agent),
-      summary:
-        "Graph presence is not ready; routing downstream graph-sensitive stage back to graph_build.",
-      details: {
-        graphPresenceStatus: graphContextBeforeRouting.graphPresenceStatus,
-        graphPresenceCheckStatus: graphContextBeforeRouting.graphPresenceCheckStatus,
-        graphBuildWorkflowStatus: graphContextBeforeRouting.graphBuildWorkflowStatus,
-        graphBuildCanContinue: graphContextBeforeRouting.graphBuildCanContinue,
-        graphBuildRequiresImport: graphContextBeforeRouting.graphBuildRequiresImport,
-        graphBuildRequiresSourceRepair:
-          graphContextBeforeRouting.graphBuildRequiresSourceRepair,
-        repairRequired: graphContextBeforeRouting.repairRequired,
-        repairReason: graphContextBeforeRouting.repairReason,
-      },
-    });
-  }
-  let stageEffective = requestedGraphReentry ? "graph_build" : stageBefore;
-  let regressed = requestedGraphReentry;
-  const visited = new Set<string>();
-  let regressionDepth = requestedGraphReentry ? 1 : 0;
-  let regressionDepthCapped = false;
-  while (stageEffective && !requestedGraphReentry) {
-    if (stageEffective === "experiment") {
-      const experimentSearchForRegression = deps.normalizeExperimentSearchState(
-        manifest.experiment_search
-      );
-      const experimentSearchStatus = normalizeStage(
-        experimentSearchForRegression.status
-      );
-      if (experimentSearchStatus && experimentSearchStatus !== "missing") {
-        break;
-      }
-    }
-    if (regressionDepth >= MAX_REGRESSION_DEPTH) {
-      regressionDepthCapped = true;
-      break;
-    }
-    const previousStages = deps.getPreviousStagesForRegression({
-      currentStage: stageEffective,
-      manifest,
-    });
-    const previousStage = previousStages.find((candidate) => !visited.has(candidate)) ?? null;
-    if (!previousStage) {
-      break;
-    }
-    if (
-      hasDurableCurrentStageEvidence({
-        currentStage: stageEffective,
-        previousStage,
-        manifest,
-      })
-    ) {
-      break;
-    }
-    visited.add(previousStage);
-    const previousMissing = await deps.getMissingStageSignals({
-      projectRoot,
-      manifest,
-      trackRegistry,
-      experimentLedger,
-      currentStage: previousStage,
-      includeOrchestrationValidation: false,
-    });
-    if (previousMissing.length === 0) {
-      break;
-    }
-    stageEffective = previousStage;
-    regressed = true;
-    regressionDepth += 1;
-  }
-
-  let effectiveMissingSignals = await deps.getMissingStageSignals({
+  const canonicalReconcile = await reconcileWorkflowControl({
     projectRoot,
+    policy: { allowProjectionRepair: true },
+    now,
     manifest,
-    trackRegistry,
-    experimentLedger,
-    currentStage: stageEffective,
+    stageSignalResolver: async ({ stage, manifest: reconcilerManifest }) =>
+      deps.getMissingStageSignals({
+        projectRoot,
+        manifest: reconcilerManifest,
+        trackRegistry,
+        experimentLedger,
+        currentStage: stage,
+      }),
   });
-  const graphBuildPresenceBlocksCurrentStage =
-    !surveyWorkflow &&
-    stageEffective === "graph_build" &&
-    graphBuildPresenceBlocksAdvance(graphContextBeforeRouting);
-  if (
-    graphBuildPresenceBlocksCurrentStage &&
-    !effectiveMissingSignals.some((signal) =>
-      /paper_ingestion\.graph_presence_status = ready|verified source-backed PaperNexus graph/i.test(signal)
-    )
-  ) {
-    const graphPresenceStatus =
-      graphContextBeforeRouting.graphPresenceCheckStatus ??
-      graphContextBeforeRouting.graphPresenceStatus ??
-      "unset";
-    const graphPresenceSignal =
-      graphPresenceStatus === "ready" && graphContextBeforeRouting.status !== "ready"
-        ? "verified source-backed PaperNexus graph receipt is required before graph_build can advance"
-        : `PROJECT_MANIFEST.json.paper_ingestion.graph_presence_status = ready (current: ${graphPresenceStatus})`;
-    effectiveMissingSignals = [
-      ...effectiveMissingSignals,
-      graphPresenceSignal,
-    ];
-    await appendWorkflowDiagnosticEvent({
-      projectRoot,
-      projectId,
-      component: "auto_iterator",
-      action: "graph_build_presence_block_enforced",
-      status: "waiting",
-      stage: stageEffective,
-      owner: asString(manifest.owner_agent),
-      summary:
-        "Graph build cannot advance because graph context is not verified-ready.",
-      details: {
-        graphContextStatus: graphContextBeforeRouting.status,
-        graphPresenceStatus,
-        graphBuildWorkflowStatus: graphContextBeforeRouting.graphBuildWorkflowStatus,
-        graphBuildCanContinue: graphContextBeforeRouting.graphBuildCanContinue,
-        graphBuildRequiresImport: graphContextBeforeRouting.graphBuildRequiresImport,
-        graphBuildRequiresSourceRepair:
-          graphContextBeforeRouting.graphBuildRequiresSourceRepair,
-        repairRequired: graphContextBeforeRouting.repairRequired,
-      },
-    });
-  }
+  manifest = canonicalReconcile.manifest;
+  const canonicalControl = canonicalReconcile.contract;
+  const stageEffective = normalizeStage(canonicalControl.stage) ?? stageBefore;
+  const regressed = stageEffective !== stageBefore;
+  const regressionDepth = 0;
+  const regressionDepthCapped = false;
+  const effectiveMissingSignals = buildCanonicalStageSignals({
+    stage: stageEffective,
+    completionStatus: canonicalControl.completion.status,
+    blockingReason: canonicalControl.blocking_reason,
+    missingSignals: canonicalReconcile.stageCompletion.missingSignals,
+  });
   const autoModeRiskEvaluation = deps.evaluateWorkflowAutoModeRisk({
     configuredMode: configuredAutoMode,
     stage: stageEffective,
@@ -1858,7 +1496,9 @@ export async function runWorkflowAutoIteratorImpl(
     projectRoot,
     gateState,
     stage: stageEffective,
-    hasStageWorkRemaining: effectiveMissingSignals.length > 0,
+    hasStageWorkRemaining:
+      canonicalControl.completion.status !== "complete" ||
+      canonicalControl.blocking_reason != null,
     effectiveAutoMode: autoModeEvaluation.effectiveMode,
     autoGate,
     now,
@@ -1891,7 +1531,6 @@ export async function runWorkflowAutoIteratorImpl(
   });
 
   let stageAfter = stageEffective;
-  let revisionDrivenRouting = false;
   const experimentSearchStateBeforeAdvance =
     stageEffective === "experiment"
       ? deps.loadExperimentSearchState
@@ -1918,130 +1557,43 @@ export async function runWorkflowAutoIteratorImpl(
     }) &&
     normalizeStage(experimentSearchStateBeforeAdvance?.status) !==
       "ready_for_analysis";
-  const experimentGpuMonitorStateBeforeAdvance =
-    stageEffective === "experiment"
-      ? await readJsonIfExists<Record<string, unknown>>(
-          path.join(projectRoot, "researcher", "EXPERIMENT_GPU_MONITOR.json")
-        )
-      : null;
-  const experimentSearchSpecBeforeAdvance =
-    stageEffective === "experiment"
-      ? await readJsonIfExists<Record<string, unknown>>(
-          path.join(
-            projectRoot,
-            asString(experimentSearchStateBeforeAdvance?.searchSpecPath) ??
-              "planner/EXPERIMENT_SEARCH_SPEC.json"
-          )
-        )
-      : null;
-  const experimentDecisionBeforeAdvance =
-    stageEffective === "experiment"
-      ? deps.evaluateExperimentSearchDecision({
-          experimentSearch: experimentSearchStateBeforeAdvance,
-          experimentSearchSpec: experimentSearchSpecBeforeAdvance,
-          experimentLedger,
-          gpuMonitor: experimentGpuMonitorStateBeforeAdvance,
-          experimentReviewState: experimentReviewStateBeforeAdvance,
-          experimentMemory: asRecord(manifest.experiment_memory) ?? {},
-        })
-      : null;
-  const experimentRollbackStage =
-    stageEffective === "experiment"
-      ? resolveExperimentRollbackStage({
-          decision: experimentDecisionBeforeAdvance?.decision ?? null,
-          experimentSearchSpec: experimentSearchSpecBeforeAdvance,
-          manifest,
-        })
-      : null;
-  const experimentDecisionBlocksAdvance =
-    stageEffective === "experiment" &&
-    (EXPERIMENT_DECISIONS_HOLDING_STAGE.has(
-      normalizeStage(experimentDecisionBeforeAdvance?.decision) ?? ""
-    ) ||
-      experimentRollbackStage != null);
-  if (stageEffective === "experiment" && experimentDecisionBeforeAdvance) {
-    await appendWorkflowDiagnosticEvent({
-      projectRoot,
-      projectId,
-      component: "experiment_decision",
-      action: "decision_evaluated",
-      status:
-        experimentRollbackStage != null
-          ? "blocked"
-          : experimentDecisionBlocksAdvance
-            ? "waiting"
-            : "completed",
-      stage: stageEffective,
-      owner: asString(manifest.owner_agent),
-      summary: `Experiment decision resolved to ${experimentDecisionBeforeAdvance.decision}.`,
-      details: {
-        decision: experimentDecisionBeforeAdvance.decision,
-        rationale: experimentDecisionBeforeAdvance.rationale,
-        validationStage: experimentDecisionBeforeAdvance.validationStage,
-        recommendedNextAction: experimentDecisionBeforeAdvance.recommendedNextAction,
-        baselineFairnessStatus:
-          experimentDecisionBeforeAdvance.baselineFairnessStatus,
-        implementationConfidence:
-          experimentDecisionBeforeAdvance.implementationConfidence,
-        searchExhaustionStatus:
-          experimentDecisionBeforeAdvance.searchExhaustionStatus,
-        rollbackStage: experimentRollbackStage,
-      },
-    });
-  }
-  const criticalAnalyzeRollbackStage =
-    stageEffective === "analyze" ? resolveCriticalAnalyzeRollbackStage(manifest) : null;
-  const criticalSubmitRollbackStage =
-    stageEffective === "submit" ? resolveCriticalSubmitRollbackStage(manifest) : null;
+  const canonicalExperimentDecision =
+    stageBefore === "experiment" && canonicalControl.blocking_reason === "experiment_repair_implementation"
+      ? "repair_implementation"
+      : stageBefore === "experiment" &&
+          (canonicalControl.blocking_reason === "rollback_to_plan" ||
+            canonicalControl.blocking_reason === "rollback_to_idea")
+        ? canonicalControl.blocking_reason
+        : stageBefore === "experiment" && stageAfter === "plan"
+          ? "rollback_to_plan"
+          : stageBefore === "experiment" && stageAfter === "idea"
+            ? "rollback_to_idea"
+        : null;
+  const experimentDecision: string | null = canonicalExperimentDecision;
+  const experimentDecisionRationale: string | null =
+    canonicalExperimentDecision === "repair_implementation"
+      ? "Canonical experiment completion routed bounded implementation repair to Coder."
+      : canonicalExperimentDecision === "rollback_to_plan" ||
+          canonicalExperimentDecision === "rollback_to_idea"
+        ? "Canonical experiment completion selected a rollback target."
+        : null;
+  const experimentRollbackStage: string | null =
+    canonicalExperimentDecision === "rollback_to_plan"
+      ? "plan"
+      : canonicalExperimentDecision === "rollback_to_idea"
+        ? "idea"
+        : null;
   if (
-    experimentRollbackStage != null &&
-    !surveyWorkflow
-  ) {
-    stageAfter = experimentRollbackStage;
-    regressed = true;
-  } else if (criticalAnalyzeRollbackStage) {
-    stageAfter = criticalAnalyzeRollbackStage;
-    regressed = true;
-  } else if (criticalSubmitRollbackStage) {
-    stageAfter = criticalSubmitRollbackStage;
-    regressed = true;
-  } else if (
     !reviewedAutoPrelaunch &&
     !gateEvaluation.blocking &&
+    !regressed &&
     stageEffective &&
-    effectiveMissingSignals.length === 0 &&
-    stageEffective !== "done" &&
-    !experimentDecisionBlocksAdvance
+    canonicalControl.completion.status === "complete" &&
+    canonicalControl.blocking_reason == null &&
+    stageEffective !== "done"
   ) {
-    const literatureDiscoveryReentryStage =
-      !surveyWorkflow && stageEffective === "graph_build"
-        ? await resolveCompletedLiteratureDiscoveryReentryStage({
-            projectRoot,
-            manifest,
-            stage: stageEffective,
-            nowMs: Date.parse(now),
-            validStages: new Set(Object.keys(deps.STAGE_REQUIREMENTS)),
-          })
-        : null;
-    if (literatureDiscoveryReentryStage) {
-      await appendWorkflowDiagnosticEvent({
-        projectRoot,
-        projectId,
-        component: "auto_iterator",
-        action: "literature_discovery_reentry_resolved",
-        status: "completed",
-        stage: stageEffective,
-        owner: asString(manifest.owner_agent),
-        summary: `Graph build will resume ${literatureDiscoveryReentryStage} after literature discovery reentry.`,
-        details: {
-          stageBefore,
-          stageEffective,
-          stageAfter: literatureDiscoveryReentryStage,
-        },
-      });
-    }
     const nextStage =
-      literatureDiscoveryReentryStage ??
+      stageFromCanonicalNextAction(canonicalControl.next_action) ??
       deps.resolveNextStageForWorkflow({
         stage: stageEffective,
         manifest,
@@ -2049,14 +1601,6 @@ export async function runWorkflowAutoIteratorImpl(
     if (nextStage) {
       stageAfter = nextStage;
     }
-  }
-  if (
-    !gateEvaluation.blocking &&
-    revisionControlState.status === "active" &&
-    ["write", "review", "submit"].includes(stageAfter ?? "")
-  ) {
-    stageAfter = "write";
-    revisionDrivenRouting = true;
   }
 
   if (
@@ -2101,9 +1645,6 @@ export async function runWorkflowAutoIteratorImpl(
       (await readJsonIfExists<TrackRegistryLike>(path.join(projectRoot, "TRACK_REGISTRY.json"))) ??
       trackRegistry;
     experimentLedger = await deps.loadExperimentLedgerIfExists(projectRoot);
-    revisionControlState = normalizeRevisionControlState(
-      asRecord(manifest.revision_control_state)
-    );
     await appendWorkflowDiagnosticEvent({
       projectRoot,
       projectId,
@@ -2121,44 +1662,6 @@ export async function runWorkflowAutoIteratorImpl(
         fromStage: stageEffective,
         materializedArtifacts: targetStagePreflight.materializedArtifacts,
         hookEvents: targetStagePreflight.emittedHookEvents,
-      },
-    });
-  }
-
-  const rawActiveStageSignals =
-    criticalAnalyzeRollbackStage
-      ? effectiveMissingSignals
-      : stageAfter !== stageEffective
-      ? await deps.getMissingStageSignals({
-          projectRoot,
-          manifest,
-          trackRegistry,
-          experimentLedger,
-          currentStage: stageAfter,
-        })
-      : effectiveMissingSignals;
-  const activeStageSignals = filterProjectedOrchestrationSignals({
-    signals: rawActiveStageSignals,
-    stageBefore: stageEffective,
-    stageAfter,
-  });
-  if (activeStageSignals.length !== rawActiveStageSignals.length) {
-    await appendWorkflowDiagnosticEvent({
-      projectRoot,
-      projectId,
-      component: "auto_iterator",
-      action: "projected_orchestration_signal_filtered",
-      status: "completed",
-      stage: stageAfter,
-      owner: asString(manifest.owner_agent),
-      summary:
-        "Filtered orchestration next-transition validation that the auto iterator is about to rewrite for the projected target stage.",
-      details: {
-        stageEffective,
-        stageAfter,
-        removedSignals: rawActiveStageSignals.filter(
-          (signal) => !activeStageSignals.includes(signal)
-        ),
       },
     });
   }
@@ -2220,36 +1723,6 @@ export async function runWorkflowAutoIteratorImpl(
         ledger: experimentLedger,
         experimentSearch: experimentSearchState,
       }));
-  const experimentGpuMonitorState =
-    stageAfter === "experiment"
-      ? experimentGpuMonitorStateBeforeAdvance ??
-        (await readJsonIfExists<Record<string, unknown>>(
-          path.join(projectRoot, "researcher", "EXPERIMENT_GPU_MONITOR.json")
-        ))
-      : null;
-  const experimentSearchSpec =
-    stageAfter === "experiment"
-        ? experimentSearchSpecBeforeAdvance ??
-          (await readJsonIfExists<Record<string, unknown>>(
-            path.join(
-              projectRoot,
-              asString(experimentSearchState.searchSpecPath) ??
-                "planner/EXPERIMENT_SEARCH_SPEC.json"
-            )
-          ))
-      : null;
-  const experimentDecision =
-    stageAfter === "experiment"
-      ? experimentDecisionBeforeAdvance ??
-        deps.evaluateExperimentSearchDecision({
-          experimentSearch: experimentSearchState,
-          experimentSearchSpec,
-          experimentLedger,
-          gpuMonitor: experimentGpuMonitorState,
-          experimentReviewState: experimentReviewState,
-          experimentMemory: asRecord(manifest.experiment_memory) ?? {},
-        })
-      : null;
   const experimentReadyForAnalysis =
     stageAfter === "experiment" &&
     normalizeStage(experimentSearchState.status) === "ready_for_analysis";
@@ -2276,23 +1749,18 @@ export async function runWorkflowAutoIteratorImpl(
   const experimentMonitorCommand = shouldMonitorExperiments
     ? deps.buildExperimentMonitorCommand()
     : null;
-  const experimentDecisionCommand =
-    stageAfter === "experiment"
-      ? buildExperimentDecisionCommand({
-          decision: experimentDecision?.decision ?? null,
-          rationale: experimentDecision?.rationale ?? null,
-          monitorCommand:
-            experimentMonitorCommand ?? deps.buildExperimentMonitorCommand(),
-          searchLoopActive: Boolean(
-            experimentSearchState.searchSessionId ?? experimentSearchSpec?.searchSessionId
-          ) && !shouldMonitorExperiments,
-          validationStage: experimentDecision?.validationStage ?? null,
-        })
-      : null;
-  const experimentDecisionOwnsNextStep =
-    stageAfter === "experiment" &&
-    experimentDecisionCommand?.command != null &&
-    !experimentReviewCommand;
+  const activeStageSignals =
+    stageAfter === stageEffective
+      ? effectiveMissingSignals
+      : stageAfter
+        ? await deps.getMissingStageSignals({
+            projectRoot,
+            manifest,
+            trackRegistry,
+            experimentLedger,
+            currentStage: stageAfter,
+          })
+        : [];
   const setupOnboardingCommand =
     stageAfter === "setup" &&
     activeStageSignals.some((signal) =>
@@ -2313,38 +1781,19 @@ export async function runWorkflowAutoIteratorImpl(
       ideaCatalystStateForActions.status === "requisition")
       ? `Satisfy IDEA-CATALYST requisition at {PROJ}/${ideaCatalystStateForActions.investigationRequisitionPath} by collecting the requested cross-domain papers, scheduling imports with research_workflow.schedule_papernexus_import, then rerunning /graph-build before resuming IDEA.`
       : null;
-  let ownerAfter =
+  const ownerAfter =
     (experimentReviewCommand ? experimentReviewOwner : null) ??
-    experimentDecisionCommand?.ownerOverride ??
+    (stageAfter === stageEffective && !regressed
+      ? deps.normalizeRole(canonicalControl.owner)
+      : null) ??
     deps.stageOwner(stageAfter);
-  if (revisionDrivenRouting) {
-    ownerAfter = deps.normalizeRole(revisionControlState.currentOwner ?? "academic_writer");
-  }
   const crossOwnerStageTransition =
     Boolean(ownerAfter) &&
     Boolean(ownerBefore) &&
     ownerAfter !== ownerBefore;
   const dispatchStageSignals = shouldMonitorExperiments ? [] : activeStageSignals;
-  let stageRepairCommand =
+  const stageRepairCommand =
     graphImportRepairCommand ?? ideaCatalystRequisitionCommand ?? setupOnboardingCommand;
-  const revisionControlCommand =
-    revisionDrivenRouting
-      ? `Use ${revisionControlState.activeRevisionPacketPath ?? "reviewer/REVISION_CONTROL_PACKET.md"} as the only revision source of truth, repair the bounded manuscript artifacts, update durable writing state, then rerun research_workflow.auto_iterator_tick.`
-      : null;
-  if (revisionDrivenRouting) {
-    stageRepairCommand = null;
-  }
-  const targetStageReadyForImmediateCommit =
-    Boolean(
-      stageAfter &&
-        !surveyWorkflow &&
-        EXPERIMENT_LOCAL_TARGET_READY_COMMIT_STAGES.has(stageAfter)
-    ) &&
-    stageAfter !== stageBefore &&
-    !regressed &&
-    !gateEvaluation.blocking &&
-    dispatchStageSignals.length === 0 &&
-    stageRepairCommand == null;
   const stageReadinessRepairSummary =
     dispatchStageSignals.length > 0
       ? `Resolve the following readiness signals before handing off ${stageAfter ?? "the current"} stage: ${dispatchStageSignals.join("; ")}.`
@@ -2352,33 +1801,40 @@ export async function runWorkflowAutoIteratorImpl(
   const prioritizedExperimentCommand =
     experimentMonitorCommand ??
     experimentReviewCommand ??
-    experimentDecisionCommand?.command ??
     null;
+  const canonicalNextAction =
+    stageAfter === stageEffective ? canonicalControl.next_action : null;
   const nextAction = gateEvaluation.blocking
     ? gateEvaluation.reason
-    : revisionControlCommand ??
-      prioritizedExperimentCommand ??
+    : prioritizedExperimentCommand ??
       stageRepairCommand ??
+      canonicalNextAction ??
       deps.formatStageCommand(stageAfter);
   const resumeAction = gateEvaluation.blocking
     ? "Wait for the blocking gate to resolve, then run /resume-pipeline."
-    : revisionControlCommand ??
-      prioritizedExperimentCommand ??
+    : prioritizedExperimentCommand ??
       stageRepairCommand ??
+      canonicalNextAction ??
       deps.formatStageCommand(stageAfter);
+  const canonicalBlockingReason =
+    asString(canonicalControl.blocking_reason) ??
+    asString(canonicalReconcile.stageCompletion.blockingReason) ??
+    (canonicalControl.completion.status !== "complete"
+      ? asString(canonicalControl.completion.reason)
+      : null) ??
+    asString(canonicalReconcile.stageCompletion.missingSignals?.[0]) ??
+    asString(effectiveMissingSignals[0]) ??
+    null;
   const blockingReason = gateEvaluation.blocking
     ? gateEvaluation.reason
-    : revisionDrivenRouting
-      ? revisionControlState.pendingReason ??
-        "Revision control still has open sources; keep the workflow on a bounded write repair pass."
     : dispatchStageSignals.length > 0
       ? `Waiting for ${ownerAfter ?? "workflow owner"} to satisfy: ${dispatchStageSignals.join("; ")}`
       : stageReadinessRepairSummary
         ? "Waiting for workflow-owned repair before the stage can be handed off."
-        : null;
+        : canonicalBlockingReason ?? null;
   const stageReadyForOwnerWork =
     !gateEvaluation.blocking &&
-    (dispatchStageSignals.length === 0 || experimentDecisionOwnsNextStep) &&
+    dispatchStageSignals.length === 0 &&
     stageRepairCommand == null;
   const stageOwnerCanMaterializeMissingSignals =
     !gateEvaluation.blocking &&
@@ -2418,24 +1874,6 @@ export async function runWorkflowAutoIteratorImpl(
         ? deps.STAGE_ENTRY_MICRO_STAGES[stageAfter] ?? previousMicroStage
       : previousMicroStage;
 
-  if (stageEffective === "experiment" && experimentDecisionBeforeAdvance) {
-    const persistedSearchState = {
-      ...asRecord(manifest.experiment_search),
-      ...experimentDecisionBeforeAdvance.persistedPatch,
-      last_updated_at: now,
-    };
-    manifest.experiment_search = persistedSearchState;
-    await writeJsonEnsured(
-      path.join(projectRoot, "researcher", "EXPERIMENT_SEARCH.json"),
-      persistedSearchState
-    );
-    manifest.experiment_memory = {
-      ...(asRecord(manifest.experiment_memory) ?? {}),
-      last_decision_summary: experimentDecisionBeforeAdvance.rationale,
-      last_updated_at: now,
-    };
-  }
-
   const pendingOwnerCandidate =
     pickString(existingOrchestrationState, [
       "pendingOwnerCandidate",
@@ -2453,13 +1891,23 @@ export async function runWorkflowAutoIteratorImpl(
     ]) ??
     pickString(existingOrchestrationState, ["stageRunId", "stage_run_id"]) ??
     null;
+  const targetStagePreparedForSameTickCommit =
+    Boolean(
+      stageAfter &&
+        TRANSITION_BOOTSTRAP_PREP_STAGES.has(stageAfter) &&
+        stageAfter !== stageBefore
+    ) &&
+    !regressed &&
+    !gateEvaluation.blocking &&
+    (dispatchStageSignals.length === 0 || stageOwnerCanMaterializeMissingSignals) &&
+    stageRepairCommand == null;
   const ownerTransitionRequiresClaim =
     !gateEvaluation.blocking &&
     crossOwnerStageTransition &&
     !regressed &&
     stageAfter !== stageBefore &&
-    !targetStageReadyForImmediateCommit;
-  if (crossOwnerStageTransition && targetStageReadyForImmediateCommit) {
+    !targetStagePreparedForSameTickCommit;
+  if (crossOwnerStageTransition && targetStagePreparedForSameTickCommit) {
     await appendWorkflowDiagnosticEvent({
       projectRoot,
       projectId,
@@ -2469,7 +1917,7 @@ export async function runWorkflowAutoIteratorImpl(
       stage: stageAfter,
       owner: ownerAfter,
       summary:
-        "Committed ready target stage without waiting for handoff acknowledgement.",
+        "Committed prepared target stage without waiting for owner handoff acknowledgement.",
       details: {
         stageBefore,
         stageAfter,
@@ -2535,19 +1983,21 @@ export async function runWorkflowAutoIteratorImpl(
         "Superseded pending owner handoff because the current stage is blocked by a workflow gate and must not dispatch owner work.",
     });
   }
+  const committedStage = ownerTransitionRequiresClaim ? stageBefore : stageAfter;
+  const committedOwner = ownerTransitionRequiresClaim ? ownerBefore : ownerAfter;
   manifest.project_id = projectId;
-  manifest.current_stage = ownerTransitionRequiresClaim ? stageBefore : stageAfter;
-  manifest.owner_agent = ownerTransitionRequiresClaim ? ownerBefore : ownerAfter;
+  manifest.current_stage = committedStage;
+  manifest.owner_agent = committedOwner;
   manifest.next_action = nextAction;
-  manifest.resume_action = resumeAction;
   manifest.blocking_reason = blockingReason;
+  manifest.resume_action = resumeAction;
   manifest.auto_dispatch_diagnostics = serializeAutoDispatchDiagnosticsState({
     status:
       autoModeEvaluation.effectiveMode === "off" && autoModeEvaluation.riskLevel !== "stable"
         ? "degraded"
         : gateEvaluation.blocking
           ? "blocked"
-          : revisionDrivenRouting || dispatchStageSignals.length > 0
+          : dispatchStageSignals.length > 0
             ? "waiting"
             : "ready",
     lastCheckedAt: now,
@@ -2556,45 +2006,26 @@ export async function runWorkflowAutoIteratorImpl(
         ? "risk"
         : gateEvaluation.blocking
           ? "runtime"
-          : revisionDrivenRouting
-            ? "hook"
-            : dispatchStageSignals.length > 0
+          : dispatchStageSignals.length > 0
               ? "signals"
               : null,
     blockingReason:
       autoModeEvaluation.effectiveMode === "off" && autoModeEvaluation.riskLevel !== "stable"
         ? autoModeEvaluation.riskLevel
-        : gateEvaluation.reason ?? (revisionDrivenRouting ? "revision_control_active" : null),
-    blockingSummary:
-      revisionDrivenRouting
-        ? revisionControlState.pendingReason
-        : blockingReason,
+        : gateEvaluation.reason ?? null,
+    blockingSummary: blockingReason,
     stageAfter,
     ownerAfter,
     effectiveAutoMode: autoModeEvaluation.effectiveMode,
     riskFingerprint: autoModeEvaluation.riskFingerprint,
-    activeHookPoint: revisionDrivenRouting ? "before_stage_handoff" : null,
-    aggregateHookVerdict: revisionDrivenRouting ? "revise" : null,
+    activeHookPoint: null,
+    aggregateHookVerdict: null,
     runtimeSessionHealth: gateEvaluation.blocking ? "gate_blocked" : null,
     mailboxStatus: null,
     nextRepairAction: nextAction,
   });
   manifest.last_heartbeat_at = now;
   manifest.current_micro_stage = nextMicroStage;
-  const rollbackReasonCategory =
-    experimentRollbackStage != null
-      ? normalizeStage(experimentDecisionBeforeAdvance?.decision) === "rollback_to_idea"
-        ? "innovation_invalidated"
-        : normalizeStage(experimentDecisionBeforeAdvance?.baselineFairnessStatus) !== "ready"
-          ? "baseline_fairness_broken"
-          : normalizeStage(experimentDecisionBeforeAdvance?.implementationConfidence) ===
-              "untrusted"
-            ? "implementation_untrusted"
-            : normalizeStage(experimentDecisionBeforeAdvance?.searchExhaustionStatus) ===
-                "exhausted"
-              ? "search_exhausted"
-              : "innovation_invalidated"
-      : null;
   const orchestrationNextStage =
     stageAfter != null ? deps.STAGE_REQUIREMENTS[stageAfter]?.nextStage ?? null : null;
   manifest.orchestration_state = {
@@ -2606,15 +2037,10 @@ export async function runWorkflowAutoIteratorImpl(
       : stageReadyForOwnerWork
         ? "running"
         : "waiting",
-    blocking_category:
-      experimentRollbackStage != null
-        ? "rollback_required"
-        : stageAfter === "experiment" && experimentDecisionBeforeAdvance
-          ? normalizeStage(experimentDecisionBeforeAdvance.decision)
-          : pickString(existingOrchestrationState, [
-              "blockingCategory",
-              "blocking_category",
-            ]),
+    blocking_category: pickString(existingOrchestrationState, [
+      "blockingCategory",
+      "blocking_category",
+    ]),
     current_owner: ownerTransitionRequiresClaim ? ownerBefore : ownerAfter,
     next_owner: ownerTransitionRequiresClaim
       ? ownerAfter
@@ -2661,38 +2087,26 @@ export async function runWorkflowAutoIteratorImpl(
       ? stageAfter
       : orchestrationNextStage,
     blocking_reason: blockingReason,
-    rollback_reason_category:
-      rollbackReasonCategory ??
-      pickString(existingOrchestrationState, [
+    rollback_reason_category: pickString(existingOrchestrationState, [
         "rollbackReasonCategory",
         "rollback_reason_category",
       ]),
-    rollback_evidence_summary:
-      experimentRollbackStage != null
-        ? experimentDecisionBeforeAdvance?.rationale ?? blockingReason
-        : pickString(existingOrchestrationState, [
-            "rollbackEvidenceSummary",
-            "rollback_evidence_summary",
-          ]),
-    rollback_target_stage:
-      experimentRollbackStage ??
-      pickString(existingOrchestrationState, [
+    rollback_evidence_summary: pickString(existingOrchestrationState, [
+      "rollbackEvidenceSummary",
+      "rollback_evidence_summary",
+    ]),
+    rollback_target_stage: pickString(existingOrchestrationState, [
         "rollbackTargetStage",
         "rollback_target_stage",
       ]),
     last_contract_eval_result:
-      experimentRollbackStage != null
-        ? "rollback_required"
-        : gateEvaluation.blocking
+      gateEvaluation.blocking
           ? "blocked"
           : dispatchStageSignals.length > 0
             ? "needs_stage_repair"
             : "pass",
     last_contract_eval_at: now,
-    resume_cursor:
-      stageAfter === "experiment" && experimentDecisionBeforeAdvance
-        ? experimentDecisionBeforeAdvance.validationStage
-        : nextMicroStage,
+    resume_cursor: nextMicroStage,
     last_updated_at: now,
   };
   if (stageAfter === "experiment" && experimentReviewState) {
@@ -2715,7 +2129,22 @@ export async function runWorkflowAutoIteratorImpl(
   ) {
     manifest.last_handoff_at = now;
   }
-  await deps.saveManifest(projectRoot, manifest);
+  manifest = (
+    await reconcileWorkflowControl({
+      projectRoot,
+      policy: { allowProjectionRepair: true },
+      now,
+      manifest,
+      stageSignalResolver: async ({ stage, manifest: reconcilerManifest }) =>
+        deps.getMissingStageSignals({
+          projectRoot,
+          manifest: reconcilerManifest,
+          trackRegistry,
+          experimentLedger,
+          currentStage: stage,
+        }),
+    })
+  ).manifest;
   await runWorkflowHandoffMaintenancePass({ projectRoot, now: new Date(now) });
 
   if (workflowPolicy.teamRuntime?.enabled !== false) {
@@ -2809,28 +2238,6 @@ export async function runWorkflowAutoIteratorImpl(
   };
   await deps.saveGateState(projectRoot, nextGateState);
 
-  if (regressionDepthCapped) {
-    await deps.appendWorkflowTraceEvent({
-      projectRoot,
-      projectId,
-      kind: "auto_iterator",
-      action: "regression_depth_capped",
-      functionName: "runWorkflowAutoIterator",
-      stage: stageAfter,
-      owner: ownerAfter,
-      agentId: actorRole,
-      sessionKey: null,
-      summary: `Auto iterator capped backward regression at depth ${MAX_REGRESSION_DEPTH}.`,
-      details: {
-        stageBefore,
-        stageEffective,
-        stageAfter,
-        regressionDepth,
-        maxRegressionDepth: MAX_REGRESSION_DEPTH,
-      },
-    });
-  }
-
   const recommendedActions: AutoIteratorAction[] = [];
   const shouldDispatchPreparedOwnerHandoff =
     ownerTransitionRequiresClaim && !gateEvaluation.blocking && stageRepairCommand == null;
@@ -2876,7 +2283,6 @@ export async function runWorkflowAutoIteratorImpl(
       stage: stageAfter,
       owner: ownerAfter,
       summary:
-        experimentDecisionCommand?.summary ??
         deps.formatStageSummary(stageAfter) ??
         "Drive the current workflow stage and refresh durable state.",
       command: nextAction,
@@ -3045,8 +2451,8 @@ export async function runWorkflowAutoIteratorImpl(
     nextAction,
     resumeAction,
     blockingReason,
-    experimentDecision: experimentDecisionBeforeAdvance?.decision ?? null,
-    experimentDecisionRationale: experimentDecisionBeforeAdvance?.rationale ?? null,
+    experimentDecision,
+    experimentDecisionRationale,
     experimentRollbackStage,
     graphPresenceCheck,
     projectsStateUpdated,
@@ -3084,8 +2490,8 @@ export async function runWorkflowAutoIteratorImpl(
       ownerBefore,
       ownerAfter,
       nextAction,
-      experimentDecision: experimentDecisionBeforeAdvance?.decision ?? null,
-      experimentDecisionRationale: experimentDecisionBeforeAdvance?.rationale ?? null,
+      experimentDecision,
+      experimentDecisionRationale,
       experimentRollbackStage,
     },
   });
@@ -3123,7 +2529,7 @@ export async function runWorkflowAutoIteratorImpl(
         command: entry.command,
       })),
       missingStageSignals: dispatchStageSignals,
-      experimentDecision: experimentDecisionBeforeAdvance?.decision ?? null,
+      experimentDecision,
       experimentRollbackStage,
       auditPath: result.auditPath,
     },

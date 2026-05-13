@@ -36,6 +36,9 @@ import {
   resolveWorkflowRuntimeHealth,
 } from "../workflow-runtime-health.js";
 import {
+  normalizeWorkflowControlContract,
+} from "../workflow-control-contract.js";
+import {
   filterStaleAutoIteratorMailboxItems,
   inboxForRole,
 } from "../workflow-guard-collaboration";
@@ -456,8 +459,13 @@ export async function buildWorkflowSnapshotFromProjectState(
   const policy = params.policy;
   const projectState = params.projectState;
   const role = normalizeWorkflowRole(params.agentId);
+  const workflowControl = normalizeWorkflowControlContract(
+    projectState.manifest?.workflow_control
+  );
   const currentStage = resolveStageForWorkflowLine({
-    stage: normalizeStage(projectState.manifest?.current_stage),
+    stage: workflowControl
+      ? normalizeStage(workflowControl.stage)
+      : normalizeStage(projectState.manifest?.current_stage),
     manifest: projectState.manifest,
   });
   const missingStageSignals =
@@ -470,14 +478,17 @@ export async function buildWorkflowSnapshotFromProjectState(
           currentStage,
         })
       : [];
-  const blockingReasonRaw = asString(projectState.manifest?.blocking_reason);
+  const blockingReasonRaw = workflowControl
+    ? workflowControl.blocking_reason
+    : asString(projectState.manifest?.blocking_reason);
   const derivedEvidence = await summarizeWorkflowDerivedEvidence({
     projectRoot: projectState.projectRoot,
     trackRegistry: projectState.trackRegistry,
     currentStage,
   });
-  const blockingReason =
-    derivedEvidence.status === "ready"
+  const blockingReason = workflowControl
+    ? workflowControl.blocking_reason
+    : derivedEvidence.status === "ready"
       ? /^waiting for .+ to satisfy:/i.test(blockingReasonRaw ?? "")
         ? null
         : blockingReasonRaw
@@ -682,6 +693,12 @@ export async function buildWorkflowSnapshotFromProjectState(
   const orchestrationState = normalizeOrchestrationState(
     asRecord(projectState.manifest?.orchestration_state)
   );
+  const ownerAgent = workflowControl
+    ? workflowControl.owner
+    : orchestrationState.currentOwner ?? asString(projectState.manifest?.owner_agent);
+  const nextAction = workflowControl
+    ? workflowControl.next_action
+    : asString(projectState.manifest?.next_action);
   const writePackage = normalizeWritePackageState(
     asRecord(projectState.manifest?.write_package)
   );
@@ -989,12 +1006,21 @@ export async function buildWorkflowSnapshotFromProjectState(
     role,
     currentStage,
     currentMicroStage: normalizeStage(projectState.manifest?.current_micro_stage),
-    ownerAgent:
-      orchestrationState.currentOwner ?? asString(projectState.manifest?.owner_agent),
+    ownerAgent,
     recommendedOwner,
-    nextAction: asString(projectState.manifest?.next_action),
+    nextAction,
     resumeAction: asString(projectState.manifest?.resume_action),
     blockingReason,
+    workflowControlSchemaVersion: workflowControl?.schema_version ?? null,
+    workflowControlContractId: workflowControl?.contract_id ?? null,
+    workflowControlReconciledAt: workflowControl?.reconciled_at ?? null,
+    workflowControlStatus: workflowControl?.status ?? null,
+    workflowControlCompletionStatus: workflowControl?.completion.status ?? null,
+    workflowControlCompletionSource: workflowControl?.completion.source ?? null,
+    workflowControlCompletionReason: workflowControl?.completion.reason ?? null,
+    workflowControlRuntimeState: workflowControl?.runtime_state ?? null,
+    workflowControlQueueKey: workflowControl?.queue_key ?? null,
+    workflowControlSessionKey: workflowControl?.session_key ?? null,
     workflowEvidenceStatus: derivedEvidence.status,
     workflowEvidenceSummary: derivedEvidence.summary,
     allowedWriteScopes: role ? ROLE_POLICIES[role].writeScopeLabels : [],
@@ -1357,7 +1383,7 @@ export async function buildWorkflowSnapshotFromProjectState(
       teamRoundStore?.leadRole ??
       resolveWorkflowStageLeadRole({
         stage: currentStage,
-        ownerAgent: asString(projectState.manifest?.owner_agent),
+        ownerAgent,
       }),
     teamRoundActiveSessionCount: teamRoundSummary.activeSessionCount,
     teamRoundLastClaimedTaskId: teamRoundStore?.lastClaimedTaskId ?? null,

@@ -403,6 +403,32 @@ function slugifyTopic(topic) {
   return normalized || "research-topic";
 }
 
+function compactQueuedRequestProgress(request) {
+  const queueProgress =
+    request?.queue_progress && typeof request.queue_progress === "object"
+      ? request.queue_progress
+      : request?.queueProgress && typeof request.queueProgress === "object"
+        ? request.queueProgress
+        : {};
+  return {
+    startedAt: request?.started_at ?? request?.startedAt ?? null,
+    lastRunId: request?.last_run_id ?? request?.lastRunId ?? null,
+    lastSessionKey: request?.last_session_key ?? request?.lastSessionKey ?? null,
+    queueSequence: queueProgress.sequence ?? queueProgress.seq ?? null,
+    queueLastEventAt:
+      queueProgress.last_event_at ??
+      queueProgress.lastEventAt ??
+      queueProgress.updated_at ??
+      queueProgress.updatedAt ??
+      null,
+    queueRemaining: queueProgress.remaining ?? null,
+    queueCompleted: queueProgress.completed ?? null,
+    queueFailed: queueProgress.failed ?? null,
+    queueOverallPercent:
+      queueProgress.overall_percent ?? queueProgress.overallPercent ?? null,
+  };
+}
+
 function workflowProgressFingerprint(manifest) {
   const paperIngestion =
     manifest?.paper_ingestion && typeof manifest.paper_ingestion === "object"
@@ -466,9 +492,9 @@ function workflowProgressFingerprint(manifest) {
       wrapper: request?.wrapper ?? null,
       paperCount: request?.paper_count ?? request?.paperCount ?? null,
       attemptCount: request?.attempt_count ?? request?.attemptCount ?? null,
-      lastRunId: request?.last_run_id ?? request?.lastRunId ?? null,
       validationStatus:
         request?.validation_status ?? request?.validationStatus ?? null,
+      ...compactQueuedRequestProgress(request),
     })),
     activeBatchCount: activeBatches.length,
     paperOperationCount: paperOperations.length,
@@ -923,6 +949,57 @@ export async function waitForProgress(params) {
   return { progressed: false, manifest: latestManifest, reason: "timeout" };
 }
 
+export async function resolveLiveNoProgressGrace(params) {
+  if (params.turn?.progressed) {
+    return params.turn;
+  }
+  const baselineManifest = params.turn?.manifest ?? params.baselineManifest;
+  const graceMs = positiveNumber(params.graceMs, 0);
+  if (!graceMs) {
+    return params.turn;
+  }
+  const progress = await waitForProgress({
+    projectRoot: params.projectRoot,
+    baselineManifest,
+    lane: params.lane,
+    timeoutMs: graceMs,
+    pollMs: params.pollMs ?? 5_000,
+  });
+  if (progress.progressed) {
+    return {
+      ...params.turn,
+      progressed: true,
+      progressReason: `post_timeout_${progress.reason}`,
+      manifest: progress.manifest,
+    };
+  }
+  if (typeof params.reconcileAfterGrace !== "function") {
+    return params.turn;
+  }
+  const reconciliation = await params.reconcileAfterGrace({
+    projectRoot: params.projectRoot,
+    lane: params.lane,
+    turn: params.turn,
+    baselineManifest: progress.manifest ?? baselineManifest,
+  });
+  if (reconciliation?.progressed) {
+    return {
+      ...params.turn,
+      progressed: true,
+      progressReason: `post_timeout_${reconciliation.reason ?? "reconciled"}`,
+      manifest: reconciliation.manifest ?? progress.manifest ?? baselineManifest,
+    };
+  }
+  if (reconciliation?.reason) {
+    return {
+      ...params.turn,
+      progressReason: `post_timeout_${reconciliation.reason}`,
+      manifest: reconciliation.manifest ?? progress.manifest ?? baselineManifest,
+    };
+  }
+  return params.turn;
+}
+
 async function runLiveStageTurn(params) {
   const {
     runtimeSubagent,
@@ -1279,6 +1356,16 @@ function buildLiveBootstrapFailureResult(params) {
   };
 }
 
+export function shouldReplayNativeSlashBootstrap({
+  bootstrapTransport,
+  isolatedGatewayEnabled,
+} = {}) {
+  return (
+    bootstrapTransport === "local" ||
+    (bootstrapTransport === "discord" && isolatedGatewayEnabled)
+  );
+}
+
 export async function runAutoCommandEndToEndLive(params) {
   const { lane, topic, projectsRoot } = params;
   const commandName = lane === "survey" ? "auto-review" : "auto-research";
@@ -1351,8 +1438,12 @@ export async function runAutoCommandEndToEndLive(params) {
     const runtimeSubagent = gateway.runtimeSubagent;
     let bootstrap = null;
     try {
+      const shouldReplayNativeSlash = shouldReplayNativeSlashBootstrap({
+        bootstrapTransport,
+        isolatedGatewayEnabled,
+      });
       const bootstrapPromise =
-        bootstrapTransport === "local"
+        shouldReplayNativeSlash
           ? dispatchWorkflowCommand({
               commandName,
               args: JSON.stringify(topic),
@@ -1371,7 +1462,13 @@ export async function runAutoCommandEndToEndLive(params) {
               runtimeSubagent,
               backgroundExecutionMode: "live",
               pluginConfig,
-            })
+            }).then((result) => ({
+              ...result,
+              fallbackTransport:
+                bootstrapTransport === "discord" && isolatedGatewayEnabled
+                  ? "Executed through isolated native slash replay with live runtime subagent support."
+                  : result.fallbackTransport,
+            }))
           : (async () => {
               const started = await gateway.client.chatSend({
                 sessionKey: transportContext.bootstrapSessionKey,
@@ -1472,6 +1569,10 @@ export async function runAutoCommandEndToEndLive(params) {
           : 1
       )
     );
+    const noProgressGraceMs = positiveNumber(
+      params.noProgressGraceMs,
+      Math.min(Math.max(positiveNumber(params.progressPollMs, 5_000) * 3, 15_000), 30_000)
+    );
     let noProgressTurns = 0;
     for (let index = 0; index < maxIterations; index += 1) {
       const manifest = await readManifest(projectRoot);
@@ -1560,7 +1661,7 @@ export async function runAutoCommandEndToEndLive(params) {
         }
         continue;
       }
-      const turn = await runLiveStageTurn({
+      let turn = await runLiveStageTurn({
         runtimeSubagent,
         projectRoot,
         projectId: actualProjectId,
@@ -1574,6 +1675,45 @@ export async function runAutoCommandEndToEndLive(params) {
         stageTimeoutMs: params.stageTimeoutMs ?? null,
         progressPollMs: params.progressPollMs ?? null,
       });
+      if (!turn.progressed) {
+        turn = await resolveLiveNoProgressGrace({
+          projectRoot,
+          lane,
+          turn,
+          graceMs: noProgressGraceMs,
+          pollMs: params.progressPollMs ?? null,
+          reconcileAfterGrace: async ({ baselineManifest }) => {
+            const beforeStage = String(baselineManifest?.current_stage ?? "");
+            const beforeOwner = String(baselineManifest?.owner_agent ?? "");
+            const beforeFingerprint = workflowProgressFingerprint(baselineManifest ?? {});
+            await runWorkflowAutoIterator(buildLiveAutoIteratorParams({
+              projectRoot,
+              workflowPolicy,
+            }));
+            const manifestAfterReconciliation = await readManifest(projectRoot);
+            const stageOrOwnerChanged =
+              String(manifestAfterReconciliation.current_stage ?? "") !== beforeStage ||
+              String(manifestAfterReconciliation.owner_agent ?? "") !== beforeOwner;
+            if (
+              stageOrOwnerChanged ||
+              workflowProgressFingerprint(manifestAfterReconciliation) !== beforeFingerprint
+            ) {
+              return {
+                progressed: true,
+                reason: stageOrOwnerChanged
+                  ? "auto_iterator_state_change"
+                  : "auto_iterator_reconciled",
+                manifest: manifestAfterReconciliation,
+              };
+            }
+            return {
+              progressed: false,
+              reason: "auto_iterator_no_change",
+              manifest: manifestAfterReconciliation,
+            };
+          },
+        });
+      }
       turns.push(turn);
       previousRole = turn.owner;
       if (turn.progressed) {

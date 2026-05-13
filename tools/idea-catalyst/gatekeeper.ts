@@ -313,16 +313,46 @@ function sanitizeQuestionGaps(decompositionPacket: DecompositionPacketLike) {
     .filter((entry) => entry.coverage_status !== "resolved");
 }
 
+function normalizeTopicContext(value: string | string[] | null | undefined): string | null {
+  const pieces = Array.isArray(value) ? value : [value];
+  const normalized = pieces
+    .map((entry) => String(entry ?? "").replace(/\s+/g, " ").trim())
+    .filter(Boolean);
+  if (normalized.length === 0) {
+    return null;
+  }
+  return normalized.join("; ").slice(0, 260);
+}
+
+function addTopicContextToQuery(query: string, topicContext: string | null): string {
+  const normalizedQuery = String(query ?? "").replace(/\s+/g, " ").trim();
+  if (!topicContext) {
+    return normalizedQuery;
+  }
+  const contextTokens = topicContext
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((token) => token.length >= 4)
+    .slice(0, 5);
+  const lowerQuery = normalizedQuery.toLowerCase();
+  if (contextTokens.length > 0 && contextTokens.every((token) => lowerQuery.includes(token))) {
+    return normalizedQuery;
+  }
+  return `${topicContext} ${normalizedQuery}`.trim().slice(0, 420);
+}
+
 function buildFallbackQueries(params: {
   missingDomains: string[];
   questionGaps: Array<{ question_id: string; question: string }>;
+  topicContext?: string | null;
 }) {
   const queries: Array<{ domain: string; query: string; rationale: string }> = [];
   for (const domain of params.missingDomains) {
     for (const gap of params.questionGaps.slice(0, 3)) {
+      const query = `${domain} ${gap.question} transferable principle`.trim();
       queries.push({
         domain,
-        query: `${domain} ${gap.question} transferable principle`.trim(),
+        query: addTopicContextToQuery(query, params.topicContext ?? null),
         rationale: `Acquire domain evidence for ${gap.question_id}.`,
       });
     }
@@ -335,6 +365,7 @@ export function buildIdeaCatalystGateDecision(
   decompositionPacket: DecompositionPacketLike = {},
   options?: {
     llmJudgment?: SufficiencyJudgment | null;
+    topicContext?: string | string[] | null;
   }
 ) {
   const candidateDomains = Array.isArray(scoutingReport.candidate_domains)
@@ -505,7 +536,10 @@ export function buildIdeaCatalystGateDecision(
       ? entry.search_queries
           .map((query) => ({
             domain: String(query?.domain ?? entry?.domain ?? "").trim() || null,
-            query: String(query?.query ?? "").trim(),
+            query: addTopicContextToQuery(
+              String(query?.query ?? "").trim(),
+              normalizeTopicContext(options?.topicContext)
+            ),
             rationale:
               String(query?.rationale ?? "").trim() ||
               "Acquire more cross-domain bridge evidence for IDEA-CATALYST.",
@@ -522,6 +556,7 @@ export function buildIdeaCatalystGateDecision(
         ? buildFallbackQueries({
             missingDomains: requisitionMissingDomains,
             questionGaps,
+            topicContext: normalizeTopicContext(options?.topicContext),
           })
         : [];
   const nonActionableReason = actionable
@@ -579,6 +614,7 @@ export function buildIdeaCatalystGateDecision(
           actionable,
           requisition_id: requisitionId,
           target_domain: targetDomain,
+          topic_context: normalizeTopicContext(options?.topicContext),
           missing_domains: requisitionMissingDomains,
           missing_evidence_types: missingEvidenceTypes,
           challenge_clusters: challengeClusters,

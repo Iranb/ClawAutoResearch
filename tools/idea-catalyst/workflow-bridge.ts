@@ -70,6 +70,8 @@ function buildIdeaCatalystRequisitionBatchManifest(params: {
         pickString(params.requisition, ["requisition_id", "requisitionId"]) ?? null,
       target_domain:
         pickString(params.requisition, ["target_domain", "targetDomain"]) ?? null,
+      topic_context:
+        pickString(params.requisition, ["topic_context", "topicContext"]) ?? null,
       missing_domains:
         Array.isArray(params.requisition.missing_domains)
           ? params.requisition.missing_domains
@@ -280,6 +282,51 @@ export function isTerminalIdeaCatalystRequisitionStatus(value: unknown): boolean
   );
 }
 
+function isCurrentGraphSatisfactionStatus(value: unknown): boolean {
+  const status = String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/-/g, "_");
+  return (
+    status === "degraded_satisfied_current_graph" ||
+    status === "satisfied_bounded_with_import_blocker" ||
+    status === "workflow_state_satisfied" ||
+    status === "satisfied_by_verified_graph_import"
+  );
+}
+
+function hasExplicitCurrentGraphSatisfactionEvidence(
+  report: Record<string, unknown>
+): boolean {
+  const selectedPaperCount =
+    pickNumber(report, ["selected_paper_count", "selectedPaperCount"]) ?? 0;
+  const candidatePaperCount =
+    pickNumber(report, ["candidate_paper_count", "candidatePaperCount"]) ?? 0;
+  const remediation = asRecord(report.remediation_pass ?? report.remediationPass);
+  const remediationAcceptsCurrentGraph =
+    remediation?.graph_ready === true &&
+    remediation?.can_proceed_with_existing_graph === true;
+  return (
+    report.evidence_gap_closed === true ||
+    report.evidenceGapClosed === true ||
+    selectedPaperCount > 0 ||
+    candidatePaperCount > 0 ||
+    remediationAcceptsCurrentGraph
+  );
+}
+
+function reportRequiresCurrentGraphEvidence(report: Record<string, unknown> | null): boolean {
+  if (!report) {
+    return false;
+  }
+  return (
+    isCurrentGraphSatisfactionStatus(pickString(report, ["status"])) ||
+    isCurrentGraphSatisfactionStatus(
+      pickString(report, ["decision", "satisfaction_decision", "satisfactionDecision"])
+    )
+  );
+}
+
 export async function reconcileSatisfiedIdeaCatalystRequisition(params: {
   projectRoot: string;
   manifest: Record<string, unknown>;
@@ -376,6 +423,29 @@ export async function reconcileSatisfiedIdeaCatalystRequisition(params: {
   }
   const requisitionStatus = normalizeIdeaCatalystRequisitionStatus(requisition);
   if (!isTerminalIdeaCatalystRequisitionStatus(requisition)) {
+    return {
+      updated: false,
+      manifest,
+      state: current,
+      requisitionStatus,
+    };
+  }
+  const validationReportPath = pickString(requisition ?? {}, [
+    "validation_report_path",
+    "validationReportPath",
+    "satisfaction_report_path",
+    "satisfactionReportPath",
+  ]);
+  const validationReport = validationReportPath
+    ? await readJsonIfExists<Record<string, unknown>>(
+        resolveProjectArtifactPath(projectRoot, validationReportPath) ?? ""
+      )
+    : null;
+  if (
+    (isCurrentGraphSatisfactionStatus(requisitionStatus) ||
+      reportRequiresCurrentGraphEvidence(validationReport)) &&
+    (!validationReport || !hasExplicitCurrentGraphSatisfactionEvidence(validationReport))
+  ) {
     return {
       updated: false,
       manifest,

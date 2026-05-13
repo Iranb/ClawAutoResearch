@@ -1,6 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
+import { normalizeWorkflowControlContract } from "./workflow-control-contract.js";
+
 export type WorkflowPaperArtifactTerminalResult = {
   terminal: boolean;
   reason: "live_paper_artifact_ready" | null;
@@ -97,7 +99,11 @@ export async function detectWorkflowPaperArtifactTerminal(params: {
 }): Promise<WorkflowPaperArtifactTerminalResult> {
   const manifest = readRecord(params.manifest) ?? {};
   const lane = readString(params.lane) ?? "experiment";
-  const stage = readString(manifest.current_stage) ?? null;
+  const workflowControl = normalizeWorkflowControlContract(manifest.workflow_control);
+  const stage =
+    workflowControl?.stage ?? readString(manifest.current_stage) ?? null;
+  const owner =
+    workflowControl?.owner ?? readString(manifest.owner_agent) ?? null;
   const paperPdfPath = path.join(params.projectRoot, "academic_writer", "paper", "main.pdf");
   const paperTexPath = path.join(params.projectRoot, "academic_writer", "paper", "main.tex");
   const [pdfExists, texExists] = await Promise.all([
@@ -118,9 +124,11 @@ export async function detectWorkflowPaperArtifactTerminal(params: {
     statusIsOneOf(experimentStatus, EXPERIMENT_READY_STATUSES);
   const stageAllowsTerminal = stageAllowsPaperArtifactTerminal(stage);
   const blockingReason =
-    readString(manifest.blocking_reason) ??
-    readString(readRecord(manifest.orchestration_state)?.blocking_reason) ??
-    null;
+    workflowControl
+      ? workflowControl.blocking_reason
+      : readString(manifest.blocking_reason) ??
+        readString(readRecord(manifest.orchestration_state)?.blocking_reason) ??
+        null;
   const terminal =
     stageAllowsTerminal &&
     pdfExists &&
@@ -135,7 +143,7 @@ export async function detectWorkflowPaperArtifactTerminal(params: {
     reason: terminal ? "live_paper_artifact_ready" : null,
     details: {
       stage,
-      owner: readString(manifest.owner_agent) ?? null,
+      owner,
       lane,
       pdfExists,
       texExists,
