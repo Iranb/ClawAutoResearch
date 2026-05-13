@@ -155,7 +155,9 @@ const MAX_BOOTSTRAP_TITLE_RESOLUTION_ATTEMPTS = 4;
 const DEFAULT_REMOTE_DISCOVERY_MAX_CANDIDATES = 12;
 const DEFAULT_REMOTE_DISCOVERY_MAX_DOWNLOADS = 6;
 const DEFAULT_REMOTE_DISCOVERY_MAX_IMPORTED = 8;
+const DEFAULT_REMOTE_DISCOVERY_MCP_TIMEOUT_MS = 300_000;
 const MAX_REMOTE_DISCOVERY_SEED_PAPERS = 24;
+const REMOTE_DISCOVERY_MCP_TIMEOUT_ENV = "PAPERNEXUS_DISCOVERY_MCP_TIMEOUT_MS";
 const REMOTE_LITERATURE_DISCOVERY_PROVIDER = "papernexus-literature-discovery";
 
 type RemoteDiscoveryWorkflowPolicy = {
@@ -177,6 +179,7 @@ type RemoteDiscoveryWorkflowPolicy = {
   papernexusDiscoveryProviders?: string[] | string | null;
   papernexusDiscoveryProcessImports?: boolean | null;
   papernexusDiscoveryImportMaxPasses?: number | null;
+  papernexusDiscoveryMcpTimeoutMs?: number | null;
   papernexusDiscoveryRequestCache?: boolean | null;
   papernexusDiscoveryRequestCacheTtlMs?: number | null;
   papernexusProviderRequestSchedulerDelayMs?: number | null;
@@ -244,6 +247,38 @@ function normalizePositiveInteger(value: unknown): number | null {
     return null;
   }
   return Math.floor(numeric);
+}
+
+function resolveRemoteDiscoveryMcpTimeoutMs(params: {
+  workflowPolicy?: RemoteDiscoveryWorkflowPolicy | null;
+  baseTimeoutMs?: number | null;
+}): number {
+  const baseTimeoutMs =
+    normalizePositiveInteger(params.baseTimeoutMs) ?? 30_000;
+  const configuredTimeoutMs =
+    normalizePositiveInteger(params.workflowPolicy?.papernexusDiscoveryMcpTimeoutMs) ??
+    normalizePositiveInteger(process.env[REMOTE_DISCOVERY_MCP_TIMEOUT_ENV]);
+  if (configuredTimeoutMs !== null) {
+    return Math.max(baseTimeoutMs, configuredTimeoutMs);
+  }
+  return Math.max(baseTimeoutMs, DEFAULT_REMOTE_DISCOVERY_MCP_TIMEOUT_MS);
+}
+
+function isRemoteDiscoveryTimeoutError(message: string | null | undefined): boolean {
+  return /\babort(?:ed)?\b|\btimeout\b|\btimed out\b/i.test(message ?? "");
+}
+
+function buildRemoteDiscoveryFailureMessage(params: {
+  message: string;
+  timeoutMs?: number | null;
+  timeout: boolean;
+}): string {
+  if (!params.timeout) {
+    return params.message;
+  }
+  const timeoutMs = normalizePositiveInteger(params.timeoutMs);
+  const suffix = timeoutMs === null ? "" : ` after ${timeoutMs}ms`;
+  return `PaperNexus literature_discovery launch timed out${suffix} before returning a run/import handle: ${params.message}`;
 }
 
 function normalizeBoolean(value: unknown): boolean | null {
@@ -1806,6 +1841,8 @@ async function persistRemoteDiscoveryFailure(params: {
   activeRequest?: NormalizedPaperIngestionQueuedRequest | null;
   topic?: string | null;
   seedPaperCount?: number | null;
+  failureKind?: string | null;
+  configuredTimeoutMs?: number | null;
 }): Promise<GraphBuildSourceCatchupResult> {
   const result: GraphBuildSourceCatchupResult = {
     attempted: true,
@@ -1834,9 +1871,19 @@ async function persistRemoteDiscoveryFailure(params: {
       mcp_url: params.mcpUrl ?? null,
       topic: params.topic ?? null,
       seed_paper_count: params.seedPaperCount ?? null,
+      failure_kind: params.failureKind ?? params.skippedReason,
+      configured_timeout_ms: params.configuredTimeoutMs ?? null,
     },
     ...result,
   });
+  const repairHints =
+    params.failureKind === "remote_literature_discovery_launch_timeout"
+      ? [
+          `Increase ${REMOTE_DISCOVERY_MCP_TIMEOUT_ENV} or make PaperNexus literature_discovery return a resumable run/import handle before doing long provider/import work.`,
+        ]
+      : [
+          "Repair the configured remote PaperNexus MCP access before rerunning graph-build.",
+        ];
   await writeRemoteDiscoveryGraphBuildReceipt({
     projectRoot: params.projectRoot,
     requestId: params.requestId,
@@ -1844,9 +1891,7 @@ async function persistRemoteDiscoveryFailure(params: {
     graphVisibility: "unavailable",
     checkedAt: params.now,
     limitations: [params.message],
-    repairHints: [
-      "Repair the configured remote PaperNexus MCP access before rerunning graph-build.",
-    ],
+    repairHints,
   });
   const requestPatch = params.activeRequest
     ? {
@@ -2036,6 +2081,7 @@ function buildRemoteDiscoveryArgs(params: {
     papernexusDiscoveryProviders?: string[] | string | null;
     papernexusDiscoveryProcessImports?: boolean | null;
     papernexusDiscoveryImportMaxPasses?: number | null;
+    papernexusDiscoveryMcpTimeoutMs?: number | null;
     papernexusDiscoveryRequestCache?: boolean | null;
     papernexusDiscoveryRequestCacheTtlMs?: number | null;
     papernexusProviderRequestSchedulerDelayMs?: number | null;
@@ -2836,26 +2882,45 @@ async function maybeRunRemoteLiteratureDiscovery(params: {
     seedPapers,
     workflowPolicy: params.workflowPolicy,
   });
+  const discoveryTimeoutMs = resolveRemoteDiscoveryMcpTimeoutMs({
+    workflowPolicy: params.workflowPolicy,
+    baseTimeoutMs: client.clientConfig.timeoutMs,
+  });
   const discoveryResult = await callPapernexusMcpTool(
-    client.clientConfig,
+    {
+      ...client.clientConfig,
+      timeoutMs: discoveryTimeoutMs,
+    },
     "literature_discovery",
     args
   );
   if (!discoveryResult.ok) {
+    const rawMessage =
+      discoveryResult.error ??
+      client.tokenError ??
+      "PaperNexus literature_discovery failed.";
+    const timedOut = isRemoteDiscoveryTimeoutError(rawMessage);
     return persistRemoteDiscoveryFailure({
       projectRoot: params.projectRoot,
       reportPath: params.reportPath,
       now: params.now,
       requestId,
-      skippedReason: "remote_literature_discovery_failed",
-      message:
-        discoveryResult.error ??
-        client.tokenError ??
-        "PaperNexus literature_discovery failed.",
+      skippedReason: timedOut
+        ? "remote_literature_discovery_launch_timeout"
+        : "remote_literature_discovery_failed",
+      message: buildRemoteDiscoveryFailureMessage({
+        message: rawMessage,
+        timeoutMs: discoveryTimeoutMs,
+        timeout: timedOut,
+      }),
       mcpUrl: params.workflowPolicy.papernexusMcpUrl,
       activeRequest,
       topic,
       seedPaperCount: seedPapers.length,
+      failureKind: timedOut
+        ? "remote_literature_discovery_launch_timeout"
+        : "remote_literature_discovery_failed",
+      configuredTimeoutMs: discoveryTimeoutMs,
     });
   }
 
@@ -3113,6 +3178,7 @@ async function maybeRunRemoteLiteratureDiscovery(params: {
       mcp_url: params.workflowPolicy?.papernexusMcpUrl,
       shared_corpus: client.sharedCorpus,
       seed_paper_count: seedPapers.length,
+      configured_timeout_ms: discoveryTimeoutMs,
       artifact_path: artifactRelativePath,
       report_path: reportRelativePath,
       import_task_ids: taskIds,
