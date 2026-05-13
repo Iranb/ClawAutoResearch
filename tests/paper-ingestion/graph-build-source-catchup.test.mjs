@@ -112,6 +112,11 @@ async function startFakeRemoteDiscoveryMcpServer(options = {}) {
     const args = body?.params?.arguments ?? {};
     let textPayload;
     if (toolName === "literature_discovery") {
+      if (options.literatureDiscoveryDelayMs) {
+        await new Promise((resolve) =>
+          setTimeout(resolve, options.literatureDiscoveryDelayMs)
+        );
+      }
       if (options.literatureDiscoveryError) {
         response.writeHead(200, { "Content-Type": "application/json" });
         response.end(JSON.stringify({
@@ -364,6 +369,127 @@ test("graph-build source catch-up blocks instead of local fallback when remote d
   assert.equal(receipt.status, "failed");
   assert.equal(receipt.graph_visibility, "unavailable");
   assert.equal(receipt.source_backed_graph_claim, false);
+});
+
+test("graph-build source catch-up classifies remote literature_discovery launch timeouts", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  const previousToken = process.env.PAPERNEXUS_TEST_TOKEN;
+  const server = await startFakeRemoteDiscoveryMcpServer({
+    literatureDiscoveryError:
+      "Remote MCP request failed: The operation was aborted due to timeout",
+  });
+  t.after(async () => {
+    if (previousToken === undefined) {
+      delete process.env.PAPERNEXUS_TEST_TOKEN;
+    } else {
+      process.env.PAPERNEXUS_TEST_TOKEN = previousToken;
+    }
+    await server.close();
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+  process.env.PAPERNEXUS_TEST_TOKEN = "remote-test-token";
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "source-catchup-demo",
+    current_stage: "graph_build",
+    owner_agent: "researcher",
+    research_program: {
+      goal: "Use PaperNexus to find request-specific SQLite index design papers.",
+    },
+  });
+
+  const result = await maybeMaterializeGraphBuildPaperSources({
+    projectRoot,
+    projectId: "source-catchup-demo",
+    workflowPolicy: {
+      papernexusAccessMode: "remote_mcp",
+      papernexusSharedCorpus: "GCD",
+      papernexusMcpUrl: server.url,
+      papernexusApiTokenSource: "env",
+      papernexusApiTokenEnv: "PAPERNEXUS_TEST_TOKEN",
+    },
+    now: "2026-04-24T10:35:00.000Z",
+    fetchImpl: async () => assert.fail("remote_mcp timeout must not fetch literature locally"),
+  });
+
+  assert.equal(result.queued, false);
+  assert.equal(result.skippedReason, "remote_literature_discovery_launch_timeout");
+  assert.match(result.errors.join("\n"), /launch timed out after 300000ms/);
+
+  const catchupReport = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "graph", "GRAPH_BUILD_SOURCE_CATCHUP.json"), "utf8")
+  );
+  assert.equal(catchupReport.status, "failed");
+  assert.equal(catchupReport.skippedReason, "remote_literature_discovery_launch_timeout");
+  assert.equal(
+    catchupReport.remote_literature_discovery.failure_kind,
+    "remote_literature_discovery_launch_timeout"
+  );
+  assert.equal(catchupReport.remote_literature_discovery.configured_timeout_ms, 300000);
+});
+
+test("graph-build source catch-up uses a discovery-specific MCP timeout for remote launch", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  const previousToken = process.env.PAPERNEXUS_TEST_TOKEN;
+  const previousDiscoveryTimeout = process.env.PAPERNEXUS_DISCOVERY_MCP_TIMEOUT_MS;
+  const server = await startFakeRemoteDiscoveryMcpServer({
+    literatureDiscoveryDelayMs: 1100,
+  });
+  t.after(async () => {
+    if (previousToken === undefined) {
+      delete process.env.PAPERNEXUS_TEST_TOKEN;
+    } else {
+      process.env.PAPERNEXUS_TEST_TOKEN = previousToken;
+    }
+    if (previousDiscoveryTimeout === undefined) {
+      delete process.env.PAPERNEXUS_DISCOVERY_MCP_TIMEOUT_MS;
+    } else {
+      process.env.PAPERNEXUS_DISCOVERY_MCP_TIMEOUT_MS = previousDiscoveryTimeout;
+    }
+    await server.close();
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+  process.env.PAPERNEXUS_TEST_TOKEN = "remote-test-token";
+  process.env.PAPERNEXUS_DISCOVERY_MCP_TIMEOUT_MS = "3000";
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "source-catchup-demo",
+    current_stage: "graph_build",
+    owner_agent: "researcher",
+    research_program: {
+      goal: "Use PaperNexus to find request-specific SQLite index design papers.",
+    },
+  });
+
+  const result = await maybeMaterializeGraphBuildPaperSources({
+    projectRoot,
+    projectId: "source-catchup-demo",
+    workflowPolicy: {
+      papernexusAccessMode: "remote_mcp",
+      papernexusSharedCorpus: "GCD",
+      papernexusMcpUrl: server.url,
+      papernexusMcpTimeoutMs: 1000,
+      papernexusApiTokenSource: "env",
+      papernexusApiTokenEnv: "PAPERNEXUS_TEST_TOKEN",
+    },
+    now: "2026-04-24T10:40:00.000Z",
+    fetchImpl: async () => assert.fail("remote_mcp discovery must not fetch literature locally"),
+  });
+
+  assert.equal(result.queued, true);
+  assert.equal(result.materializedPaperCount, 2);
+  assert.equal(result.skippedReason, null);
+
+  const catchupReport = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "graph", "GRAPH_BUILD_SOURCE_CATCHUP.json"), "utf8")
+  );
+  assert.equal(catchupReport.remote_literature_discovery.configured_timeout_ms, 3000);
+  assert.equal(
+    server.requests.filter((entry) => entry.body.params.name === "literature_discovery").length,
+    1
+  );
+  assert.equal(
+    server.requests.filter((entry) => entry.body.params.name === "import_workflow").length,
+    1
+  );
 });
 
 test("graph-build source catch-up delegates missing research and import to remote PaperNexus literature_discovery", async (t) => {
