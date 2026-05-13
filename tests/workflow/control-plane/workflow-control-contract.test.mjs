@@ -19,6 +19,11 @@ async function writeJson(filePath, value) {
   await fs.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
 }
 
+async function writeText(filePath, value = "ready\n") {
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  await fs.writeFile(filePath, value, "utf8");
+}
+
 test("workflow snapshot reads workflow_control before stale manifest projection fields", async (t) => {
   const projectRoot = await fs.mkdtemp(
     path.join(os.tmpdir(), "openclaw-workflow-control-contract-")
@@ -242,7 +247,27 @@ test("reconciler does not let legacy stage signals downgrade canonical completio
     project_id: "complete-signals-demo",
     current_stage: "done",
     owner_agent: "orchestrator",
+    paper_qc: {
+      status: "ready",
+      compile_status: "pass",
+      page_budget_status: "pass",
+      invalid_figure_ref_status: "pass",
+    },
+    submission_ready: {
+      status: "ready",
+    },
   });
+  await writeText(path.join(projectRoot, "analyzer", "ANALYSIS_REPORT.md"), "# Analysis\n");
+  await writeJson(
+    path.join(projectRoot, "researcher", "artifacts", "results", "results.json"),
+    { metrics: [{ name: "score", value: 0.91 }] }
+  );
+  await writeText(
+    path.join(projectRoot, "academic_writer", "paper", "main.tex"),
+    "\\section{Ready}\n"
+  );
+  await writeText(path.join(projectRoot, "academic_writer", "paper", "main.pdf"), "%PDF-1.4\n");
+  await writeText(path.join(projectRoot, "reviewer", "REVIEW_FINDINGS.json"), "{\"status\":\"ready\"}\n");
 
   const result = await reconcileWorkflowControl({
     projectRoot,

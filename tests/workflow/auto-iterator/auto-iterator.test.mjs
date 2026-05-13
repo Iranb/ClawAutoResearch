@@ -7001,7 +7001,7 @@ test("auto iterator marks stale retried literature requisitions needs_repair wit
   const updatedManifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
   const request = updatedManifest.paper_ingestion.queued_requests[0];
   assert.equal(request.status, "needs_repair");
-  assert.equal(request.validation_status, "failed");
+  assert.equal(request.validation_status, "invalid");
   assert.equal(result.stageBefore, "graph_build");
   assert.equal(result.stageAfter, "graph_build");
 });
@@ -7274,7 +7274,7 @@ test("auto iterator marks stale literature discovery requisitions needs_repair w
   const updatedManifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
   const request = updatedManifest.paper_ingestion.queued_requests[0];
   assert.equal(request.status, "needs_repair");
-  assert.equal(request.validation_status, "failed");
+  assert.equal(request.validation_status, "invalid");
   assert.match(
     request.validation_report_path,
     /REQUISITION_SATISFACTION_REPORT\.json$/

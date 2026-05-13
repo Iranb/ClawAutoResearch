@@ -57,6 +57,7 @@ const DOWNSTREAM_GRAPH_SENSITIVE_STAGES = new Set([
   "review",
   "write",
   "submit",
+  "done",
 ]);
 
 const LEGACY_REENTRY_STAGE_PRIORITY: Record<string, number> = {
@@ -2498,6 +2499,73 @@ export async function resolveSubmissionReadyCompletion(
   });
 }
 
+async function resolveDoneCompletion(projectRoot: string): Promise<StageCompletion> {
+  const manifest =
+    (await readJsonIfExists<Record<string, unknown>>(
+      path.join(projectRoot, "PROJECT_MANIFEST.json")
+    )) ?? {};
+  const promotionGateBlocker = resolveExperimentPromotionGateBlocker(
+    manifest,
+    "analysis"
+  );
+  if (promotionGateBlocker) {
+    return completion({
+      stage: "experiment",
+      completionStatus: "incomplete",
+      owner: "researcher",
+      nextAction: "/monitor-experiment",
+      blockingReason: promotionGateBlocker,
+      missingSignals: [promotionGateBlocker],
+      contractSource: "done_completion",
+    });
+  }
+
+  const analysis = await resolveAnalysisCompletion(projectRoot);
+  if (analysis.completionStatus !== "complete") {
+    return {
+      ...analysis,
+      stage: analysis.stage === "analyze" ? "analyze" : "analysis",
+      contractSource: "done_completion",
+    };
+  }
+
+  const writing = await resolveWritingCompletion(projectRoot);
+  if (writing.completionStatus !== "complete") {
+    return {
+      ...writing,
+      stage: writing.stage === "write" ? "write" : "writing",
+      contractSource: "done_completion",
+    };
+  }
+
+  const review = await resolvePolishReviewCompletion(projectRoot, {
+    stage: "review",
+    completeNextAction: "/submit-ready",
+    incompleteNextAction: "/review-paper",
+    contractSource: "done_completion",
+  });
+  if (review.completionStatus !== "complete") {
+    return review;
+  }
+
+  const submit = await resolveSubmissionReadyCompletion(projectRoot, {
+    stage: "submit",
+    owner: "reviewer",
+    contractSource: "done_completion",
+  });
+  if (submit.completionStatus !== "complete") {
+    return submit;
+  }
+
+  return completion({
+    stage: "done",
+    completionStatus: "complete",
+    owner: "orchestrator",
+    nextAction: null,
+    contractSource: "done_completion",
+  });
+}
+
 export async function resolveWorkflowStageCompletion(params: {
   projectRoot: string;
   stage: string | null;
@@ -2569,13 +2637,7 @@ export async function resolveWorkflowStageCompletion(params: {
     case "submission_ready":
       return resolveSubmissionReadyCompletion(params.projectRoot);
     case "done":
-      return completion({
-        stage,
-        completionStatus: "complete",
-        owner: "orchestrator",
-        nextAction: null,
-        contractSource: "workflow_completion",
-      });
+      return resolveDoneCompletion(params.projectRoot);
     default:
       return completion({
         stage,

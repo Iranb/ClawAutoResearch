@@ -1075,6 +1075,137 @@ test("polish review and submission complete only after PaperGuru and terminal pa
   assert.equal(ready.nextAction, "/done");
 });
 
+test("done completion does not mask unfinished experiment promotion gates", async (t) => {
+  const projectRoot = await makeProject(t, "openclaw-wf-stage-done-gate-");
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "done-gate",
+    current_stage: "done",
+    owner_agent: "researcher",
+    next_action: "/monitor-experiment",
+    blocking_reason: "multi_seed_validation_pending",
+    experiment_search: {
+      status: "searching",
+      last_decision: "continue_tuning",
+      multi_seed_status: "pending",
+      ablation_status: "pending",
+      innovation_status: "unsupported",
+    },
+    research_program: {
+      global_constraints: {
+        must_run_multi_seed_before_analysis: true,
+      },
+    },
+  });
+
+  const completion = await resolveWorkflowStageCompletion({
+    projectRoot,
+    stage: "done",
+  });
+  assert.equal(completion.stage, "experiment");
+  assert.equal(completion.completionStatus, "incomplete");
+  assert.equal(completion.owner, "researcher");
+  assert.equal(completion.nextAction, "/monitor-experiment");
+  assert.equal(completion.blockingReason, "multi_seed_validation_pending");
+  assert.equal(completion.contractSource, "done_completion");
+
+  const reconciled = await reconcileWorkflowControl({
+    projectRoot,
+    now: "2026-05-14T00:00:00.000Z",
+  });
+  assert.equal(reconciled.contract.stage, "experiment");
+  assert.equal(reconciled.contract.completion.status, "incomplete");
+  assert.equal(reconciled.contract.blocking_reason, "multi_seed_validation_pending");
+});
+
+test("done completion does not mask active workflow-owned literature requisitions", async (t) => {
+  const projectRoot = await makeProject(t, "openclaw-wf-stage-done-requisition-");
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "done-requisition",
+    current_stage: "done",
+    owner_agent: "researcher",
+    paper_ingestion: {
+      graph_presence_status: "ready",
+      queued_requests: [
+        {
+          request_id: "idea-catalyst-req-gap",
+          request_kind: "requisition",
+          trigger_kind: "idea_catalyst_requisition",
+          status: "running",
+          started_at: "2026-05-14T00:00:00.000Z",
+          attempt_count: 1,
+        },
+      ],
+    },
+  });
+
+  const completion = await resolveWorkflowStageCompletion({
+    projectRoot,
+    stage: "done",
+  });
+  assert.equal(completion.stage, "graph_build");
+  assert.equal(completion.completionStatus, "incomplete");
+  assert.equal(completion.owner, "researcher");
+  assert.equal(completion.nextAction, "/graph-build");
+  assert.equal(completion.blockingReason, "graph_reentry_request_active");
+  assert.equal(completion.contractSource, "done_completion");
+});
+
+test("done completion requires terminal analysis writing review and submit evidence", async (t) => {
+  const projectRoot = await makeProject(t, "openclaw-wf-stage-done-terminal-");
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "done-terminal",
+    current_stage: "done",
+    owner_agent: "orchestrator",
+    paper_qc: {
+      status: "ready",
+      compile_status: "pass",
+      page_budget_status: "pass",
+      invalid_figure_ref_status: "pass",
+    },
+    submission_ready: {
+      status: "ready",
+    },
+  });
+
+  const shallow = await resolveWorkflowStageCompletion({
+    projectRoot,
+    stage: "done",
+  });
+  assert.equal(shallow.completionStatus, "incomplete");
+  assert.equal(shallow.stage, "analysis");
+  assert.equal(shallow.blockingReason, "analysis_report_missing");
+
+  await writeText(path.join(projectRoot, "analyzer", "ANALYSIS_REPORT.md"), "# Analysis\n");
+  await writeJson(
+    path.join(projectRoot, "researcher", "artifacts", "results", "results.json"),
+    { metrics: [{ name: "score", value: 0.91 }] }
+  );
+  await writeText(
+    path.join(projectRoot, "academic_writer", "paper", "main.tex"),
+    "\\section{Ready}\n"
+  );
+  await writeText(path.join(projectRoot, "reviewer", "REVIEW_FINDINGS.json"), "{\"status\":\"ready\"}\n");
+
+  const missingPdf = await resolveWorkflowStageCompletion({
+    projectRoot,
+    stage: "done",
+  });
+  assert.equal(missingPdf.completionStatus, "incomplete");
+  assert.equal(missingPdf.stage, "submit");
+  assert.equal(missingPdf.blockingReason, "terminal_paper_artifacts_not_ready");
+
+  await writeText(path.join(projectRoot, "academic_writer", "paper", "main.pdf"), "%PDF-1.4\n");
+
+  const ready = await resolveWorkflowStageCompletion({
+    projectRoot,
+    stage: "done",
+  });
+  assert.equal(ready.stage, "done");
+  assert.equal(ready.completionStatus, "complete");
+  assert.equal(ready.nextAction, null);
+  assert.equal(ready.contractSource, "done_completion");
+});
+
 test("runtime ownership marks stale running queue degraded when no active session exists", async (t) => {
   const projectRoot = await makeProject(t, "openclaw-wf-stage-runtime-");
   await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
