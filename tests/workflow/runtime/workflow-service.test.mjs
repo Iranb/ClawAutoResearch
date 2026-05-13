@@ -387,6 +387,92 @@ test("maybeAdvanceWorkflowHookPointForProject skips before-handoff audits while 
   assert.equal(reviewerRuns, 0);
 });
 
+test("maybeAdvanceWorkflowHookPointForProject derives workflow line from canonical control before stale projection", async (t) => {
+  const projectsRoot = await makeProjectsRoot();
+  const projectRoot = path.join(projectsRoot, "survey-canonical");
+  let reviewerRuns = 0;
+  t.after(async () => {
+    await fs.rm(projectsRoot, { recursive: true, force: true });
+  });
+  await fs.mkdir(path.join(projectRoot, "reviewer"), { recursive: true });
+  await fs.writeFile(path.join(projectRoot, "reviewer", "SURVEY_GATE.md"), "gate\n", "utf8");
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "survey-canonical",
+    current_stage: "plan",
+    owner_agent: "orchestrator",
+    workflow_control: {
+      schema_version: 1,
+      contract_id: "workflow-control:test",
+      reconciled_at: "2026-05-12T12:00:00.000Z",
+      stage: "survey_review",
+      owner: "researcher",
+      next_action: "/survey-pipeline",
+      status: "ready",
+      blocking_reason: null,
+      completion: {
+        status: "incomplete",
+        source: "survey_review_completion",
+        reason: null,
+      },
+      runtime_state: "idle",
+      queue_key: null,
+      session_key: null,
+    },
+    workflow_hooks: {
+      enabled: true,
+      audit_hooks: [
+        {
+          hook_id: "survey-only-gate",
+          hook_type: "file_audit",
+          stage: "survey_review",
+          hook_point: "before_stage_handoff",
+          target_role: "researcher",
+          auditor_role: "reviewer",
+          file_path: "reviewer/SURVEY_GATE.md",
+          requirement_prompt: "Check survey gate.",
+          applies_when: {
+            workflow_lines: ["survey"],
+          },
+        },
+      ],
+    },
+  });
+
+  const attempt = await maybeAdvanceWorkflowHookPointForProject({
+    workflowRuntime: {
+      async run() {
+        reviewerRuns += 1;
+        return { runId: `survey-hook-run-${reviewerRuns}` };
+      },
+    },
+    workflowPolicy: {
+      autoMode: "aggressive",
+      autoGate: defaultAutoGateConfig(),
+      enableChannelProjectBindings: false,
+      projectsRoot,
+      heartbeatBackgroundChecks: true,
+      agentContactCooldownSeconds: 300,
+      enableWorkflowMailbox: true,
+    },
+    projectRoot,
+    projectId: "survey-canonical",
+    hookPoint: "before_stage_handoff",
+    autoIteratorResult: {
+      effectiveAutoMode: "aggressive",
+      stageAfter: "survey_review",
+      ownerAfter: "researcher",
+      missingStageSignals: [],
+      materializedArtifacts: [],
+      hookEvents: [],
+    },
+  });
+
+  assert.equal(attempt.hookCount, 1);
+  assert.equal(attempt.status, "auditing");
+  assert.equal(attempt.launched, true);
+  assert.equal(reviewerRuns, 1);
+});
+
 test("listWorkflowCoordinatorProjects prefers active projects from PROJECTS_STATE", async (t) => {
   const projectsRoot = await makeProjectsRoot();
   const alphaRoot = await makeProject(projectsRoot, "alpha", "code");
@@ -1001,6 +1087,8 @@ test("maybeLaunchAutoStageForProject dispatches the current stage owner in auto 
   assert.equal(launch.owner, "coder");
   assert.equal(launch.sessionKey, "agent:coder:discord:group:paper-lab");
   assert.equal(launch.dispatchStrategy, "sessions_spawn");
+  assert.equal(launch.ownerRuntimeStatus.status, "active");
+  assert.equal(launch.ownerRuntimeStatus.sessionKey, "agent:coder:discord:group:paper-lab");
   assert.equal(runs.length, 1);
   assert.match(runs[0].message, /Immediate command: \/implement-experiment/);
 });
@@ -1063,6 +1151,69 @@ test("maybeLaunchAutoStageForProject blocks auto dispatch when project binding i
   assert.equal(launch.launched, false);
   assert.equal(launch.reason, "binding_missing");
   assert.equal(runs.length, 0);
+});
+
+test("maybeLaunchAutoStageForProject accepts notification-only workflow channels", async (t) => {
+  const projectsRoot = await makeProjectsRoot();
+  const projectRoot = path.join(projectsRoot, "alpha");
+  const runs = [];
+  t.after(async () => {
+    await fs.rm(projectsRoot, { recursive: true, force: true });
+  });
+  await fs.mkdir(projectRoot, { recursive: true });
+  await recordDiscordNotificationTarget(projectRoot, "alpha");
+
+  const launch = await maybeLaunchAutoStageForProject({
+    workflowRuntime: {
+      async run(params) {
+        runs.push(params);
+        return { runId: `stage-run-${runs.length}` };
+      },
+    },
+    workflowPolicy: {
+      autoMode: "conservative",
+      autoGate: defaultAutoGateConfig(),
+      enableChannelProjectBindings: true,
+      projectsRoot,
+      heartbeatBackgroundChecks: true,
+      agentContactCooldownSeconds: 300,
+      enableWorkflowMailbox: true,
+    },
+    projectRoot,
+    projectId: "alpha",
+    autoIteratorResult: {
+      gateBlocking: false,
+      stageAfter: "code",
+      recommendedActions: [
+        {
+          kind: "drive_stage",
+          owner: "coder",
+          stage: "code",
+          summary: "Implement the approved experiments as runnable bundles.",
+          command: "/implement-experiment",
+          mailboxMessageId: null,
+          cooldownRemainingSeconds: 0,
+          blocking: false,
+        },
+      ],
+    },
+    launchedStageKeys: new Map(),
+    deps: {
+      listChannelProjectBindingsForWorkflow() {
+        return {
+          enabled: true,
+          storePath: projectsRoot,
+          bindings: [],
+        };
+      },
+    },
+  });
+
+  assert.equal(launch.launched, true);
+  assert.equal(launch.reason, "started");
+  assert.equal(launch.owner, "coder");
+  assert.equal(launch.sessionKey, "agent:coder:discord:group:paper-lab");
+  assert.equal(runs.length, 1);
 });
 
 test("maybeLaunchAutoStageForProject claims the next matching task for the launched owner session", async (t) => {
@@ -2499,6 +2650,94 @@ test("maybeLaunchPaperIngestionWorkerForProject starts queued PaperNexus uploads
   assert.equal(manifest.paper_ingestion.completed_papers.length, 1);
 });
 
+test("maybeLaunchPaperIngestionWorkerForProject lets the control-plane advance literature requisitions without a graph-build agent turn", async (t) => {
+  const projectsRoot = await makeProjectsRoot();
+  const projectRoot = path.join(projectsRoot, "alpha");
+  const calls = [];
+
+  t.after(async () => {
+    await fs.rm(projectsRoot, { recursive: true, force: true });
+  });
+
+  await fs.mkdir(projectRoot, { recursive: true });
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "alpha",
+    current_stage: "graph_build",
+    owner_agent: "researcher",
+    paper_ingestion: {
+      queued_requests: [
+        {
+          request_id: "req-lit-1",
+          request_kind: "requisition",
+          status: "queued",
+          trigger_kind: "idea_catalyst_requisition",
+          created_at: "2026-04-02T00:00:00.000Z",
+          updated_at: "2026-04-02T00:00:00.000Z",
+        },
+      ],
+    },
+  });
+
+  const launch = await maybeLaunchPaperIngestionWorkerForProject({
+    workflowRuntime: {
+      async run() {
+        throw new Error("legacy research_queue fallback should not run");
+      },
+    },
+    workflowPolicy: {
+      enableChannelProjectBindings: false,
+      projectsRoot,
+      heartbeatBackgroundChecks: true,
+      agentContactCooldownSeconds: 300,
+      enableWorkflowMailbox: true,
+    },
+    projectRoot,
+    projectId: "alpha",
+    triggerKind: "coordinator_heartbeat",
+    deps: {
+      async advanceLiteratureDiscoveryRequisition(params) {
+        calls.push(params);
+        return {
+          advanced: true,
+          reason: "launched_or_polled",
+          requestId: "req-lit-1",
+          status: "running",
+          startedAt: "2026-04-02T00:01:00.000Z",
+          attemptCount: 1,
+          runId: "pn-run-1",
+          queueProgress: {
+            sequence: 7,
+            last_event_at: "2026-04-02T00:02:00.000Z",
+            remaining: 3,
+            completed: 2,
+            failed: 0,
+          },
+          sourceIndexPath: null,
+          batchManifestPath: null,
+          materializedPaperCount: 0,
+          summary: "Workflow-owned literature discovery requisition is waiting on remote import progress.",
+          catchup: null,
+          workflowControl: {
+            stage: "graph_build",
+            owner: "researcher",
+            nextAction: "/graph-build",
+            blockingReason: "workflow-owned graph enrichment requisition is still active",
+          },
+        };
+      },
+    },
+  });
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].projectRoot, projectRoot);
+  assert.equal(calls[0].projectId, "alpha");
+  assert.equal(launch.launched, true);
+  assert.equal(launch.queued, false);
+  assert.equal(launch.reason, "started");
+  assert.equal(launch.runId, "pn-run-1");
+  assert.equal(launch.queueKey, "req-lit-1");
+});
+
 test("maybeLaunchAutoStageForProject keeps the researcher service session pool isolated per project", async (t) => {
   const projectsRoot = await makeProjectsRoot();
   const alphaRoot = path.join(projectsRoot, "alpha");
@@ -2833,6 +3072,78 @@ test("maybeAdvanceAutoModeDiscussionForProject blocks runtime discussion when pr
   assert.equal(result.launched, false);
   assert.equal(result.reason, "binding_missing");
   assert.equal(runtimeCalls.length, 0);
+});
+
+test("maybeAdvanceAutoModeDiscussionForProject accepts notification-only workflow channels", async (t) => {
+  const projectRoot = await makeProject(await makeProjectsRoot(), "alpha", "write");
+  const runtimeCalls = [];
+
+  t.after(async () => {
+    await fs.rm(path.dirname(projectRoot), { recursive: true, force: true });
+  });
+
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "alpha",
+    current_stage: "write",
+    citation_integrity: {
+      verification_status: "needs_revision",
+      hallucinated_citation_count: 1,
+    },
+    writing_contract: {
+      template_status: "ready",
+    },
+    innovation_reflection: {
+      status: "fresh",
+    },
+  });
+  await recordDiscordNotificationTarget(projectRoot, "alpha");
+
+  const result = await maybeAdvanceAutoModeDiscussionForProject({
+    workflowRuntime: {
+      async run(params) {
+        runtimeCalls.push(params);
+        return { runId: `discussion-run-${runtimeCalls.length}` };
+      },
+    },
+    workflowPolicy: {
+      autoMode: "aggressive",
+      autoGate: {
+        ...defaultAutoGateConfig(),
+        enabled: true,
+      },
+      enableChannelProjectBindings: true,
+      projectsRoot: path.dirname(projectRoot),
+      heartbeatBackgroundChecks: true,
+      agentContactCooldownSeconds: 300,
+      enableWorkflowMailbox: true,
+    },
+    projectRoot,
+    projectId: "alpha",
+    autoIteratorResult: {
+      configuredAutoMode: "aggressive",
+      autoModeRiskLevel: "severe",
+      autoModeRiskFingerprint: "risk-fingerprint-notification",
+      autoModeReasons: ["Citation integrity reports hallucinated citations."],
+      stageAfter: "write",
+      ownerAfter: "academic_writer",
+      nextAction: "/write-paper",
+      blockingReason: "Citation verification is not complete.",
+      missingStageSignals: ["citation_integrity.verification_status must be verified"],
+    },
+    deps: {
+      listChannelProjectBindingsForWorkflow() {
+        return {
+          enabled: true,
+          storePath: path.dirname(projectRoot),
+          bindings: [],
+        };
+      },
+    },
+  });
+
+  assert.equal(result.launched, true);
+  assert.equal(result.reason, "started");
+  assert.equal(runtimeCalls.length, 3);
 });
 
 test("maybeAdvanceAutoModeDiscussionForProject creates and resolves a risk discussion round", async (t) => {
@@ -6305,6 +6616,168 @@ test("maybeAdvanceAutoCodeReviewForProject retires superseded reviewer runtime w
   assert.equal(retiredQueueEntries.length, 3);
   assert.deepEqual(
     retiredQueueEntries.map((entry) => entry.status).sort(),
+    ["completed", "completed", "completed"]
+  );
+});
+
+test("maybeAdvanceAutoCodeReviewForProject clears a reviewing round when the code review gate is no longer active", async (t) => {
+  const projectRoot = await makeProject(await makeProjectsRoot(), "alpha", "code");
+  let runCount = 0;
+
+  t.after(async () => {
+    await fs.rm(path.dirname(projectRoot), { recursive: true, force: true });
+  });
+
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "alpha",
+    current_stage: "code",
+    research_program: {
+      tracks: [
+        {
+          track_id: "track-1",
+          status: "active",
+          hypothesis: "Graph grounding improves support precision.",
+          novelty_basis: "It couples frontier packets with section drafting.",
+        },
+      ],
+    },
+  });
+  await writeJson(path.join(projectRoot, "TRACK_REGISTRY.json"), {
+    tracks: [{ track_id: "track-1", status: "active" }],
+  });
+  await fs.mkdir(path.join(projectRoot, "orchestrator"), { recursive: true });
+  await fs.writeFile(path.join(projectRoot, "orchestrator", "PLAN.md"), "# plan\n", "utf8");
+  await fs.writeFile(path.join(projectRoot, "orchestrator", "TODOS.md"), "# todos\n", "utf8");
+  await fs.writeFile(
+    path.join(projectRoot, "orchestrator", "PLAN_AUDIT.md"),
+    "# audit\n",
+    "utf8"
+  );
+  const bundleDir = path.join(
+    projectRoot,
+    "coder",
+    "experiments",
+    "track-1",
+    "exp-1__baseline"
+  );
+  await fs.mkdir(bundleDir, { recursive: true });
+  await fs.writeFile(path.join(projectRoot, "coder", "EXPERIMENT_INDEX.md"), "# index\n", "utf8");
+  await fs.writeFile(path.join(bundleDir, "train.py"), "print('ok')\n", "utf8");
+  await fs.writeFile(path.join(bundleDir, "README.md"), "# experiment\n", "utf8");
+  await writeJson(path.join(bundleDir, "EXPERIMENT_MANIFEST.json"), {
+    experiment_id: "exp-1",
+    project_id: "alpha",
+    track_id: "track-1",
+    question: "Does graph grounding improve support precision?",
+    hypothesis: "Graph grounding improves support precision.",
+    novelty_basis: "It couples frontier packets with section drafting.",
+    baseline_reference: "baseline-a",
+    primary_baseline_metric: "acc",
+    target_improvement: "Improve acc by >= 2 points over baseline-a.",
+    baseline_training_protocol: "Reuse baseline-a training settings.",
+    baseline_eval_protocol: "Reuse baseline-a evaluation protocol.",
+    innovation_points: ["Graph-grounded support routing"],
+    validation_steps: [
+      {
+        step_id: "step-1",
+        objective: "Enable graph-grounded support routing only.",
+        covers: ["Graph-grounded support routing"],
+      },
+    ],
+    ablation_plan: [
+      {
+        ablation_id: "minus-routing",
+        objective: "Disable graph routing.",
+        covers: ["Graph-grounded support routing"],
+      },
+    ],
+    implementation_proof: {
+      changed_files: ["train.py"],
+      integration_points: [
+        {
+          point_id: "routing-hook",
+          path: "train.py",
+          symbol: "graph_router_forward",
+          covers: ["Graph-grounded support routing"],
+        },
+      ],
+      activation_signals: [
+        {
+          point_id: "routing-log",
+          summary: "Logs report graph routing enabled.",
+          covers: ["Graph-grounded support routing"],
+        },
+      ],
+      execution_command: "python train.py",
+    },
+  });
+
+  const policy = {
+    autoMode: "aggressive",
+    autoGate: {
+      ...defaultAutoGateConfig(),
+      enabled: true,
+    },
+    enableChannelProjectBindings: true,
+    projectsRoot: path.dirname(projectRoot),
+    heartbeatBackgroundChecks: true,
+    agentContactCooldownSeconds: 300,
+    enableWorkflowMailbox: true,
+  };
+  const workflowRuntime = {
+    async run() {
+      runCount += 1;
+      return { runId: `code-review-run-${runCount}` };
+    },
+  };
+
+  const started = await maybeAdvanceAutoCodeReviewForProject({
+    workflowRuntime,
+    workflowPolicy: policy,
+    projectRoot,
+    projectId: "alpha",
+    autoIteratorResult: {
+      gateBlocking: true,
+      gateReason:
+        "CODE innovation review is pending; wait for the reviewer panel to validate baseline alignment, execution viability, and innovation-step coverage.",
+      stageAfter: "code",
+      missingStageSignals: [],
+      recommendedActions: [],
+    },
+  });
+  assert.equal(started.reason, "started");
+
+  const startedStore = await readCodeReviewStore(projectRoot);
+  const startedQueueKeys = new Set(
+    startedStore.currentRound?.attempts.map((attempt) => attempt.queueKey).filter(Boolean) ?? []
+  );
+  assert.equal(startedQueueKeys.size, 3);
+
+  const cleared = await maybeAdvanceAutoCodeReviewForProject({
+    workflowPolicy: policy,
+    projectRoot,
+    projectId: "alpha",
+    autoIteratorResult: {
+      gateBlocking: false,
+      stageAfter: "code",
+      missingStageSignals: [
+        "experiment bundle no longer aligns to the active track contract",
+      ],
+      recommendedActions: [],
+    },
+  });
+  assert.equal(cleared.reason, "not_code_gate");
+
+  const clearedStore = await readCodeReviewStore(projectRoot);
+  assert.equal(clearedStore.currentRound, null);
+
+  const runtimeSessionsStore = await readWorkflowRuntimeSessionsStore(projectRoot);
+  const retiredSessionEntries = runtimeSessionsStore.entries.filter((entry) =>
+    startedQueueKeys.has(entry.queueKey)
+  );
+  assert.equal(retiredSessionEntries.length, 3);
+  assert.deepEqual(
+    retiredSessionEntries.map((entry) => entry.status).sort(),
     ["completed", "completed", "completed"]
   );
 });

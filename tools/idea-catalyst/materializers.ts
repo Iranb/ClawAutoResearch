@@ -565,6 +565,39 @@ function isSatisfiedIdeaCatalystRequisitionStatus(value: unknown): boolean {
   );
 }
 
+function isCurrentGraphSatisfactionStatus(value: unknown): boolean {
+  const status = String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/-/g, "_");
+  return (
+    status === "degraded_satisfied_current_graph" ||
+    status === "satisfied_bounded_with_import_blocker" ||
+    status === "workflow_state_satisfied" ||
+    status === "satisfied_by_verified_graph_import"
+  );
+}
+
+function hasExplicitCurrentGraphSatisfactionEvidence(
+  report: Record<string, unknown>
+): boolean {
+  const selectedPaperCount =
+    pickNumber(report, ["selected_paper_count", "selectedPaperCount"]) ?? 0;
+  const candidatePaperCount =
+    pickNumber(report, ["candidate_paper_count", "candidatePaperCount"]) ?? 0;
+  const remediation = asRecord(report.remediation_pass ?? report.remediationPass);
+  const remediationAcceptsCurrentGraph =
+    remediation?.graph_ready === true &&
+    remediation?.can_proceed_with_existing_graph === true;
+  return (
+    report.evidence_gap_closed === true ||
+    report.evidenceGapClosed === true ||
+    selectedPaperCount > 0 ||
+    candidatePaperCount > 0 ||
+    remediationAcceptsCurrentGraph
+  );
+}
+
 function isAcceptedIdeaCatalystSatisfactionReport(value: unknown): boolean {
   const report = asRecord(value);
   if (!report) {
@@ -574,6 +607,13 @@ function isAcceptedIdeaCatalystSatisfactionReport(value: unknown): boolean {
   const decision = pickString(report, ["decision", "satisfaction_decision", "satisfactionDecision"])
     ?.trim()
     .toLowerCase();
+  if (
+    (isCurrentGraphSatisfactionStatus(status) ||
+      isCurrentGraphSatisfactionStatus(decision)) &&
+    !hasExplicitCurrentGraphSatisfactionEvidence(report)
+  ) {
+    return false;
+  }
   if (
     status === "valid" ||
     status === "warning" ||
@@ -676,6 +716,51 @@ async function readIdeaCatalystRequisitionSatisfaction(params: {
     "satisfactionReportPath",
   ]);
   if (isSatisfiedIdeaCatalystRequisitionStatus(existingStatus)) {
+    if (existingReportPath) {
+      const report = await readAcceptedIdeaCatalystSatisfactionReport({
+        projectRoot: params.projectRoot,
+        reportPath: existingReportPath,
+      });
+      if (!report) {
+        return {
+          satisfied: false,
+          reportBacked: false,
+          requestId: buildIdeaCatalystRequisitionRequestId(params.requisitionId),
+          validationReportPath: existingReportPath,
+          validationStatus: existingStatus ?? null,
+          validationSummary:
+            "IDEA-CATALYST requisition satisfaction report does not contain request-specific source-backed coverage evidence.",
+        };
+      }
+      return {
+        satisfied: true,
+        reportBacked: true,
+        requestId:
+          pickString(report, ["request_id", "requestId"]) ??
+          buildIdeaCatalystRequisitionRequestId(params.requisitionId),
+        validationReportPath: existingReportPath,
+        validationStatus:
+          pickString(report, ["status"]) ??
+          pickString(report, ["decision", "satisfaction_decision", "satisfactionDecision"]) ??
+          existingStatus ??
+          null,
+        validationSummary:
+          pickString(report, ["reason", "summary"]) ??
+          pickString(report, ["validation_summary", "validationSummary"]) ??
+          null,
+      };
+    }
+    if (isCurrentGraphSatisfactionStatus(existingStatus)) {
+      return {
+        satisfied: false,
+        reportBacked: false,
+        requestId: buildIdeaCatalystRequisitionRequestId(params.requisitionId),
+        validationReportPath: null,
+        validationStatus: existingStatus ?? null,
+        validationSummary:
+          "IDEA-CATALYST current-graph satisfaction requires an explicit validation report.",
+      };
+    }
     return {
       satisfied: true,
       reportBacked: false,
@@ -1646,6 +1731,25 @@ export async function materializeIdeaCatalystState(params: {
     pickString(mergedGraphPacket, ["target_domain", "targetDomain"]) ??
     pickString(topicSummary ?? {}, ["target_domain", "targetDomain"]) ??
     "Computer Science";
+  const topicContext = uniqueStrings([
+    asString(manifest.title),
+    researchProgram.problemStatement,
+    researchProgram.goal,
+    researchProgram.baselineReference
+      ? `baseline ${researchProgram.baselineReference}`
+      : null,
+    researchProgram.primaryMetric
+      ? `metric ${researchProgram.primaryMetric}`
+      : null,
+    ...researchProgram.datasets.map((dataset) => `dataset ${dataset}`),
+    pickString(topicSummary ?? {}, [
+      "topic",
+      "research_topic",
+      "researchTopic",
+      "title",
+      "summary",
+    ]),
+  ].filter((entry): entry is string => Boolean(entry))).slice(0, 6);
   const challengeClusters = uniqueStrings([
     ...graphIndices.challengeClusters,
     ...markdownBulletsToList(problemDecompositionText).slice(0, 4),
@@ -1726,6 +1830,7 @@ export async function materializeIdeaCatalystState(params: {
       decompositionPacket,
       {
         llmJudgment: llmSufficiencyJudgment,
+        topicContext,
       }
     );
     iterations.push(

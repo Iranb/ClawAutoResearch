@@ -15,6 +15,7 @@ import {
   downgradeWorkflowAgentCapability,
   upsertWorkflowAgentCapability,
 } from "../../tools/workflow-handoff/agent-capabilities.ts";
+import { buildWorkflowControlContract } from "../../tools/workflow-control-contract.ts";
 
 test("deriveAgentSessionKeyForRole keeps the same channel peer and swaps the agent id", () => {
   const sessionKey = deriveAgentSessionKeyForRole({
@@ -243,8 +244,20 @@ test("dispatchWorkflowTaskToAgent reuses an already active owner session instead
     `${JSON.stringify(
       {
         project_id: "demo-project",
-        current_stage: "write",
-        owner_agent: "academic_writer",
+        current_stage: "graph_build",
+        owner_agent: "researcher",
+        workflow_control: buildWorkflowControlContract({
+          contractId: "wfctl_write_active",
+          reconciledAt: "2026-04-14T02:00:00.000Z",
+          stage: "write",
+          owner: "academic_writer",
+          nextAction: "/write-paper",
+          status: "ready",
+          completionStatus: "incomplete",
+          completionSource: "write_completion",
+          runtimeState: "active",
+          sessionKey: "agent:academic_writer:discord:group:paper-lab",
+        }),
       },
       null,
       2

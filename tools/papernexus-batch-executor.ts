@@ -515,6 +515,7 @@ function normalizeQueueProgress(value: unknown): PaperIngestionQueueProgress | n
     return null;
   }
   const record = value as Record<string, unknown>;
+  const sequence = readNumber(record.sequence);
   const total = readNumber(record.total);
   const pending = readNumber(record.pending);
   const running = readNumber(record.running);
@@ -523,6 +524,8 @@ function normalizeQueueProgress(value: unknown): PaperIngestionQueueProgress | n
   const remaining = readNumber(record.remaining);
   const overallPercent = readNumber(record.overallPercent ?? record.overall_percent);
   return {
+    sequence: sequence == null ? null : Math.max(0, Math.floor(sequence)),
+    lastEventAt: readString(record.lastEventAt ?? record.last_event_at),
     total: total == null ? null : Math.max(0, Math.floor(total)),
     pending: pending == null ? null : Math.max(0, Math.floor(pending)),
     running: running == null ? null : Math.max(0, Math.floor(running)),

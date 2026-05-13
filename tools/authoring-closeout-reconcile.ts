@@ -34,6 +34,7 @@ import {
   MIN_CONFERENCE_PAPER_CITATION_COUNT,
   minimumCitationCountForPaperMode,
 } from "./research-writing/citation-count-policy";
+import { reconcileWorkflowControl } from "./workflow-control-reconciler";
 
 const execFileAsync = promisify(execFile);
 
@@ -3351,10 +3352,32 @@ export async function reconcileAuthoringCloseout(params: {
       : {}),
     paper_mode: inferredPaperMode,
   };
+  if (nextStage === "submit") {
+    const existingSubmissionReady = readRecord(latestManifest.submission_ready) ?? {};
+    latestManifest.submission_ready = {
+      ...existingSubmissionReady,
+      status: "ready",
+      final_compile_status: compileResult.compileStatus,
+      paper_tex_path: "academic_writer/paper/main.tex",
+      paper_pdf_path: "academic_writer/paper/main.pdf",
+      review_packet_path: "reviewer/REVIEW_PACKET.json",
+      review_issue_manifest_path: "reviewer/REVIEW_ISSUES.json",
+      citation_verification_path: "reviewer/CITATION_VERIFICATION.md",
+      remaining_risk_note:
+        existingSubmissionReady.remaining_risk_note ??
+        "Local authoring closeout found no medium-or-higher blockers; final submission still requires the submit-stage human gate.",
+      last_updated_at: new Date().toISOString(),
+    };
+  }
   await writeJsonEnsured(path.join(projectRoot, "PROJECT_MANIFEST.json"), latestManifest);
+  const reconciled = await reconcileWorkflowControl({
+    projectRoot,
+    policy: { allowProjectionRepair: true },
+    manifest: latestManifest,
+  });
   await syncAuthoringArtifactRecovery({
     projectRoot,
-    writingSession: latestManifest.writing_session as Record<string, unknown>,
+    writingSession: reconciled.manifest.writing_session as Record<string, unknown>,
   }).catch(() => null);
 
   return {

@@ -2,6 +2,7 @@ import { buildExperimentReviewGuidance } from "./experiment-review-guidance";
 import { buildIdeaCatalystGuidance } from "./idea-catalyst-guidance";
 import { buildPapernexusGuidance } from "./papernexus-guidance";
 import { buildWritingGuidance } from "./writing-guidance";
+import { normalizeWorkflowControlContract } from "../workflow-control-contract.js";
 import type {
   BuildDynamicTasksDeps,
   BuildDynamicTasksParams,
@@ -19,7 +20,11 @@ export function buildDynamicTasksImpl(
   const tasks = [...policy.backgroundTasks];
   const experimentMemory = deps.asRecord(params.manifest?.experiment_memory);
   const graphWatch = deps.asRecord(params.manifest?.graph_watch);
-  const nextAction = deps.asString(params.manifest?.next_action);
+  const workflowControl = normalizeWorkflowControlContract(
+    params.manifest?.workflow_control
+  );
+  const nextAction =
+    workflowControl?.next_action ?? deps.asString(params.manifest?.next_action);
 
   if (params.unreadMailbox.length > 0) {
     tasks.unshift("Read workflow mailbox first and acknowledge blocker/handoff items before new work.");

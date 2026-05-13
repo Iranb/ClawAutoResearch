@@ -2369,6 +2369,67 @@ function getQueueProgressCount(
   ).length;
 }
 
+function normalizeRemoteQueueProgressForPaperIngestion(
+  queueProgressPayload: Record<string, unknown> | null
+): Record<string, unknown> | null {
+  const summary = asRecord(queueProgressPayload?.summary);
+  const tasks = asRecordArray(queueProgressPayload?.tasks);
+  const total =
+    pickNumberValue(summary, ["total"]) ??
+    pickNumberValue(queueProgressPayload, ["total"]) ??
+    (tasks.length > 0 ? tasks.length : null);
+  const completed = getQueueProgressCount(queueProgressPayload, "completed");
+  const failed = getQueueProgressCount(queueProgressPayload, "failed");
+  const running = getQueueProgressCount(queueProgressPayload, "running");
+  const pending = getQueueProgressCount(queueProgressPayload, "pending");
+  const remaining = getQueueProgressRemaining(queueProgressPayload);
+  const overallPercent =
+    pickNumberValue(summary, ["overall_percent", "overallPercent", "percent"]) ??
+    pickNumberValue(queueProgressPayload, [
+      "overall_percent",
+      "overallPercent",
+      "percent",
+    ]);
+  const sequence =
+    pickNumberValue(summary, ["sequence"]) ??
+    pickNumberValue(queueProgressPayload, ["sequence"]);
+  const lastEventAt =
+    pickString(summary ?? {}, ["last_event_at", "lastEventAt", "updated_at", "updatedAt"]) ??
+    pickString(queueProgressPayload ?? {}, [
+      "last_event_at",
+      "lastEventAt",
+      "updated_at",
+      "updatedAt",
+    ]);
+  if (
+    total === null &&
+    remaining === null &&
+    overallPercent === null &&
+    sequence === null &&
+    !lastEventAt &&
+    completed === 0 &&
+    failed === 0 &&
+    running === 0 &&
+    pending === 0
+  ) {
+    return null;
+  }
+  return {
+    sequence: sequence === null ? null : Math.max(0, Math.floor(sequence)),
+    last_event_at: lastEventAt,
+    total: total === null ? null : Math.max(0, Math.floor(total)),
+    pending,
+    running,
+    completed,
+    failed,
+    remaining: remaining === null ? null : Math.max(0, Math.floor(remaining)),
+    overall_percent:
+      overallPercent === null
+        ? null
+        : Math.max(0, Math.min(100, Math.round(overallPercent))),
+  };
+}
+
 function getQueueProgressFirstError(
   queueProgressPayload: Record<string, unknown> | null
 ): string | null {
@@ -2565,6 +2626,9 @@ async function refreshExistingRemoteLiteratureDiscovery(params: {
               ? firstError ?? "PaperNexus import queue failed."
               : "PaperNexus import queue progress was refreshed without resubmitting discovery.",
           validation_report_path: params.artifactRelativePath,
+          queue_progress: normalizeRemoteQueueProgressForPaperIngestion(
+            queueProgressPayload.payload
+          ),
           attempt_count: params.request.attemptCount,
           last_attempt_at: params.request.lastAttemptAt,
           max_attempts: params.request.maxAttempts,
@@ -2987,6 +3051,9 @@ async function maybeRunRemoteLiteratureDiscovery(params: {
                 "PaperNexus discovery completed but did not resolve importable sources."
               : "PaperNexus discovery/import result was materialized into local graph-build artifacts.",
           validation_report_path: artifactRelativePath,
+          queue_progress: normalizeRemoteQueueProgressForPaperIngestion(
+            queueProgressPayload
+          ),
           attempt_count: (activeRequest?.attemptCount ?? 0) + 1,
           last_attempt_at: params.now,
           max_attempts: activeRequest?.maxAttempts ?? 3,

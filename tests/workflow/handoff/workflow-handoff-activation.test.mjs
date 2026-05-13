@@ -18,6 +18,9 @@ import {
   readWorkflowRuntimeQueueStore,
   writeWorkflowRuntimeQueueStore,
 } from "../../../tools/workflow-runtime-state.ts";
+import {
+  buildWorkflowControlContract,
+} from "../../../tools/workflow-control-contract.ts";
 
 test("claimAndActivateWorkflowHandoffForAgent switches owner only after the target role claims the prepared handoff", async (t) => {
   const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-handoff-activation-"));
@@ -30,9 +33,23 @@ test("claimAndActivateWorkflowHandoffForAgent switches owner only after the targ
     `${JSON.stringify(
       {
         project_id: "demo-project",
-        current_stage: "survey_review",
+        current_stage: "plan",
         current_micro_stage: "synthesis",
-        owner_agent: "researcher",
+        owner_agent: "orchestrator",
+        next_action: "Stale plan projection.",
+        workflow_control: buildWorkflowControlContract({
+          contractId: "wfctl-existing-survey",
+          reconciledAt: "2026-05-12T00:00:00.000Z",
+          stage: "survey_review",
+          owner: "researcher",
+          nextAction: "Finish survey review.",
+          status: "waiting",
+          blockingReason: null,
+          completionStatus: "incomplete",
+          completionSource: "survey_review_completion",
+          completionReason: "owner_work_required",
+          runtimeState: "idle",
+        }),
         orchestration_state: {
           status: "waiting",
           current_owner: "researcher",
@@ -120,6 +137,22 @@ test("claimAndActivateWorkflowHandoffForAgent switches owner only after the targ
   assert.equal(manifest.owner_agent, "academic_writer");
   assert.equal(manifest.current_stage, "write");
   assert.equal(manifest.current_micro_stage, "bootstrap");
+  assert.equal(manifest.next_action, "Begin survey paper writing from survey review artifacts.");
+  assert.equal(manifest.blocking_reason, null);
+  assert.equal(manifest.workflow_control.stage, "write");
+  assert.equal(manifest.workflow_control.owner, "academic_writer");
+  assert.equal(
+    manifest.workflow_control.next_action,
+    "Begin survey paper writing from survey review artifacts."
+  );
+  assert.equal(manifest.workflow_control.status, "ready");
+  assert.equal(manifest.workflow_control.completion.status, "incomplete");
+  assert.equal(manifest.workflow_control.completion.source, "write_handoff");
+  assert.equal(manifest.workflow_control.runtime_state, "active");
+  assert.equal(
+    manifest.workflow_control.session_key,
+    "agent:academic_writer:discord:channel:paper-lab"
+  );
   assert.equal(manifest.orchestration_state.current_owner, "academic_writer");
   assert.equal(manifest.orchestration_state.pending_handoff_id, null);
   assert.equal(manifest.orchestration_state.handoff_phase, "activated");
@@ -191,6 +224,14 @@ test("claimAndActivateWorkflowHandoffForAgent can be blocked by a before-activat
   assert.equal(manifest.owner_agent, "reviewer");
   assert.equal(manifest.current_stage, "review");
   assert.equal(manifest.blocking_reason, "File audit hook blocked activation.");
+  assert.equal(manifest.workflow_control.stage, "review");
+  assert.equal(manifest.workflow_control.owner, "reviewer");
+  assert.equal(manifest.workflow_control.status, "blocked");
+  assert.equal(manifest.workflow_control.blocking_reason, "File audit hook blocked activation.");
+  assert.equal(manifest.workflow_control.completion.status, "blocked");
+  assert.equal(manifest.workflow_control.completion.source, "handoff_activation");
+  assert.equal(manifest.workflow_control.runtime_state, "idle");
+  assert.equal(manifest.workflow_control.session_key, "agent:academic_writer:test");
 
   const retried = await claimAndActivateWorkflowHandoffForAgent({
     projectRoot,

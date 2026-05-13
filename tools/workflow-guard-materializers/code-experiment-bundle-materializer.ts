@@ -16,6 +16,7 @@ import {
   normalizeOrchestrationState,
   serializeOrchestrationState,
 } from "../workflow-guard-state/execution-state";
+import { reconcileWorkflowControl } from "../workflow-control-reconciler";
 import {
   normalizeResearchProgramState,
 } from "../workflow-guard-state/research-program";
@@ -47,12 +48,67 @@ type ExistingCodeBundle = {
   hasProtocol: boolean;
   hasDataset: boolean;
   legacyLocalProxy: boolean;
+  profileMismatch: boolean;
+};
+
+type CodeExperimentProfile = {
+  kind: "gcd" | "sqlite" | "generic_gcd_compat";
+  slug: string;
+  name: string;
+  implementationType: string;
+  protocol: string;
+  dataset: string;
+  readmeTitle: string;
 };
 
 function firstNonEmpty(...values: Array<string | null | undefined>): string | null {
   return (
     values.find((value) => typeof value === "string" && value.trim().length > 0) ?? null
   );
+}
+
+function isGcdTopic(value: string | null | undefined): boolean {
+  return /\bgcd\b|generalized category discovery|fixmatch/u.test(value?.toLowerCase() ?? "");
+}
+
+function isSqliteTopic(value: string | null | undefined): boolean {
+  return /sqlite|b-?tree|covering index|composite index|single-column index|point quer|range quer|query latency|insert overhead|database size/u.test(
+    value?.toLowerCase() ?? ""
+  );
+}
+
+function resolveCodeExperimentProfile(topic: string): CodeExperimentProfile {
+  if (isSqliteTopic(topic)) {
+    return {
+      kind: "sqlite",
+      slug: "sqlite_index_latency_benchmark",
+      name: "sqlite_index_latency_benchmark",
+      implementationType: "local_reference_sqlite_index_benchmark",
+      protocol: "SQLITE_PROTOCOL.json",
+      dataset: "data/sqlite_workload_config.json",
+      readmeTitle: "SQLite Index Latency Reference Benchmark",
+    };
+  }
+  if (isGcdTopic(topic)) {
+    return {
+      kind: "gcd",
+      slug: "fixmatch_gcd_consistency_debiasing",
+      name: "fixmatch_gcd_consistency_debiasing",
+      implementationType: "local_reference_gcd_benchmark",
+      protocol: CODE_EXPERIMENT_ARTIFACTS.protocol,
+      dataset: CODE_EXPERIMENT_ARTIFACTS.dataset,
+      readmeTitle: "FixMatch-Inspired GCD Reference Benchmark",
+    };
+  }
+  return {
+    kind: "generic_gcd_compat",
+    slug: "local_consistency_debiasing_probe",
+    name: "fixmatch_gcd_consistency_debiasing",
+    implementationType: "local_reference_gcd_benchmark",
+    protocol: CODE_EXPERIMENT_ARTIFACTS.protocol,
+    dataset: CODE_EXPERIMENT_ARTIFACTS.dataset,
+    readmeTitle: "FixMatch-Inspired GCD Reference Benchmark",
+  };
 }
 
 function isSafePathSegment(value: string): boolean {
@@ -291,9 +347,28 @@ function isLegacyLocalProxyText(value: string | null | undefined): boolean {
   return /synthetic proxy|synthetic-gcd-proxy|local proxy|build_dataset\(seed\)/iu.test(value);
 }
 
+function isProfileMismatchText(params: {
+  profile: CodeExperimentProfile;
+  manifest: Record<string, unknown> | null;
+  trainText: string | null;
+  readmeText: string | null;
+}): boolean {
+  const manifestText = params.manifest ? JSON.stringify(params.manifest) : "";
+  const text = [params.trainText ?? "", params.readmeText ?? "", manifestText].join("\n");
+  if (params.profile.kind === "sqlite") {
+    return /GCD_PROTOCOL|gcd_reference_split|run_fixmatch_consistency|known_novel_h_score|FixMatch|generalized category discovery/iu.test(
+      text
+    );
+  }
+  return /SQLITE_PROTOCOL|sqlite_workload_config|sqlite3|create_index_strategy|run_sqlite_index_benchmark/iu.test(
+    text
+  );
+}
+
 async function listExistingCodeBundles(
   projectRoot: string,
-  trackId: string
+  trackId: string,
+  profile: CodeExperimentProfile
 ): Promise<ExistingCodeBundle[]> {
   const trackDir = path.join(projectRoot, "coder", "experiments", trackId);
   let entries: Array<{ name: string; isDirectory(): boolean }>;
@@ -315,16 +390,18 @@ async function listExistingCodeBundles(
     const manifestPath = path.join(dir, CODE_EXPERIMENT_ARTIFACTS.manifest);
     const trainText = await readTextIfExists(path.join(dir, CODE_EXPERIMENT_ARTIFACTS.train));
     const readmeText = await readTextIfExists(path.join(dir, CODE_EXPERIMENT_ARTIFACTS.readme));
+    const manifest = await readJsonIfExists<Record<string, unknown>>(manifestPath);
     bundles.push({
       dir,
       relativeDir,
       manifestPath,
-      manifest: await readJsonIfExists<Record<string, unknown>>(manifestPath),
+      manifest,
       hasTrain: await pathExists(path.join(dir, CODE_EXPERIMENT_ARTIFACTS.train)),
       hasReadme: await pathExists(path.join(dir, CODE_EXPERIMENT_ARTIFACTS.readme)),
-      hasProtocol: await pathExists(path.join(dir, CODE_EXPERIMENT_ARTIFACTS.protocol)),
-      hasDataset: await pathExists(path.join(dir, CODE_EXPERIMENT_ARTIFACTS.dataset)),
+      hasProtocol: await pathExists(path.join(dir, profile.protocol)),
+      hasDataset: await pathExists(path.join(dir, profile.dataset)),
       legacyLocalProxy: isLegacyLocalProxyText(trainText) || isLegacyLocalProxyText(readmeText),
+      profileMismatch: isProfileMismatchText({ profile, manifest, trainText, readmeText }),
     });
   }
   return bundles.sort((left, right) => left.relativeDir.localeCompare(right.relativeDir));
@@ -588,6 +665,7 @@ function isCompleteAlignedCodeBundle(
     bundle.hasProtocol &&
     bundle.hasDataset &&
     !bundle.legacyLocalProxy &&
+    !bundle.profileMismatch &&
     isAlignedToTrackContract({ bundleManifest: bundle.manifest, track })
   );
 }
@@ -605,8 +683,14 @@ export async function shouldMaterializeCodeExperimentBundleImpl(params: {
   if (!track) {
     return false;
   }
+  const topic = inferTopic({
+    manifest: params.manifest,
+    researchProgram,
+    track,
+  });
+  const profile = resolveCodeExperimentProfile(topic);
   const indexPath = path.join(projectRoot, CODE_EXPERIMENT_ARTIFACTS.index);
-  const bundles = await listExistingCodeBundles(projectRoot, track.trackId);
+  const bundles = await listExistingCodeBundles(projectRoot, track.trackId, profile);
   if (!(await pathExists(indexPath))) {
     return true;
   }
@@ -627,7 +711,16 @@ export async function shouldMaterializeCodeExperimentBundleImpl(params: {
     return true;
   }
   for (const additionalTrack of tracks.slice(1)) {
-    const additionalBundles = await listExistingCodeBundles(projectRoot, additionalTrack.trackId);
+    const additionalTopic = inferTopic({
+      manifest: params.manifest,
+      researchProgram,
+      track: additionalTrack,
+    });
+    const additionalBundles = await listExistingCodeBundles(
+      projectRoot,
+      additionalTrack.trackId,
+      resolveCodeExperimentProfile(additionalTopic)
+    );
     const additionalRepairableBundles = selectRepairableBundles({
       bundles: additionalBundles,
       track: additionalTrack,
@@ -649,7 +742,10 @@ export async function shouldMaterializeCodeExperimentBundleImpl(params: {
         bundle.hasTrain &&
         bundle.hasReadme &&
         isAlignedToTrackContract({ bundleManifest: bundle.manifest, track }) &&
-        (bundle.legacyLocalProxy || !bundle.hasProtocol || !bundle.hasDataset)
+        (bundle.legacyLocalProxy ||
+          bundle.profileMismatch ||
+          !bundle.hasProtocol ||
+          !bundle.hasDataset)
     )
   ) {
     return true;
@@ -681,37 +777,155 @@ function buildExperimentManifest(params: {
   experimentId: string;
   bundleRelativeDir: string;
   topic: string;
+  profile: CodeExperimentProfile;
 }): Record<string, unknown> {
   const projectId =
     pickString(params.manifest, ["project_id", "projectId", "id"]) ??
     path.basename(params.projectRoot) ??
     "local-autoresearch-project";
+  const fallbackPrimaryMetric =
+    params.profile.kind === "sqlite"
+      ? "p95 query latency"
+      : isGcdTopic(params.topic)
+        ? "H-score with known and novel accuracy"
+        : "primary task quality metric";
   const primaryMetric =
-    params.track.mainMetric ??
-    params.researchProgram.primaryMetric ??
-    (/\bgcd\b|generalized category discovery/u.test(params.topic.toLowerCase())
-      ? "H-score with known and novel accuracy"
-      : "primary task quality metric");
+    params.track.mainMetric ?? params.researchProgram.primaryMetric ?? fallbackPrimaryMetric;
   const baselineReference =
     params.researchProgram.baselineReference ??
-    (/\bgcd\b|generalized category discovery/u.test(params.topic.toLowerCase())
+    (params.profile.kind === "sqlite"
+      ? "SQLite no-index table scan baseline"
+      : isGcdTopic(params.topic)
       ? "SimGCD-style supervised and semi-supervised GCD baselines"
       : "strongest available supervised baseline");
   const targetImprovement =
     params.track.successThreshold ??
     `Improve ${primaryMetric} over ${baselineReference} without regressing the baseline protocol.`;
-  const innovationPoints = defaultInnovationPoints(params.topic);
-  const datasetPath = `${params.bundleRelativeDir}/${CODE_EXPERIMENT_ARTIFACTS.dataset}`;
-  const protocolPath = `${params.bundleRelativeDir}/${CODE_EXPERIMENT_ARTIFACTS.protocol}`;
+  const innovationPoints =
+    params.profile.kind === "sqlite"
+      ? [
+          "Deterministic synthetic SQLite workload generation",
+          "Matched comparison of no-index, single-column, composite, and covering indexes",
+          "p95 latency, insert overhead, and database size tracking",
+        ]
+      : defaultInnovationPoints(params.topic);
+  const datasetPath = `${params.bundleRelativeDir}/${params.profile.dataset}`;
+  const protocolPath = `${params.bundleRelativeDir}/${params.profile.protocol}`;
   const executionCommand = `python ${params.bundleRelativeDir}/train.py --seed 42 --dataset ${datasetPath} --protocol ${protocolPath}`;
+
+  if (params.profile.kind === "sqlite") {
+    return {
+      experiment_id: params.experimentId,
+      project_id: projectId,
+      track_id: params.track.trackId,
+      name: params.profile.name,
+      status: "draft",
+      implementation_type: params.profile.implementationType,
+      question:
+        params.track.hypothesis ??
+        `Which SQLite index strategy improves ${primaryMetric} under a local CPU budget?`,
+      hypothesis:
+        params.track.hypothesis ??
+        `Composite and covering indexes improve ${primaryMetric} over the no-index baseline for selective point and range queries.`,
+      novelty_basis:
+        params.track.noveltyBasis ??
+        "The bundle turns the selected plan into a deterministic SQLite index microbenchmark.",
+      baseline_reference: baselineReference,
+      primary_baseline_metric: primaryMetric,
+      target_improvement: targetImprovement,
+      baseline_training_protocol:
+        "Generate the same deterministic SQLite rows for every strategy and keep PRAGMA settings fixed.",
+      baseline_eval_protocol:
+        "Run the same point and range query suite for every strategy and report p50/p95 latency, insert time, and database size.",
+      datasets:
+        params.researchProgram.datasets.length > 0
+          ? params.researchProgram.datasets
+          : ["synthetic-sqlite-events-workload"],
+      benchmark_protocol_path: protocolPath,
+      dataset_path: datasetPath,
+      reference_dataset: {
+        name: "synthetic-sqlite-events-workload",
+        config_file: datasetPath,
+        row_counts: [5000, 20000],
+        query_types: ["point_lookup", "category_range"],
+        index_strategies: ["no_index", "single_column", "composite", "covering"],
+        metric: "p95_query_latency_ms",
+      },
+      innovation_points: innovationPoints,
+      validation_steps: innovationPoints.map((point, index) => ({
+        step_id: `validation-${index + 1}`,
+        objective: `Validate ${point} with the shared SQLite workload and protocol.`,
+        covers: [point],
+      })),
+      ablation_plan: [
+        {
+          ablation_id: "ablation-no-index",
+          objective: "Run the no-index baseline with the same query suite.",
+          covers: ["Matched comparison of no-index, single-column, composite, and covering indexes"],
+        },
+        {
+          ablation_id: "ablation-single-column",
+          objective: "Run the single-column index variant to isolate category filtering.",
+          covers: ["Matched comparison of no-index, single-column, composite, and covering indexes"],
+        },
+        {
+          ablation_id: "ablation-composite",
+          objective: "Run the composite index variant to isolate range-filter ordering.",
+          covers: ["Matched comparison of no-index, single-column, composite, and covering indexes"],
+        },
+      ],
+      implementation_proof: {
+        changed_files: [
+          `${params.bundleRelativeDir}/train.py`,
+          datasetPath,
+          protocolPath,
+          `${params.bundleRelativeDir}/README.md`,
+          `${params.bundleRelativeDir}/EXPERIMENT_MANIFEST.json`,
+        ],
+        integration_points: [
+          {
+            point_id: "integration-workload",
+            path: `${params.bundleRelativeDir}/train.py`,
+            symbol: "generate_rows",
+            summary: "The runner generates the deterministic SQLite workload from the dataset config.",
+            covers: ["Deterministic synthetic SQLite workload generation"],
+          },
+          {
+            point_id: "integration-index-strategies",
+            path: `${params.bundleRelativeDir}/train.py`,
+            symbol: "create_index_strategy",
+            summary: "The runner applies each declared SQLite index strategy before timing queries.",
+            covers: [
+              "Matched comparison of no-index, single-column, composite, and covering indexes",
+            ],
+          },
+          {
+            point_id: "integration-latency-summary",
+            path: `${params.bundleRelativeDir}/train.py`,
+            symbol: "summarize_latency_metrics",
+            summary: "The runner records p50/p95 latency, insert overhead, and database size.",
+            covers: ["p95 latency, insert overhead, and database size tracking"],
+          },
+        ],
+        activation_signals: innovationPoints.map((point, index) => ({
+          point_id: `activation-${index + 1}`,
+          summary: `RESULT_SUMMARY.json records activation evidence for ${point}.`,
+          covers: [point],
+        })),
+        execution_command: executionCommand,
+      },
+      entry_point: "train.py",
+      expected_outputs: ["RESULT_SUMMARY.json"],
+    };
+  }
 
   return {
     experiment_id: params.experimentId,
     project_id: projectId,
     track_id: params.track.trackId,
-    name: "fixmatch_gcd_consistency_debiasing",
+    name: params.profile.name,
     status: "draft",
-    implementation_type: "local_reference_gcd_benchmark",
+    implementation_type: params.profile.implementationType,
     question:
       params.track.hypothesis ??
       `Does the proposed semi-supervised consistency route improve ${primaryMetric}?`,
@@ -925,7 +1139,228 @@ function appendMissingValidationCoverage(
   };
 }
 
-function buildTrainPy(): string {
+function profileContractFields(
+  manifest: Record<string, unknown>
+): Record<string, unknown> {
+  const keys = [
+    "name",
+    "implementation_type",
+    "baseline_reference",
+    "primary_baseline_metric",
+    "target_improvement",
+    "baseline_training_protocol",
+    "baseline_eval_protocol",
+    "datasets",
+    "reference_dataset",
+    "benchmark_protocol_path",
+    "dataset_path",
+    "innovation_points",
+    "validation_steps",
+    "ablation_plan",
+    "entry_point",
+    "expected_outputs",
+  ];
+  const result: Record<string, unknown> = {};
+  for (const key of keys) {
+    if (Object.prototype.hasOwnProperty.call(manifest, key)) {
+      result[key] = manifest[key];
+    }
+  }
+  return result;
+}
+
+function buildSqliteTrainPy(): string {
+  return `#!/usr/bin/env python3
+import argparse
+import json
+import os
+import random
+import sqlite3
+import tempfile
+import time
+from pathlib import Path
+
+
+def load_json(path):
+    with Path(path).open("r", encoding="utf8") as handle:
+        return json.load(handle)
+
+
+def percentile(values, pct):
+    ordered = sorted(values)
+    if not ordered:
+        return 0.0
+    index = min(len(ordered) - 1, max(0, int(round((pct / 100.0) * (len(ordered) - 1)))))
+    return ordered[index]
+
+
+def generate_rows(row_count, seed, category_count):
+    rng = random.Random(seed)
+    rows = []
+    for row_id in range(row_count):
+        category = f"cat_{row_id % category_count:02d}"
+        ts = 1700000000 + row_id * 17 + rng.randint(0, 13)
+        value = round(rng.random() * 1000.0, 6)
+        payload = f"payload_{row_id % 97:02d}_{rng.randint(0, 9999):04d}"
+        rows.append((row_id, ts, category, value, payload))
+    return rows
+
+
+def create_index_strategy(conn, strategy):
+    if strategy == "no_index":
+        return
+    if strategy == "single_column":
+        conn.execute("CREATE INDEX idx_events_category ON events(category)")
+    elif strategy == "composite":
+        conn.execute("CREATE INDEX idx_events_category_ts ON events(category, ts)")
+    elif strategy == "covering":
+        conn.execute("CREATE INDEX idx_events_covering ON events(category, ts, value, payload)")
+    else:
+        raise ValueError(f"unknown index strategy: {strategy}")
+    conn.commit()
+
+
+def build_database(rows, strategy):
+    handle = tempfile.NamedTemporaryFile(prefix=f"sqlite-{strategy}-", suffix=".db", delete=False)
+    db_path = handle.name
+    handle.close()
+    conn = sqlite3.connect(db_path)
+    conn.execute("PRAGMA journal_mode=OFF")
+    conn.execute("PRAGMA synchronous=OFF")
+    conn.execute(
+        "CREATE TABLE events (id INTEGER PRIMARY KEY, ts INTEGER NOT NULL, category TEXT NOT NULL, value REAL NOT NULL, payload TEXT NOT NULL)"
+    )
+    start = time.perf_counter()
+    conn.executemany(
+        "INSERT INTO events(id, ts, category, value, payload) VALUES (?, ?, ?, ?, ?)",
+        rows,
+    )
+    conn.commit()
+    insert_ms = (time.perf_counter() - start) * 1000.0
+    create_index_strategy(conn, strategy)
+    db_size_bytes = os.path.getsize(db_path)
+    return conn, db_path, insert_ms, db_size_bytes
+
+
+def time_query(conn, sql, params, repeats):
+    samples = []
+    for _ in range(repeats):
+        start = time.perf_counter()
+        conn.execute(sql, params).fetchall()
+        samples.append((time.perf_counter() - start) * 1000.0)
+    return samples
+
+
+def summarize_latency_metrics(samples):
+    return {
+        "p50_ms": round(percentile(samples, 50), 4),
+        "p95_ms": round(percentile(samples, 95), 4),
+        "mean_ms": round(sum(samples) / max(1, len(samples)), 4),
+    }
+
+
+def run_sqlite_index_benchmark(protocol, config, seed):
+    row_count = max(config.get("row_counts", [5000]))
+    category_count = int(config.get("category_count", 16))
+    repeats = int(config.get("query_repeats", 30))
+    strategies = protocol["index_strategies"]
+    rows = generate_rows(row_count, seed, category_count)
+    categories = sorted({row[2] for row in rows})
+    query_category = categories[len(categories) // 2]
+    midpoint_ts = rows[len(rows) // 2][1]
+    range_width = int(config.get("range_width_seconds", 25000))
+    results = {}
+    for strategy in strategies:
+        conn, db_path, insert_ms, db_size_bytes = build_database(rows, strategy)
+        try:
+            point_samples = time_query(
+                conn,
+                "SELECT id, ts, value FROM events WHERE category = ? ORDER BY ts LIMIT 25",
+                (query_category,),
+                repeats,
+            )
+            range_samples = time_query(
+                conn,
+                "SELECT id, ts, value FROM events WHERE category = ? AND ts BETWEEN ? AND ? ORDER BY ts",
+                (query_category, midpoint_ts - range_width, midpoint_ts + range_width),
+                repeats,
+            )
+            results[strategy] = {
+                "insert_ms": round(insert_ms, 4),
+                "db_size_bytes": db_size_bytes,
+                "point_lookup": summarize_latency_metrics(point_samples),
+                "category_range": summarize_latency_metrics(range_samples),
+            }
+        finally:
+            conn.close()
+            Path(db_path).unlink(missing_ok=True)
+    baseline_p95 = max(results["no_index"]["point_lookup"]["p95_ms"], 1e-9)
+    best_strategy = min(results, key=lambda name: results[name]["point_lookup"]["p95_ms"])
+    best_p95 = results[best_strategy]["point_lookup"]["p95_ms"]
+    return {
+        "row_count": row_count,
+        "strategy_results": results,
+        "best_strategy": best_strategy,
+        "metrics": {
+            "p95_query_latency_ms": best_p95,
+            "baseline_p95_query_latency_ms": results["no_index"]["point_lookup"]["p95_ms"],
+            "relative_p95_improvement": round((baseline_p95 - best_p95) / baseline_p95, 6),
+            "insert_overhead_ms": round(
+                results[best_strategy]["insert_ms"] - results["no_index"]["insert_ms"],
+                4,
+            ),
+            "db_size_bytes": results[best_strategy]["db_size_bytes"],
+        },
+    }
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--output", default=None)
+    parser.add_argument("--dataset", default=str(Path(__file__).with_name("data").joinpath("sqlite_workload_config.json")))
+    parser.add_argument("--protocol", default=str(Path(__file__).with_name("SQLITE_PROTOCOL.json")))
+    args = parser.parse_args()
+    protocol = load_json(args.protocol)
+    config = load_json(args.dataset)
+    benchmark = run_sqlite_index_benchmark(protocol, config, args.seed)
+    summary = {
+        "run_id": f"sqlite-index-latency-{args.seed}",
+        "seed": args.seed,
+        "status": "completed",
+        "execution_mode": "local_reference_sqlite_index_benchmark",
+        "protocol": protocol,
+        "dataset": str(Path(args.dataset)),
+        **benchmark,
+        "key_metric": {
+            "name": "p95_query_latency_ms",
+            "value": benchmark["metrics"]["p95_query_latency_ms"],
+            "baseline": benchmark["metrics"]["baseline_p95_query_latency_ms"],
+            "delta": round(
+                benchmark["metrics"]["p95_query_latency_ms"]
+                - benchmark["metrics"]["baseline_p95_query_latency_ms"],
+                4,
+            ),
+            "direction": "lower_is_better",
+        },
+        "result_paths": ["RESULT_SUMMARY.json"],
+        "activation": {
+            "sqlite_workload_generated": True,
+            "index_strategies_compared": protocol["index_strategies"],
+            "latency_insert_size_tracked": True,
+        },
+    }
+    output = Path(args.output) if args.output else Path(__file__).with_name("RESULT_SUMMARY.json")
+    output.write_text(json.dumps(summary, indent=2) + "\\n", encoding="utf8")
+    print(json.dumps(summary, indent=2))
+
+
+if __name__ == "__main__":
+    main()
+`;
+}
+
+function buildGcdTrainPy(): string {
   return `#!/usr/bin/env python3
 import argparse
 import json
@@ -1117,6 +1552,10 @@ if __name__ == "__main__":
 `;
 }
 
+function buildTrainPy(profile: CodeExperimentProfile): string {
+  return profile.kind === "sqlite" ? buildSqliteTrainPy() : buildGcdTrainPy();
+}
+
 function buildGcdProtocol(params: {
   topic: string;
   track: ResearchProgramTrack;
@@ -1193,6 +1632,70 @@ function buildGcdReferenceDatasetJsonl(): string {
     }
   }
   return `${rows.join("\n")}\n`;
+}
+
+function buildSqliteProtocol(params: {
+  topic: string;
+  track: ResearchProgramTrack;
+  manifest: Record<string, unknown>;
+}): Record<string, unknown> {
+  return {
+    schema_version: 1,
+    name: "local-sqlite-index-latency-benchmark",
+    task: "sqlite_index_latency_comparison",
+    topic: params.topic,
+    track_id: params.track.trackId,
+    baseline: {
+      family: "SQLite no-index table scan baseline",
+      fixed_schema: "events(id INTEGER PRIMARY KEY, ts INTEGER, category TEXT, value REAL, payload TEXT)",
+      fixed_pragmas: ["journal_mode=OFF", "synchronous=OFF"],
+    },
+    proposed_change:
+      "Compare single-column, composite, and covering B-tree indexes against the no-index baseline.",
+    index_strategies: ["no_index", "single_column", "composite", "covering"],
+    query_types: ["point_lookup", "category_range"],
+    metrics: ["p50_ms", "p95_ms", "insert_ms", "db_size_bytes"],
+    required_symbols: [
+      "generate_rows",
+      "create_index_strategy",
+      "run_sqlite_index_benchmark",
+      "summarize_latency_metrics",
+    ],
+    primary_baseline_metric:
+      pickString(params.manifest, ["primary_baseline_metric", "primaryBaselineMetric"]) ??
+      "p95 query latency",
+  };
+}
+
+function buildBenchmarkProtocol(params: {
+  topic: string;
+  track: ResearchProgramTrack;
+  manifest: Record<string, unknown>;
+  profile: CodeExperimentProfile;
+}): Record<string, unknown> {
+  return params.profile.kind === "sqlite"
+    ? buildSqliteProtocol(params)
+    : buildGcdProtocol(params);
+}
+
+function buildSqliteWorkloadConfig(): string {
+  return `${JSON.stringify(
+    {
+      schema_version: 1,
+      name: "synthetic-sqlite-events-workload",
+      row_counts: [5000, 20000],
+      category_count: 16,
+      query_repeats: 30,
+      range_width_seconds: 25000,
+      seed_contract: "The --seed argument controls row values and payloads for every strategy.",
+    },
+    null,
+    2
+  )}\n`;
+}
+
+function buildReferenceDataset(profile: CodeExperimentProfile): string {
+  return profile.kind === "sqlite" ? buildSqliteWorkloadConfig() : buildGcdReferenceDatasetJsonl();
 }
 
 function buildCitationGroundingSummary(params: {
@@ -1281,6 +1784,7 @@ function buildImplementationEvidencePacket(params: {
   experimentId: string;
   bundleRelativeDir: string;
   executionCommand: string;
+  profile: CodeExperimentProfile;
 }): Record<string, unknown> {
   const proof = implementationProofRecord(params.experimentManifest);
   const citationGrounding = buildCitationGroundingSummary({
@@ -1291,8 +1795,8 @@ function buildImplementationEvidencePacket(params: {
     ...listStringArray(proof.changed_files ?? proof.changedFiles),
     `${params.bundleRelativeDir}/${CODE_EXPERIMENT_ARTIFACTS.train}`,
     `${params.bundleRelativeDir}/${CODE_EXPERIMENT_ARTIFACTS.manifest}`,
-    `${params.bundleRelativeDir}/${CODE_EXPERIMENT_ARTIFACTS.protocol}`,
-    `${params.bundleRelativeDir}/${CODE_EXPERIMENT_ARTIFACTS.dataset}`,
+    `${params.bundleRelativeDir}/${params.profile.protocol}`,
+    `${params.bundleRelativeDir}/${params.profile.dataset}`,
   ]);
   return {
     schema_version: 1,
@@ -1352,6 +1856,7 @@ function buildBaselineAlignmentPacket(params: {
   experimentManifest: Record<string, unknown>;
   experimentId: string;
   bundleRelativeDir: string;
+  profile: CodeExperimentProfile;
 }): Record<string, unknown> {
   const baselineReference =
     pickString(params.experimentManifest, ["baseline_reference", "baselineReference"]) ??
@@ -1397,12 +1902,20 @@ function buildBaselineAlignmentPacket(params: {
     dataset_path: pickString(params.experimentManifest, ["dataset_path", "datasetPath"]),
     datasets: listStringArray(params.experimentManifest.datasets),
     reference_dataset: asRecord(params.experimentManifest.reference_dataset) ?? null,
-    fairness_constraints: [
-      "baseline and proposed method must use the same dataset_path",
-      "baseline and proposed method must use the same benchmark_protocol_path",
-      "known/novel class partitions must remain locked across ablations",
-      "result tables must report baseline, proposed, and ablation metrics from RESULT_SUMMARY.json",
-    ],
+    fairness_constraints:
+      params.profile.kind === "sqlite"
+        ? [
+            "all index strategies must use the same generated rows and query suite",
+            "all index strategies must use the same SQLite PRAGMA settings",
+            "baseline and proposed strategies must use the same benchmark_protocol_path",
+            "result tables must report p50/p95 latency, insert overhead, and database size from RESULT_SUMMARY.json",
+          ]
+        : [
+            "baseline and proposed method must use the same dataset_path",
+            "baseline and proposed method must use the same benchmark_protocol_path",
+            "known/novel class partitions must remain locked across ablations",
+            "result tables must report baseline, proposed, and ablation metrics from RESULT_SUMMARY.json",
+          ],
     citation_grounding: buildCitationGroundingSummary({
       researchProgram: params.researchProgram,
       track: params.track,
@@ -1415,14 +1928,71 @@ function buildHyperparameterSourceMap(params: {
   experimentManifest: Record<string, unknown>;
   experimentId: string;
   bundleRelativeDir: string;
+  profile: CodeExperimentProfile;
 }): Record<string, unknown> {
   const trainPath = `${params.bundleRelativeDir}/${CODE_EXPERIMENT_ARTIFACTS.train}`;
   const protocolPath =
     pickString(params.experimentManifest, ["benchmark_protocol_path", "benchmarkProtocolPath"]) ??
-    `${params.bundleRelativeDir}/${CODE_EXPERIMENT_ARTIFACTS.protocol}`;
+    `${params.bundleRelativeDir}/${params.profile.protocol}`;
   const datasetPath =
     pickString(params.experimentManifest, ["dataset_path", "datasetPath"]) ??
-    `${params.bundleRelativeDir}/${CODE_EXPERIMENT_ARTIFACTS.dataset}`;
+    `${params.bundleRelativeDir}/${params.profile.dataset}`;
+  if (params.profile.kind === "sqlite") {
+    return {
+      schema_version: 1,
+      packet_type: "hyperparameter_source_map",
+      generated_at: new Date().toISOString(),
+      status: "locked_reference_defaults",
+      track_id: params.track.trackId,
+      experiment_id: params.experimentId,
+      bundle_dir: params.bundleRelativeDir,
+      source_files: [trainPath, protocolPath, datasetPath],
+      parameters: [
+        {
+          name: "seed",
+          value: 42,
+          source_path: trainPath,
+          source_symbol: "argparse --seed default",
+          role: "reproducibility",
+        },
+        {
+          name: "row_counts",
+          value: [5000, 20000],
+          source_path: datasetPath,
+          source_symbol: "sqlite_workload_config.row_counts",
+          role: "workload scale envelope",
+        },
+        {
+          name: "query_repeats",
+          value: 30,
+          source_path: datasetPath,
+          source_symbol: "sqlite_workload_config.query_repeats",
+          role: "latency sampling budget",
+        },
+        {
+          name: "range_width_seconds",
+          value: 25000,
+          source_path: datasetPath,
+          source_symbol: "sqlite_workload_config.range_width_seconds",
+          role: "range-query selectivity control",
+        },
+        {
+          name: "index_strategies",
+          value: ["no_index", "single_column", "composite", "covering"],
+          source_path: protocolPath,
+          source_symbol: "sqlite_protocol.index_strategies",
+          role: "baseline/proposed comparison set",
+        },
+      ],
+      protocol_fields: {
+        index_strategies: ["no_index", "single_column", "composite", "covering"],
+        query_types: ["point_lookup", "category_range"],
+        metric: "p95_query_latency_ms",
+        protocol_path: protocolPath,
+        dataset_path: datasetPath,
+      },
+    };
+  }
   return {
     schema_version: 1,
     packet_type: "hyperparameter_source_map",
@@ -1484,13 +2054,51 @@ function buildDatasetProtocolLock(params: {
   experimentManifest: Record<string, unknown>;
   experimentId: string;
   bundleRelativeDir: string;
+  profile: CodeExperimentProfile;
 }): Record<string, unknown> {
   const protocolPath =
     pickString(params.experimentManifest, ["benchmark_protocol_path", "benchmarkProtocolPath"]) ??
-    `${params.bundleRelativeDir}/${CODE_EXPERIMENT_ARTIFACTS.protocol}`;
+    `${params.bundleRelativeDir}/${params.profile.protocol}`;
   const datasetPath =
     pickString(params.experimentManifest, ["dataset_path", "datasetPath"]) ??
-    `${params.bundleRelativeDir}/${CODE_EXPERIMENT_ARTIFACTS.dataset}`;
+    `${params.bundleRelativeDir}/${params.profile.dataset}`;
+  if (params.profile.kind === "sqlite") {
+    return {
+      schema_version: 1,
+      packet_type: "dataset_protocol_lock",
+      generated_at: new Date().toISOString(),
+      status: "locked",
+      track_id: params.track.trackId,
+      experiment_id: params.experimentId,
+      bundle_dir: params.bundleRelativeDir,
+      benchmark_protocol_path: protocolPath,
+      dataset_path: datasetPath,
+      datasets: listStringArray(params.experimentManifest.datasets),
+      reference_dataset: asRecord(params.experimentManifest.reference_dataset) ?? null,
+      split_contract: {
+        workload: {
+          row_counts: [5000, 20000],
+          category_count: 16,
+          source_function: "buildSqliteWorkloadConfig",
+        },
+        query_suite: {
+          query_types: ["point_lookup", "category_range"],
+          query_repeats: 30,
+          range_width_seconds: 25000,
+          source_function: "run_sqlite_index_benchmark",
+        },
+        index_strategies: {
+          strategies: ["no_index", "single_column", "composite", "covering"],
+          source_function: "create_index_strategy",
+        },
+      },
+      lock_rules: [
+        "Do not change row generation between index strategies.",
+        "Do not change query suite, PRAGMA settings, or row_count between baseline and proposed runs.",
+        "Do not report external benchmark claims from this local reference packet.",
+      ],
+    };
+  }
   return {
     schema_version: 1,
     packet_type: "dataset_protocol_lock",
@@ -1537,6 +2145,7 @@ function buildReproductionRiskLedger(params: {
   experimentManifest: Record<string, unknown>;
   experimentId: string;
   bundleRelativeDir: string;
+  profile: CodeExperimentProfile;
 }): Record<string, unknown> {
   const citationGrounding = buildCitationGroundingSummary({
     researchProgram: params.researchProgram,
@@ -1562,8 +2171,7 @@ function buildReproductionRiskLedger(params: {
         status: "accepted",
         reason:
           "The generated bundle is a deterministic local reference benchmark, not a full external reproduction.",
-        mitigation:
-          "Manifest and README label the implementation_type as local_reference_gcd_benchmark and keep claims scoped to the local reference dataset.",
+        mitigation: `Manifest and README label the implementation_type as ${params.profile.implementationType} and keep claims scoped to the local reference dataset.`,
       },
       {
         risk_id: "citation_grounding_gap",
@@ -1607,6 +2215,7 @@ async function writeCodeEvidencePackets(params: {
   experimentId: string;
   bundleRelativeDir: string;
   executionCommand: string;
+  profile: CodeExperimentProfile;
 }): Promise<string[]> {
   const packets: Array<[string, Record<string, unknown>]> = [
     [
@@ -1643,13 +2252,56 @@ function buildReadme(params: {
   bundleRelativeDir: string;
   command: string;
   manifest: Record<string, unknown>;
+  profile: CodeExperimentProfile;
 }): string {
   const innovationPoints = (params.manifest.innovation_points as string[] | undefined) ?? [];
-  return `# ${params.experimentId}: FixMatch-Inspired GCD Reference Benchmark
+  if (params.profile.kind === "sqlite") {
+    return `# ${params.experimentId}: ${params.profile.readmeTitle}
+
+This bundle is the local no-Discord reference implementation for the active SQLite code-stage track.
+It loads a fixed workload config from \`${params.bundleRelativeDir}/${params.profile.dataset}\`,
+checks \`${params.bundleRelativeDir}/${params.profile.protocol}\`, and compares no-index,
+single-column, composite, and covering indexes under the same deterministic query suite.
+
+## Topic
+
+${params.topic}
+
+## Active Track
+
+- Track: ${params.track.trackId}
+- Hypothesis: ${params.track.hypothesis ?? "not specified"}
+- Novelty basis: ${params.track.noveltyBasis ?? "not specified"}
+
+## Innovation Points
+
+${innovationPoints.map((point) => `- ${point}`).join("\n")}
+
+## Run
+
+\`\`\`bash
+${params.command}
+\`\`\`
+
+The script writes \`${params.bundleRelativeDir}/RESULT_SUMMARY.json\` with p50/p95 query
+latency, insert overhead, database size, and the best observed index strategy. The benchmark is
+standard-library-only so the workflow can run a repeatable CPU-only code review without external
+dataset downloads.
+
+## Evidence Packets
+
+- \`${CODE_EXPERIMENT_ARTIFACTS.implementationEvidence}\`: hypothesis, novelty basis, graph/claim evidence paths, changed files, integration points, and activation signals.
+- \`${CODE_EXPERIMENT_ARTIFACTS.baselineAlignment}\`: required baselines, primary metric, shared dataset/protocol paths, and fairness constraints.
+- \`${CODE_EXPERIMENT_ARTIFACTS.hyperparameterSourceMap}\`: seed, row counts, query repeats, and their source symbols in \`${params.bundleRelativeDir}/train.py\`.
+- \`${CODE_EXPERIMENT_ARTIFACTS.datasetProtocolLock}\`: locked synthetic workload, query suite, and index strategies.
+- \`${CODE_EXPERIMENT_ARTIFACTS.reproductionRiskLedger}\`: bounded-reference risks and the citation-grounding status for implementation claims.
+	`;
+  }
+  return `# ${params.experimentId}: ${params.profile.readmeTitle}
 
 This bundle is the local no-Discord reference implementation for the active code-stage track.
-It loads a fixed GCD reference split from \`${params.bundleRelativeDir}/${CODE_EXPERIMENT_ARTIFACTS.dataset}\`,
-checks \`${params.bundleRelativeDir}/${CODE_EXPERIMENT_ARTIFACTS.protocol}\`, and compares one
+It loads a fixed GCD reference split from \`${params.bundleRelativeDir}/${params.profile.dataset}\`,
+checks \`${params.bundleRelativeDir}/${params.profile.protocol}\`, and compares one
 baseline-preserving method change against the shared known/novel H-score evaluator.
 
 ## Topic
@@ -1728,6 +2380,7 @@ async function repairExistingCodeBundleForTrack(params: {
     researchProgram: params.researchProgram,
     track: params.track,
   });
+  const profile = resolveCodeExperimentProfile(topic);
   const experimentId =
     pickString(params.bundle.manifest ?? {}, ["experiment_id", "experimentId"]) ?? "exp-1";
   const defaultExperimentManifest = buildExperimentManifest({
@@ -1738,6 +2391,7 @@ async function repairExistingCodeBundleForTrack(params: {
     experimentId,
     bundleRelativeDir: params.bundle.relativeDir,
     topic,
+    profile,
   });
   const repairedManifest: Record<string, unknown> = {
     ...defaultExperimentManifest,
@@ -1757,48 +2411,52 @@ async function repairExistingCodeBundleForTrack(params: {
       params.track.noveltyBasis ??
       pickString(defaultExperimentManifest, ["novelty_basis", "noveltyBasis"]),
   };
+  if (params.bundle.profileMismatch) {
+    Object.assign(repairedManifest, profileContractFields(defaultExperimentManifest));
+  } else {
+    repairedManifest.name = defaultExperimentManifest.name;
+  }
   repairedManifest.implementation_type =
     pickString(defaultExperimentManifest, ["implementation_type", "implementationType"]) ??
-    "local_reference_gcd_benchmark";
+    profile.implementationType;
   repairedManifest.datasets = defaultExperimentManifest.datasets;
   repairedManifest.reference_dataset = defaultExperimentManifest.reference_dataset;
   repairedManifest.benchmark_protocol_path =
     defaultExperimentManifest.benchmark_protocol_path;
   repairedManifest.dataset_path = defaultExperimentManifest.dataset_path;
   Object.assign(repairedManifest, appendMissingValidationCoverage(repairedManifest));
+  const defaultProof = asRecord(defaultExperimentManifest.implementation_proof) ?? {};
+  const existingProof = asRecord(
+    params.bundle.manifest?.implementation_proof ?? params.bundle.manifest?.implementationProof
+  );
   repairedManifest.implementation_proof = appendMissingProofCoverage({
-    proof:
-      asRecord(
-        params.bundle.manifest?.implementation_proof ??
-          params.bundle.manifest?.implementationProof
-      ) ??
-      (asRecord(defaultExperimentManifest.implementation_proof) ?? {}),
+    proof: params.bundle.profileMismatch ? defaultProof : existingProof ?? defaultProof,
     manifest: repairedManifest,
     bundleRelativeDir: params.bundle.relativeDir,
-    defaultProof: asRecord(defaultExperimentManifest.implementation_proof) ?? {},
+    defaultProof,
   });
   const status = pickString(params.bundle.manifest ?? {}, ["status"]);
   if (status) {
     repairedManifest.status = status;
   }
 
-  if (params.bundle.legacyLocalProxy || !params.bundle.hasTrain) {
+  if (params.bundle.legacyLocalProxy || params.bundle.profileMismatch || !params.bundle.hasTrain) {
     await writeTextEnsured(
       path.join(params.bundle.dir, CODE_EXPERIMENT_ARTIFACTS.train),
-      buildTrainPy()
+      buildTrainPy(profile)
     );
     params.generatedFiles.push(`${params.bundle.relativeDir}/${CODE_EXPERIMENT_ARTIFACTS.train}`);
   }
   await writeJsonEnsured(
-    path.join(params.bundle.dir, CODE_EXPERIMENT_ARTIFACTS.protocol),
-    buildGcdProtocol({ topic, track: params.track, manifest: repairedManifest })
+    path.join(params.bundle.dir, profile.protocol),
+    buildBenchmarkProtocol({ topic, track: params.track, manifest: repairedManifest, profile })
   );
-  params.generatedFiles.push(`${params.bundle.relativeDir}/${CODE_EXPERIMENT_ARTIFACTS.protocol}`);
+  params.generatedFiles.push(`${params.bundle.relativeDir}/${profile.protocol}`);
   await writeTextEnsured(
-    path.join(params.bundle.dir, CODE_EXPERIMENT_ARTIFACTS.dataset),
-    buildGcdReferenceDatasetJsonl()
+    path.join(params.bundle.dir, profile.dataset),
+    buildReferenceDataset(profile)
   );
-  params.generatedFiles.push(`${params.bundle.relativeDir}/${CODE_EXPERIMENT_ARTIFACTS.dataset}`);
+  params.generatedFiles.push(`${params.bundle.relativeDir}/${profile.dataset}`);
   await writeJsonEnsured(params.bundle.manifestPath, repairedManifest);
   params.generatedFiles.push(`${params.bundle.relativeDir}/${CODE_EXPERIMENT_ARTIFACTS.manifest}`);
 
@@ -1808,7 +2466,8 @@ async function repairExistingCodeBundleForTrack(params: {
   if (
     !params.bundle.hasReadme ||
     readme?.includes("local no-Discord implementation fallback") === true ||
-    isLegacyLocalProxyText(readme)
+    isLegacyLocalProxyText(readme) ||
+    params.bundle.profileMismatch
   ) {
     const executionCommand =
       pickString(asRecord(repairedManifest.implementation_proof) ?? {}, [
@@ -1823,6 +2482,7 @@ async function repairExistingCodeBundleForTrack(params: {
         bundleRelativeDir: params.bundle.relativeDir,
         command: executionCommand,
         manifest: repairedManifest,
+        profile,
       })
     );
     params.generatedFiles.push(`${params.bundle.relativeDir}/${CODE_EXPERIMENT_ARTIFACTS.readme}`);
@@ -1864,11 +2524,10 @@ export async function materializeCodeExperimentBundleImpl(params: {
 
   const generatedFiles: string[] = [];
   const topic = inferTopic({ manifest, researchProgram, track });
+  const profile = resolveCodeExperimentProfile(topic);
   const experimentId = "exp-1";
-  const slug = /\bgcd\b|generalized category discovery|fixmatch/u.test(topic.toLowerCase())
-    ? "fixmatch_gcd_consistency_debiasing"
-    : "local_consistency_debiasing_probe";
-  const existingBundles = await listExistingCodeBundles(projectRoot, track.trackId);
+  const slug = profile.slug;
+  const existingBundles = await listExistingCodeBundles(projectRoot, track.trackId, profile);
   const repairableBundles = selectRepairableBundles({
     bundles: existingBundles,
     track,
@@ -1898,8 +2557,10 @@ export async function materializeCodeExperimentBundleImpl(params: {
     experimentId,
     bundleRelativeDir,
     topic,
+    profile,
   });
   const existingManifest = primaryBundle?.manifest ?? null;
+  const profileDrift = primaryBundle?.profileMismatch ?? false;
   const experimentManifest: Record<string, unknown> = {
     ...defaultExperimentManifest,
     ...(existingManifest ?? {}),
@@ -1920,10 +2581,16 @@ export async function materializeCodeExperimentBundleImpl(params: {
       track.noveltyBasis ??
       pickString(defaultExperimentManifest, ["novelty_basis", "noveltyBasis"]),
   };
+  if (profileDrift) {
+    Object.assign(experimentManifest, profileContractFields(defaultExperimentManifest));
+  } else {
+    experimentManifest.name = defaultExperimentManifest.name;
+  }
   experimentManifest.implementation_type =
     pickString(defaultExperimentManifest, ["implementation_type", "implementationType"]) ??
-    "local_reference_gcd_benchmark";
+    profile.implementationType;
   if (
+    profileDrift ||
     asRecord(experimentManifest.reference_dataset) == null ||
     isLegacyLocalProxyText(JSON.stringify(experimentManifest.datasets ?? ""))
   ) {
@@ -1933,13 +2600,15 @@ export async function materializeCodeExperimentBundleImpl(params: {
   experimentManifest.benchmark_protocol_path = defaultExperimentManifest.benchmark_protocol_path;
   experimentManifest.dataset_path = defaultExperimentManifest.dataset_path;
   Object.assign(experimentManifest, appendMissingValidationCoverage(experimentManifest));
+  const defaultProof = asRecord(defaultExperimentManifest.implementation_proof) ?? {};
+  const existingProof = asRecord(
+    existingManifest?.implementation_proof ?? existingManifest?.implementationProof
+  );
   experimentManifest.implementation_proof = appendMissingProofCoverage({
-    proof:
-      asRecord(existingManifest?.implementation_proof ?? existingManifest?.implementationProof) ??
-      (asRecord(defaultExperimentManifest.implementation_proof) ?? {}),
+    proof: profileDrift ? defaultProof : existingProof ?? defaultProof,
     manifest: experimentManifest,
     bundleRelativeDir,
-    defaultProof: asRecord(defaultExperimentManifest.implementation_proof) ?? {},
+    defaultProof,
   });
   Object.assign(experimentManifest, evidencePacketPathFields());
   const status = pickString(existingManifest ?? {}, ["status"]);
@@ -1961,22 +2630,26 @@ export async function materializeCodeExperimentBundleImpl(params: {
     !primaryBundle ||
     !primaryBundle.hasTrain ||
     primaryBundle.legacyLocalProxy ||
+    primaryBundle.profileMismatch ||
     isLegacyLocalProxyText(existingTrain);
   if (shouldRewriteTrain) {
-    await writeTextEnsured(path.join(bundleDir, CODE_EXPERIMENT_ARTIFACTS.train), buildTrainPy());
+    await writeTextEnsured(
+      path.join(bundleDir, CODE_EXPERIMENT_ARTIFACTS.train),
+      buildTrainPy(profile)
+    );
     generatedFiles.push(`${bundleRelativeDir}/${CODE_EXPERIMENT_ARTIFACTS.train}`);
   }
 
   await writeJsonEnsured(
-    path.join(bundleDir, CODE_EXPERIMENT_ARTIFACTS.protocol),
-    buildGcdProtocol({ topic, track, manifest: experimentManifest })
+    path.join(bundleDir, profile.protocol),
+    buildBenchmarkProtocol({ topic, track, manifest: experimentManifest, profile })
   );
-  generatedFiles.push(`${bundleRelativeDir}/${CODE_EXPERIMENT_ARTIFACTS.protocol}`);
+  generatedFiles.push(`${bundleRelativeDir}/${profile.protocol}`);
   await writeTextEnsured(
-    path.join(bundleDir, CODE_EXPERIMENT_ARTIFACTS.dataset),
-    buildGcdReferenceDatasetJsonl()
+    path.join(bundleDir, profile.dataset),
+    buildReferenceDataset(profile)
   );
-  generatedFiles.push(`${bundleRelativeDir}/${CODE_EXPERIMENT_ARTIFACTS.dataset}`);
+  generatedFiles.push(`${bundleRelativeDir}/${profile.dataset}`);
 
   await writeJsonEnsured(
     path.join(bundleDir, CODE_EXPERIMENT_ARTIFACTS.manifest),
@@ -1993,6 +2666,7 @@ export async function materializeCodeExperimentBundleImpl(params: {
       experimentId: resolvedExperimentId,
       bundleRelativeDir,
       executionCommand,
+      profile,
     }))
   );
 
@@ -2003,6 +2677,7 @@ export async function materializeCodeExperimentBundleImpl(params: {
     !primaryBundle ||
     !primaryBundle.hasReadme ||
     existingReadme?.includes("local no-Discord implementation fallback") === true ||
+    primaryBundle.profileMismatch ||
     isLegacyLocalProxyText(existingReadme);
   if (shouldRewriteReadme) {
     await writeTextEnsured(
@@ -2014,6 +2689,7 @@ export async function materializeCodeExperimentBundleImpl(params: {
         bundleRelativeDir,
         command: executionCommand,
         manifest: experimentManifest,
+        profile,
       })
     );
     generatedFiles.push(`${bundleRelativeDir}/${CODE_EXPERIMENT_ARTIFACTS.readme}`);
@@ -2041,45 +2717,52 @@ export async function materializeCodeExperimentBundleImpl(params: {
         track.noveltyBasis ??
         pickString(defaultExperimentManifest, ["novelty_basis", "noveltyBasis"]),
     };
+    if (staleBundle.profileMismatch) {
+      Object.assign(staleManifest, profileContractFields(defaultExperimentManifest));
+    } else {
+      staleManifest.name = defaultExperimentManifest.name;
+    }
     staleManifest.implementation_type =
       pickString(defaultExperimentManifest, ["implementation_type", "implementationType"]) ??
-      "local_reference_gcd_benchmark";
+      profile.implementationType;
     staleManifest.datasets = defaultExperimentManifest.datasets;
     staleManifest.reference_dataset = defaultExperimentManifest.reference_dataset;
     staleManifest.benchmark_protocol_path = defaultExperimentManifest.benchmark_protocol_path;
     staleManifest.dataset_path = defaultExperimentManifest.dataset_path;
     Object.assign(staleManifest, appendMissingValidationCoverage(staleManifest));
+    const staleDefaultProof = asRecord(defaultExperimentManifest.implementation_proof) ?? {};
+    const staleExistingProof = asRecord(
+      staleBundle.manifest?.implementation_proof ?? staleBundle.manifest?.implementationProof
+    );
     staleManifest.implementation_proof = appendMissingProofCoverage({
-      proof:
-        asRecord(
-          staleBundle.manifest?.implementation_proof ?? staleBundle.manifest?.implementationProof
-        ) ??
-        (asRecord(defaultExperimentManifest.implementation_proof) ?? {}),
+      proof: staleBundle.profileMismatch
+        ? staleDefaultProof
+        : staleExistingProof ?? staleDefaultProof,
       manifest: staleManifest,
       bundleRelativeDir: staleBundle.relativeDir,
-      defaultProof: asRecord(defaultExperimentManifest.implementation_proof) ?? {},
+      defaultProof: staleDefaultProof,
     });
     const staleStatus = pickString(staleBundle.manifest ?? {}, ["status"]);
     if (staleStatus) {
       staleManifest.status = staleStatus;
     }
-    if (staleBundle.legacyLocalProxy || !staleBundle.hasTrain) {
+    if (staleBundle.legacyLocalProxy || staleBundle.profileMismatch || !staleBundle.hasTrain) {
       await writeTextEnsured(
         path.join(staleBundle.dir, CODE_EXPERIMENT_ARTIFACTS.train),
-        buildTrainPy()
+        buildTrainPy(profile)
       );
       generatedFiles.push(`${staleBundle.relativeDir}/${CODE_EXPERIMENT_ARTIFACTS.train}`);
     }
     await writeJsonEnsured(
-      path.join(staleBundle.dir, CODE_EXPERIMENT_ARTIFACTS.protocol),
-      buildGcdProtocol({ topic, track, manifest: staleManifest })
+      path.join(staleBundle.dir, profile.protocol),
+      buildBenchmarkProtocol({ topic, track, manifest: staleManifest, profile })
     );
-    generatedFiles.push(`${staleBundle.relativeDir}/${CODE_EXPERIMENT_ARTIFACTS.protocol}`);
+    generatedFiles.push(`${staleBundle.relativeDir}/${profile.protocol}`);
     await writeTextEnsured(
-      path.join(staleBundle.dir, CODE_EXPERIMENT_ARTIFACTS.dataset),
-      buildGcdReferenceDatasetJsonl()
+      path.join(staleBundle.dir, profile.dataset),
+      buildReferenceDataset(profile)
     );
-    generatedFiles.push(`${staleBundle.relativeDir}/${CODE_EXPERIMENT_ARTIFACTS.dataset}`);
+    generatedFiles.push(`${staleBundle.relativeDir}/${profile.dataset}`);
     await writeJsonEnsured(staleBundle.manifestPath, staleManifest);
     generatedFiles.push(`${staleBundle.relativeDir}/${CODE_EXPERIMENT_ARTIFACTS.manifest}`);
 
@@ -2088,7 +2771,8 @@ export async function materializeCodeExperimentBundleImpl(params: {
     );
     if (
       staleReadme?.includes("local no-Discord implementation fallback") === true ||
-      isLegacyLocalProxyText(staleReadme)
+      isLegacyLocalProxyText(staleReadme) ||
+      staleBundle.profileMismatch
     ) {
       const staleExecutionCommand =
         pickString(asRecord(staleManifest.implementation_proof) ?? {}, ["execution_command"]) ??
@@ -2102,6 +2786,7 @@ export async function materializeCodeExperimentBundleImpl(params: {
           bundleRelativeDir: staleBundle.relativeDir,
           command: staleExecutionCommand,
           manifest: staleManifest,
+          profile,
         })
       );
       generatedFiles.push(`${staleBundle.relativeDir}/${CODE_EXPERIMENT_ARTIFACTS.readme}`);
@@ -2109,9 +2794,15 @@ export async function materializeCodeExperimentBundleImpl(params: {
   }
 
   for (const additionalTrack of tracks.slice(1)) {
+    const additionalTopic = inferTopic({
+      manifest,
+      researchProgram,
+      track: additionalTrack,
+    });
     const additionalBundles = await listExistingCodeBundles(
       projectRoot,
-      additionalTrack.trackId
+      additionalTrack.trackId,
+      resolveCodeExperimentProfile(additionalTopic)
     );
     const additionalRepairableBundles = selectRepairableBundles({
       bundles: additionalBundles,
@@ -2144,6 +2835,8 @@ export async function materializeCodeExperimentBundleImpl(params: {
   );
   generatedFiles.push(CODE_EXPERIMENT_ARTIFACTS.index);
 
+  const currentStage = normalizeStage(manifest.current_stage);
+  const isCodeStage = currentStage === "code";
   const orchestration = normalizeOrchestrationState(manifest.orchestration_state);
   const now = new Date().toISOString();
   manifest.orchestration_state = serializeOrchestrationState({
@@ -2153,19 +2846,29 @@ export async function materializeCodeExperimentBundleImpl(params: {
     )
       ? orchestration.status
       : "waiting",
-    currentOwner: "coder",
-    nextOwner: orchestration.nextOwner ?? "researcher",
-    nextTransitionCandidate: "experiment",
+    currentOwner: isCodeStage ? "coder" : orchestration.currentOwner,
+    nextOwner: isCodeStage ? orchestration.nextOwner ?? "researcher" : orchestration.nextOwner,
+    nextTransitionCandidate: isCodeStage
+      ? "experiment"
+      : orchestration.nextTransitionCandidate,
     blockingCategory: null,
     blockingReason: null,
     retryBudgetRemaining: orchestration.retryBudgetRemaining ?? 2,
     lastContractEvalAt: now,
     lastContractEvalResult: "pass",
-    resumeCursor: `code:${experimentId}:bundle_ready`,
+    resumeCursor: isCodeStage ? `code:${experimentId}:bundle_ready` : orchestration.resumeCursor,
     lastUpdatedAt: now,
   });
-  manifest.owner_agent = "coder";
+  if (isCodeStage) {
+    manifest.owner_agent = "coder";
+  }
   await writeJsonEnsured(manifestPath, manifest);
+  if (isCodeStage) {
+    await reconcileWorkflowControl({
+      projectRoot,
+      manifest,
+    });
+  }
   generatedFiles.push("PROJECT_MANIFEST.json");
 
   return {

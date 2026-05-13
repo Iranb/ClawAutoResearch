@@ -134,6 +134,14 @@ test("materializeSurveyReviewState reconciles survey artifacts into completed du
   assert.match(brief, /## Themes/m);
   assert.match(brief, /Retrieval-augmented systems/i);
   assert.match(brief, /## Open Problems/m);
+  const manifest = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "PROJECT_MANIFEST.json"), "utf8")
+  );
+  assert.equal(manifest.workflow_control.stage, "survey_review");
+  assert.equal(manifest.workflow_control.owner, "researcher");
+  assert.equal(manifest.workflow_control.next_action, "/write-paper");
+  assert.equal(manifest.workflow_control.completion.status, "complete");
+  assert.equal(manifest.workflow_control.completion.source, "survey_review_completion");
 });
 
 test("materializeSurveyReviewState builds survey artifacts from a PaperNexus discovery run", async (t) => {

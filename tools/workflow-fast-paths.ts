@@ -75,11 +75,6 @@ import {
   orchestrateWorkflowTransition,
   resumeWorkflowTransition,
 } from "./workflow-session-orchestrator.js";
-import {
-  isWorkflowRuntimeTrackingMissError,
-  reconcileBackgroundRunTerminalState,
-} from "./workflow-background-run-reconcile.js";
-import { isProviderCapacityFailure } from "./provider-capacity.js";
 import { writePapernexusProgressFromManifest } from "./papernexus-progress";
 import {
   readJsonIfExists,
@@ -445,7 +440,6 @@ export type BackgroundRunSnapshot = {
 };
 
 const MAX_RESEARCHER_BACKGROUND_SUBAGENTS_PER_PROJECT_SCOPE = 2;
-const BACKGROUND_RUN_STALE_MS = 60 * 60 * 1000;
 const BACKGROUND_QUEUE_STALE_MS = 24 * 60 * 60 * 1000;
 const BACKGROUND_QUEUE_RETRY_BACKOFF_MS = 15 * 1000;
 const BACKGROUND_QUEUE_ORPHAN_GRACE_MS = 15 * 1000;
@@ -1651,7 +1645,7 @@ async function reconcileBackgroundWorkflowQueueWithRegistry(params: {
     projectRoot: params.projectRoot,
     projectsRoot: params.projectsRoot,
   };
-  const queueEntries = await pruneBackgroundWorkflowQueue(scope);
+  let queueEntries = await pruneBackgroundWorkflowQueue(scope);
   if (!params.workflowRuntime) {
     return queueEntries;
   }
@@ -1661,6 +1655,7 @@ async function reconcileBackgroundWorkflowQueueWithRegistry(params: {
     projectsRoot: params.projectsRoot,
     workflowRuntime: params.workflowRuntime,
   });
+  queueEntries = await pruneBackgroundWorkflowQueue(scope);
   const nowMs = Date.now();
   const repairedEntries: BackgroundWorkflowQueueEntry[] = [];
   let changed = false;
@@ -1813,123 +1808,16 @@ async function pruneBackgroundRunRegistry(params: {
   projectRoot?: string | null;
   projectsRoot?: string | null;
 }): Promise<BackgroundRunRegistryEntry[]> {
-  const now = Date.now();
-  const current = await readBackgroundRunRegistry({
+  const { entries } = await listBackgroundWorkflowRunsFromPool({
+    workflowRuntime: params.workflowRuntime,
     projectId: params.projectId,
     projectRoot: params.projectRoot,
     projectsRoot: params.projectsRoot,
   });
-  const kept: BackgroundRunRegistryEntry[] = [];
-  for (const entry of current) {
-    const checkedAt = new Date(now).toISOString();
-    const freshnessReference =
-      entry.lastFinishedAt ?? entry.lastCheckedAt ?? entry.startedAt;
-    const freshnessMs = Date.parse(freshnessReference);
-    if (!Number.isFinite(freshnessMs) || now - freshnessMs > BACKGROUND_RUN_STALE_MS) {
-      if (entry.status === "active") {
-        await reconcileBackgroundRunTerminalState({
-          entry,
-          terminalStatus: "needs_repair",
-          finishedAt: checkedAt,
-          error: "Background workflow session exceeded the stale runtime threshold and needs repair.",
-        });
-        kept.push({
-          ...entry,
-          status: "needs_repair",
-          lastCheckedAt: checkedAt,
-          lastFinishedAt: checkedAt,
-        });
-      }
-      continue;
-    }
-    let nextEntry: BackgroundRunRegistryEntry = {
-      ...entry,
-      lastCheckedAt: checkedAt,
-    };
-    if (entry.status === "active" && params.workflowRuntime?.waitForRun) {
-      try {
-        const waited = await params.workflowRuntime.waitForRun({
-          runId: entry.runId,
-          timeoutMs: 1,
-        });
-        if (isWorkflowRuntimeTrackingMissError(waited)) {
-          kept.push(nextEntry);
-          continue;
-        }
-        if (waited.status === "ok" || waited.status === "error") {
-          const terminalStatus =
-            waited.status === "ok"
-              ? "completed"
-              : isProviderCapacityFailure(waited.error)
-                ? "needs_repair"
-                : "failed";
-          await reconcileBackgroundRunTerminalState({
-            entry,
-            terminalStatus,
-            finishedAt: checkedAt,
-            error: waited.status === "error" ? waited.error ?? "Background workflow run failed." : null,
-          });
-          nextEntry = {
-            ...nextEntry,
-            status: terminalStatus === "needs_repair" ? "needs_repair" : "idle",
-            lastFinishedAt: checkedAt,
-          };
-        }
-      } catch {
-        await reconcileBackgroundRunTerminalState({
-          entry,
-          terminalStatus: "needs_repair",
-          finishedAt: checkedAt,
-          error: "Background workflow runtime state could not be refreshed and needs repair.",
-        });
-        kept.push({
-          ...nextEntry,
-          status: "needs_repair",
-          lastFinishedAt: checkedAt,
-        });
-        continue;
-      }
-    }
-    kept.push(nextEntry);
-  }
-  if (shouldUseProjectRuntimeState(params)) {
-    const projectRoots = await listProjectScopedRuntimeProjectRoots(params);
-    for (const projectRoot of projectRoots) {
-      const projectEntries = kept.filter(
-        (entry) =>
-          readString(entry.projectRoot) &&
-          path.normalize(String(entry.projectRoot)) === path.normalize(projectRoot)
-      );
-      await writeBackgroundRunRegistry(projectEntries, {
-        projectRoot,
-        projectId:
-          projectEntries.find((entry) => readString(entry.projectId))?.projectId ??
-          params.projectId ??
-          null,
-      });
-    }
-  } else {
-    await writeBackgroundRunRegistry(kept);
-  }
-  return kept;
-}
-
-function toBackgroundRunRegistryViewEntry(
-  entry: BackgroundRunRegistryEntry,
-  nowMs: number
-): BackgroundRunRegistryViewEntry {
-  const idleReference =
-    entry.lastFinishedAt ?? entry.lastCheckedAt ?? entry.startedAt;
-  const idleReferenceMs = Date.parse(idleReference);
-  const idleForMs =
-    entry.status === "idle" && Number.isFinite(idleReferenceMs)
-      ? Math.max(0, nowMs - idleReferenceMs)
-      : null;
-  return {
-    ...entry,
-    deleteEligible: entry.status === "idle",
-    idleForMs,
-  };
+  return entries.map(
+    ({ deleteEligible: _deleteEligible, idleForMs: _idleForMs, ...entry }) =>
+      entry as BackgroundRunRegistryEntry
+  );
 }
 
 function matchesBackgroundRunRegistryFilters(

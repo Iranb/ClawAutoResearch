@@ -138,7 +138,7 @@ const PANEL_ROLES: CodeReviewReviewerRole[] = [
   "reviewer",
 ];
 
-const DEFAULT_PACKET_ARTIFACTS = [
+export const DEFAULT_PACKET_ARTIFACTS = [
   "orchestrator/PLAN.md",
   "orchestrator/TODOS.md",
   "orchestrator/PLAN_AUDIT.md",
@@ -181,6 +181,15 @@ function collectStrings(value: unknown): string[] {
     );
   }
   return [];
+}
+
+function normalizeToken(value: unknown): string | null {
+  const text = readString(value);
+  return text ? text.toLowerCase().replace(/[_\s-]+/g, "_") : null;
+}
+
+function textMatches(left: string | null, right: string | null): boolean {
+  return String(left ?? "").trim() === String(right ?? "").trim();
 }
 
 function normalizeDimensionScores(value: unknown): Record<string, number> {
@@ -327,7 +336,7 @@ function listImplementationProofText(value: unknown): string[] {
   });
 }
 
-async function collectBundleChecks(projectRoot: string) {
+export async function collectBundleChecks(projectRoot: string) {
   const root = path.join(projectRoot, "coder", "experiments");
   const bundles: CodeReviewPacket["bundleChecks"] = [];
   const queue = [root];
@@ -355,6 +364,16 @@ async function collectBundleChecks(projectRoot: string) {
       const record = asRecord(
         await readJsonIfExists<Record<string, unknown>>(manifestPath)
       );
+      const bundleStatus = normalizeToken(record.status);
+      const bundleStage = normalizeToken(record.stage);
+      if (bundleStatus === "superseded" || bundleStage === "superseded") {
+        for (const entry of entries) {
+          if (entry.isDirectory()) {
+            queue.push(path.join(current, entry.name));
+          }
+        }
+        continue;
+      }
       const implementationProof = asRecord(
         record.implementation_proof ?? record.implementationProof
       );
@@ -767,24 +786,52 @@ export function buildCodeReviewPrompt(params: {
   });
 }
 
-function collectLocalCodeReviewBlockers(packet: CodeReviewPacket): string[] {
+export function collectLocalCodeReviewBlockers(packet: CodeReviewPacket): string[] {
   const blockers: string[] = [];
   if (packet.activeTracks.length === 0) {
     blockers.push("No active research track is present in the code review packet.");
   }
+  const activeTrackById = new Map(
+    packet.activeTracks.map((track) => [track.trackId, track])
+  );
+  const activeBundles = packet.bundleChecks.filter(
+    (bundle) => !bundle.trackId || activeTrackById.has(bundle.trackId)
+  );
   const missingArtifacts = packet.artifactChecks
     .filter((artifact) => !artifact.exists)
     .map((artifact) => artifact.path);
   if (missingArtifacts.length > 0) {
     blockers.push(`Missing required planning artifacts: ${missingArtifacts.join(", ")}.`);
   }
-  if (packet.bundleChecks.length === 0) {
+  if (activeBundles.length === 0) {
     blockers.push("No experiment bundle with EXPERIMENT_MANIFEST.json was found.");
   }
-  for (const bundle of packet.bundleChecks) {
+  for (const activeTrack of packet.activeTracks) {
+    if (!activeBundles.some((bundle) => bundle.trackId === activeTrack.trackId)) {
+      blockers.push(`No experiment bundle is aligned to active track ${activeTrack.trackId}.`);
+    }
+  }
+  for (const bundle of activeBundles) {
     const prefix = `Bundle ${bundle.dir}`;
     if (!bundle.trackId) {
       blockers.push(`${prefix} does not declare track_id.`);
+    }
+    const activeTrack = bundle.trackId ? activeTrackById.get(bundle.trackId) : null;
+    if (
+      activeTrack?.hypothesis &&
+      !textMatches(bundle.hypothesis, activeTrack.hypothesis)
+    ) {
+      blockers.push(
+        `${prefix} must align its hypothesis to active track ${activeTrack.trackId}.`
+      );
+    }
+    if (
+      activeTrack?.noveltyBasis &&
+      !textMatches(bundle.noveltyBasis, activeTrack.noveltyBasis)
+    ) {
+      blockers.push(
+        `${prefix} must align its novelty_basis to active track ${activeTrack.trackId}.`
+      );
     }
     if (!bundle.hypothesis) {
       blockers.push(`${prefix} does not declare a hypothesis.`);

@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { materializeRevisionControlState } from "../../../tools/research-writing/revision-control.ts";
+import { buildWorkflowControlContract } from "../../../tools/workflow-control-contract.ts";
 
 async function writeJson(targetPath, value) {
   await fs.mkdir(path.dirname(targetPath), { recursive: true });
@@ -168,6 +169,50 @@ test("materializeRevisionControlState includes blocked paragraph logic audit as 
     true
   );
   assert.equal(result.state.nextReviewerRole, "cross-reviewer");
+});
+
+test("materializeRevisionControlState reads canonical workflow_control before stale projection", async (t) => {
+  const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-revision-control-canonical-"));
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "demo-project",
+    current_stage: "graph_build",
+    owner_agent: "researcher",
+    workflow_control: buildWorkflowControlContract({
+      contractId: "wfctl_review_revision",
+      reconciledAt: "2026-05-13T00:00:00.000Z",
+      stage: "review",
+      owner: "reviewer",
+      nextAction: "/review-paper",
+      status: "waiting",
+      completionStatus: "incomplete",
+      completionSource: "review_completion",
+    }),
+    review_session: {
+      status: "completed",
+      round: 1,
+      verdict: "revise",
+      reviewer_summary: "Revision required.",
+      blocking_artifacts: ["academic_writer/paper/main.tex"],
+    },
+    external_review_state: {
+      status: "missing",
+    },
+  });
+  await writeJson(path.join(projectRoot, ".openclaw-research", "workflow-hooks-state.json"), {
+    schemaVersion: 1,
+    updated_at: new Date().toISOString(),
+    hook_points: {},
+    hooks: {},
+  });
+
+  const result = await materializeRevisionControlState({ projectRoot });
+
+  assert.equal(result.state.status, "active");
+  assert.equal(result.state.sourceStage, "review");
 });
 
 test("materializeRevisionControlState drops stale resolved hook sources and runtime-only hook failures", async (t) => {

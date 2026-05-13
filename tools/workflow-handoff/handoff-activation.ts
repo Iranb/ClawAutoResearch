@@ -18,6 +18,14 @@ import {
   serializeOrchestrationState,
 } from "../workflow-guard-state/execution-state";
 import {
+  applyWorkflowControlContractToManifest,
+  buildWorkflowControlContract,
+  normalizeWorkflowControlContract,
+  type WorkflowCompletionStatus,
+  type WorkflowControlStatus,
+  type WorkflowRuntimeState,
+} from "../workflow-control-contract.js";
+import {
   activateWorkflowHandoffIntent,
   claimWorkflowHandoffIntent,
   readWorkflowHandoffIntentStore,
@@ -103,11 +111,51 @@ function getIntentPayload(intent: WorkflowHandoffIntent): Record<string, unknown
   return asRecord(intent.payload) ?? {};
 }
 
+function applyWorkflowControlForHandoff(params: {
+  manifest: ManifestLike;
+  contractId: string;
+  reconciledAt: string;
+  stage: string | null;
+  owner: string | null;
+  nextAction: string | null;
+  status: WorkflowControlStatus;
+  blockingReason: string | null;
+  completionStatus: WorkflowCompletionStatus;
+  completionSource: string;
+  completionReason: string | null;
+  runtimeState: WorkflowRuntimeState;
+  sessionKey?: string | null;
+}): ManifestLike {
+  return applyWorkflowControlContractToManifest(
+    params.manifest,
+    buildWorkflowControlContract({
+      contractId: params.contractId,
+      reconciledAt: params.reconciledAt,
+      stage: params.stage,
+      owner: params.owner,
+      nextAction: params.nextAction,
+      status: params.status,
+      blockingReason: params.blockingReason,
+      completionStatus: params.completionStatus,
+      completionSource: params.completionSource,
+      completionReason: params.completionReason,
+      runtimeState: params.runtimeState,
+      sessionKey: params.sessionKey,
+    })
+  );
+}
+
 export async function syncPreparedWorkflowHandoffToManifest(params: {
   projectRoot: string;
   intent: WorkflowHandoffIntent;
 }): Promise<void> {
-  const manifest = await readManifest(params.projectRoot);
+  let manifest = await readManifest(params.projectRoot);
+  const workflowControl = normalizeWorkflowControlContract(
+    manifest.workflow_control
+  );
+  if (workflowControl) {
+    manifest = applyWorkflowControlContractToManifest(manifest, workflowControl);
+  }
   const orchestration = normalizeOrchestrationState(manifest.orchestration_state);
   const payload = getIntentPayload(params.intent);
   const nextState = {
@@ -239,7 +287,13 @@ export async function claimAndActivateWorkflowHandoffForAgent(params: {
   claimed: boolean;
   activated: boolean;
 }> {
-  const manifest = await readManifest(params.projectRoot);
+  let manifest = await readManifest(params.projectRoot);
+  const workflowControl = normalizeWorkflowControlContract(
+    manifest.workflow_control
+  );
+  if (workflowControl) {
+    manifest = applyWorkflowControlContractToManifest(manifest, workflowControl);
+  }
   const orchestration = normalizeOrchestrationState(manifest.orchestration_state);
   const store = await readWorkflowHandoffIntentStore(params.projectRoot);
   const selectedIntent = selectClaimableIntentForRole({
@@ -315,9 +369,39 @@ export async function claimAndActivateWorkflowHandoffForAgent(params: {
         intent: claimedIntent,
       });
       const blockedManifest = await readManifest(params.projectRoot);
-      blockedManifest.blocking_reason =
-        gate.blockingReason ?? blockedManifest.blocking_reason;
-      await writeManifest(params.projectRoot, blockedManifest);
+      const blockedWorkflowControl = normalizeWorkflowControlContract(
+        blockedManifest.workflow_control
+      );
+      const blockedReason =
+        gate.blockingReason ?? readString(blockedManifest.blocking_reason);
+      const nextBlockedManifest = applyWorkflowControlForHandoff({
+        manifest: blockedManifest,
+        contractId:
+          claimedIntent.executionId ??
+          claimedIntent.intentId,
+        reconciledAt: nowIso(),
+        stage:
+          blockedWorkflowControl?.stage ??
+          normalizeStage(blockedManifest.current_stage),
+        owner:
+          blockedWorkflowControl?.owner ??
+          readString(blockedManifest.owner_agent) ??
+          currentOwner ??
+          null,
+        nextAction:
+          blockedWorkflowControl?.next_action ??
+          readString(blockedManifest.next_action),
+        status: "blocked",
+        blockingReason: blockedReason,
+        completionStatus: "blocked",
+        completionSource: "handoff_activation",
+        completionReason: blockedReason,
+        runtimeState: blockedWorkflowControl?.runtime_state ?? "idle",
+        sessionKey:
+          blockedWorkflowControl?.session_key ??
+          readString(params.sessionKey),
+      });
+      await writeManifest(params.projectRoot, nextBlockedManifest);
       await syncPreparedWorkflowHandoffToManifest({
         projectRoot: params.projectRoot,
         intent: {
@@ -335,9 +419,7 @@ export async function claimAndActivateWorkflowHandoffForAgent(params: {
   if (nextMicroStage) {
     manifest.current_micro_stage = nextMicroStage;
   }
-  manifest.next_action = nextAction;
   manifest.resume_action = resumeAction;
-  manifest.blocking_reason = blockingReason;
   manifest.last_handoff_at = nowIso();
   manifest.orchestration_state = serializeOrchestrationState({
     ...orchestration,
@@ -363,7 +445,25 @@ export async function claimAndActivateWorkflowHandoffForAgent(params: {
     blockingReason,
     lastUpdatedAt: nowIso(),
   });
-  await writeManifest(params.projectRoot, manifest);
+  const activatedAt = nowIso();
+  const nextManifest = applyWorkflowControlForHandoff({
+    manifest,
+    contractId:
+      claimedIntent.executionId ??
+      claimedIntent.intentId,
+    reconciledAt: activatedAt,
+    stage: stageAfter ?? normalizeStage(manifest.current_stage),
+    owner: claimedIntent.toRole,
+    nextAction,
+    status: blockingReason ? "waiting" : "ready",
+    blockingReason,
+    completionStatus: "incomplete",
+    completionSource: `${stageAfter ?? "workflow"}_handoff`,
+    completionReason: blockingReason ?? "owner_work_required",
+    runtimeState: "active",
+    sessionKey: readString(params.sessionKey),
+  });
+  await writeManifest(params.projectRoot, nextManifest);
 
   const activatedIntent =
     (await activateWorkflowHandoffIntent({

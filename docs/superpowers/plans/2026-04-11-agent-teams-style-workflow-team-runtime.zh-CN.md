@@ -47,9 +47,10 @@
 
 - **已完成核心功能闭环**：Evidence contracts、top-tier gates、task graph store、claim/lease/release、`complete_task` 后续 claim、dashboard task/evidence 可视化、binding coherency、Lobster delivery-adapter 边界。
 - **已补齐严格 TODO 主线**：新增 exec packet、PaperNexus failed-paper retry、Team Runtime policy gate、heartbeat idle continuation、evidence materializer modules 与 projection model；旧大文件仍保留兼容 façade，但主入口已有明确 kernel surface。
-- **新增两个真实运行问题必须进入计划**：
+- **新增真实运行问题必须进入计划**：
   - 长 EXEC 指令会触发 OpenClaw obfuscation guard，并且 Discord 无法做 chat exec approval。
   - PaperNexus 上传失败后缺少 first-class “失败论文重复上传/顺序重提交”接口，导致 `graph_build` 容易卡在人工对话和权限不一致里。
+  - live E2E runner 在 stage turn timeout 后立刻判 `live_no_progress`，但真实 runtime maintenance / auto-iterator 可能在几秒后才把同一项目推进到下一阶段。
 
 ### 0.1 当前已真实覆盖
 
@@ -426,6 +427,296 @@ Approve it from the Web UI or terminal UI, or enable Discord, Slack, or Telegram
 - [x] **TODO-8: PaperNexus Failed Upload Retry Interface**
   - Implement failure classifier, retry manifest, workflow tool actions, service fallback, graph presence integration.
   - Make “重提交失败论文” a first-class workflow action.
+- [x] **TODO-9: Live E2E Post-timeout Progress Grace**
+  - Add a bounded post-timeout grace window before `live_no_progress` becomes terminal.
+  - Treat manifest stage/owner changes, workflow fingerprint changes, runtime queue/session changes, and terminal paper artifacts observed during this window as real progress.
+  - Keep the grace bounded to one observation window so a genuinely stalled project still fails fast.
+  - Tests: `live E2E no-progress grace accepts late workflow advancement`.
+- [x] **TODO-10: Notification-only Workflow Binding Dispatch**
+  - Treat a persisted project notification target as a usable requester binding for service dispatch and auto-mode discussion.
+  - Keep Discord as notification-only; do not write it into the channel-project binding store.
+  - Tests: `maybeLaunchAutoStageForProject accepts notification-only workflow channels`; `maybeAdvanceAutoModeDiscussionForProject accepts notification-only workflow channels`.
+- [x] **TODO-11: Expired Handoff Reissue**
+  - Treat expired handoff intents as recoverable delivery attempts, not as canonical completion.
+  - Reissue a fresh active intent when the same stage-owner idempotency key is still requested after expiration.
+  - Keep completed/superseded/escalated/cancelled intents as terminal idempotency barriers.
+  - Tests: `handoff intent store reissues expired stage owner intents by idempotency key`; `runWorkflowHandoffMaintenancePass preserves active reissue after expired duplicate`.
+- [x] **TODO-12: Plan Materializer Compared-option Canonicalization**
+  - Treat `research_program.plan_selection.compared_option_ids` as the canonical set the readiness gate will validate.
+  - When `materialize_plan_state` repairs plan state, fill summary and graph evidence for every compared option, not only selected/fallback options.
+  - Preserve generated `write_scope` defaults when merging already-normalized track objects that contain empty camelCase fields.
+  - Tests: `materialize_plan_state repairs compared option evidence and empty write scope`.
+- [x] **TODO-13: Topic-profiled Code Experiment Bundles**
+  - Select a code experiment profile from the active project topic before writing `train.py`, protocol, dataset config, manifest, README, and evidence packets.
+  - Emit a SQLite-specific local benchmark for SQLite index-design topics instead of falling through to the GCD/FixMatch compatibility template.
+  - Treat existing bundle/profile mismatch as repairable drift so stale GCD artifacts cannot satisfy a SQLite code-stage contract.
+  - Tests: `code experiment materializer emits SQLite-specific bundle for SQLite index topics`; `npm run test:experiment`.
+- [x] **TODO-14: Isolated Live Smoke Project Roots**
+  - Default isolated-gateway live E2E smoke runs to a run-local `projects/` root unless `--reuse-project` or `--projects-root` is explicit.
+  - Preserve configured long-lived `projectsRoot` for reuse/debug runs and non-isolated live runs.
+  - Keep Discord parity on native slash replay without hidden project-id overrides.
+  - Tests: `auto workflow E2E runner defaults live projects root to plugin config`.
+- [x] **TODO-15: Live No-progress Reconciliation Tick**
+  - Treat a live stage turn timeout as a chance to reconcile canonical workflow state before declaring `live_no_progress`.
+  - After the post-timeout grace wait, run one auto-iterator reconciliation tick so stale graph-ready requisitions can be marked terminal by the existing bounded preflight contracts.
+  - Do not make IDEA-CATALYST requisitions ignorable at creation time; preserve the normal graph-build reentry path until the bounded no-progress window elapses.
+  - Tests: `live E2E no-progress grace runs one auto-iterator reconciliation before failing`.
+
+### 0.5.1 2026-05-12 live smoke addendum：post-timeout 误判
+
+测试来源：
+
+- Startpoint doc:
+  `/Users/iranb/Library/Mobile Documents/iCloud~md~obsidian/Documents/001-WIKI/entities/autoresarch_projects/25-Mac-CPU-5min-AutoResearch-real-test-startpoints-2026-05-12.md`
+- Topic:
+  `CPU-only small-data tabular classification on sklearn built-in datasets under a 5-minute per-run budget on macOS`
+- E2E summary:
+  `.openclaw-research/e2e-runs/2026-05-12T135818Z-experiment-cpu-only-small-data-tabular-classification-on-sklearn-built-in-datasets-under-a-/AUTO_WORKFLOW_E2E_SUMMARY.json`
+- Live project:
+  `/Users/iranb/Downloads/AutoResearchProjects-karpathy-loop-20260508t122035/cpu-only-small-data-tabular-classificati`
+
+Observed failure:
+
+- Runner failed at `2026-05-12T14:00:10Z` with
+  `live_no_progress stage=graph_build owner=researcher reason=timeout`.
+- The same project then recorded an auto-iterator tick at `2026-05-12T14:00:19Z`
+  advancing `graph_build -> frontier_mapping`.
+- This means the framework was not semantically stuck at `graph_build`; the harness observed too early and converted a late-but-valid runtime progression into a terminal failure.
+
+Fix contract:
+
+- `runAutoCommandEndToEndLive(...)` must give one bounded post-timeout observation window before counting a no-progress turn.
+- The grace window may only reclassify the turn when the canonical progress resolver sees an actual signal: stage/owner change, workflow fingerprint change, runtime queue/session change, or terminal artifact readiness.
+- The grace window must not chain multiple stage transitions or hide a real stall.
+
+### 0.5.2 2026-05-12 live smoke addendum：notification-only binding
+
+测试来源：
+
+- Startpoint doc:
+  `/Users/iranb/Library/Mobile Documents/iCloud~md~obsidian/Documents/001-WIKI/entities/autoresarch_projects/25-Mac-CPU-5min-AutoResearch-real-test-startpoints-2026-05-12.md`
+- Topic:
+  `CPU-only Bloom filter parameter tuning on macOS: study the trade-off between memory usage, false positive rate, and query throughput under a 5-minute per-run budget using synthetic membership workloads.`
+- E2E summary:
+  `.openclaw-research/e2e-runs/2026-05-12T142833Z-experiment-cpu-only-bloom-filter-parameter-tuning-on-macos-study-the-trade-off-between-memo/AUTO_WORKFLOW_E2E_SUMMARY.json`
+- Live project:
+  `/Users/iranb/Downloads/AutoResearchProjects-karpathy-loop-20260508t122035/cpu-only-bloom-filter-parameter-tuning-o`
+
+Observed validation:
+
+- The rerun used temporary model override
+  `--model-ref bailian/qwen3.6-plus --model-fallbacks bailian/qwen3.5-plus`
+  because the local OpenClaw config referenced unavailable `qwen/...` provider credentials.
+- The run no longer failed with `live_no_progress`; all 6 observed turns progressed:
+  `auto_iterator_state_change`, `workflow_state_changed`, and `runtime_state_changed`.
+- The run still ended with `final_verdict_not_pass` because the bounded 6-turn smoke did not reach a terminal paper state.
+
+Second issue exposed:
+
+- The live project persisted `.openclaw-research/workflow-notification-channels.json`, but service dispatch still emitted `binding_missing` for `frontier_mapping` and `idea`.
+- At `2026-05-12T14:34:09Z`, the service reported `risk_discussion_pending` for `plan`; the prepared handoff existed, but the notification-only requester path was not accepted by `hasWorkflowProjectBinding(...)`.
+
+Fix contract:
+
+- `resolveWorkflowRequesterBinding(...)` and `hasWorkflowProjectBinding(...)` must agree on project-local notification targets.
+- A persisted notification target is sufficient for service dispatch, risk discussion, and mitigation routing when the channel is intentionally notification-only.
+- This must not convert Discord into a mutable channel-project binding; the durable source remains `workflow-notification-channels.json`.
+
+Remaining risk:
+
+- `workflow-broadcast-outbox.json` still recorded a failed status broadcast with
+  `Channel is required when multiple channels are configured: discord, imessage, openclaw-weixin`.
+  This is a delivery-target resolution issue, not the same as owner dispatch gating, and remains a follow-up item.
+
+### 0.5.3 2026-05-12 live smoke addendum：expired handoff terminal_intent
+
+测试来源：
+
+- Startpoint doc:
+  `/Users/iranb/Library/Mobile Documents/iCloud~md~obsidian/Documents/001-WIKI/entities/autoresarch_projects/25-Mac-CPU-5min-AutoResearch-real-test-startpoints-2026-05-12.md`
+- Topic:
+  `CPU-only SQLite index design for small analytical workloads on macOS: compare no index, single-column index, composite index, and covering index for point and range queries under a 5-minute per-run budget, optimizing p95 query latency while tracking insert overhead and database size.`
+- E2E summary:
+  `.openclaw-research/e2e-runs/2026-05-12T145519Z-experiment-cpu-only-sqlite-index-design-for-small-analytical-workloads-on-macos-compare-no-/AUTO_WORKFLOW_E2E_SUMMARY.json`
+- Live project:
+  `/Users/iranb/Downloads/AutoResearchProjects-karpathy-loop-20260508t122035/cpu-only-sqlite-index-design-for-small-a`
+
+Observed failure:
+
+- The live smoke failed after one turn with
+  `Failed to dispatch live stage plan: terminal_intent`.
+- The manifest was still at `current_stage=idea`, `owner_agent=researcher`, `next_transition_candidate=plan`,
+  with pending handoff `8cce903e-04c7-4415-9445-eb201beea72f`.
+- `.openclaw-research/workflow-handoff-intents.json` showed that handoff as `expired`
+  with `terminalReason="expiresAt elapsed"` and no delivery attempts.
+- The auto iterator reused the same handoff execution id and idempotency key, so
+  `upsertWorkflowHandoffIntent(...)` returned the expired terminal intent instead of creating a dispatchable handoff.
+
+Fix contract:
+
+- Expiration means delivery timed out, not that the stage-owner transition completed.
+- `upsertWorkflowHandoffIntent(...)` must reissue a fresh active intent when the only matching terminal state is `expired`.
+- Completed, superseded, escalated, and cancelled handoffs remain terminal idempotency barriers.
+- `runWorkflowHandoffMaintenancePass(...)` must preserve the active reissue when it coexists with the expired duplicate key.
+
+Validation rerun:
+
+- Rerun summary:
+  `.openclaw-research/e2e-runs/2026-05-12T151245Z-experiment-cpu-only-sqlite-index-design-for-small-analytical-workloads-on-macos-compare-no-/AUTO_WORKFLOW_E2E_SUMMARY.json`
+- The run no longer failed with `terminal_intent`.
+- The live project advanced from `idea` to `plan`; two new plan handoffs were delivered through `native_runtime` and reached `completed`.
+- The rerun ended with `failureReason="timeout"` at the 360s harness budget while plan readiness and auto-risk discussion remained pending. This is a later plan-stage progression limit, not the expired-handoff dispatch failure.
+
+### 0.5.4 2026-05-12 live smoke addendum：plan-state compared options blocked readiness
+
+测试来源：
+
+- Startpoint doc:
+  `/Users/iranb/Library/Mobile Documents/iCloud~md~obsidian/Documents/001-WIKI/entities/autoresarch_projects/25-Mac-CPU-5min-AutoResearch-real-test-startpoints-2026-05-12.md`
+- Topic:
+  `CPU-only SQLite index design for small analytical workloads on macOS: compare no index, single-column index, composite index, and covering index for point and range queries under a 5-minute per-run budget, optimizing p95 query latency while tracking insert overhead and database size.`
+- E2E summary:
+  `.openclaw-research/e2e-runs/2026-05-12T151245Z-experiment-cpu-only-sqlite-index-design-for-small-analytical-workloads-on-macos-compare-no-/AUTO_WORKFLOW_E2E_SUMMARY.json`
+- Live project:
+  `/Users/iranb/Downloads/AutoResearchProjects-karpathy-loop-20260508t122035/cpu-only-sqlite-index-design-for-small-a`
+
+Observed failure:
+
+- After the expired-handoff fix, the project reached `current_stage=plan`, `owner_agent=orchestrator`,
+  `next_action="Run /plan-research using IDEA_REPORT.md and TRACK_REGISTRY.json, then write PLAN.md, TODOS.md, and PLAN_AUDIT.md."`
+- Runtime queue and runtime sessions had no active entries, so the observed blocker was not an active worker still running.
+- Stage readiness remained blocked by five plan signals:
+  - active track `write_scope` had no allowed claims or figures.
+  - `opt_no_index` was listed in `compared_option_ids` but lacked `summary` and `graph_evidence_paths`.
+  - `opt_single_column` was listed in `compared_option_ids` but lacked `summary` and `graph_evidence_paths`.
+- The existing materializer repaired selected/fallback alternatives, but readiness validates every option referenced by
+  `research_program.plan_selection.compared_option_ids`.
+- A second merge bug preserved empty camelCase `writeScope` / `graphEvidencePaths` from normalized objects over newly generated snake_case defaults.
+
+Fix contract:
+
+- `materialize_plan_state` must canonicalize the entire compared-option set because `compared_option_ids` is the readiness contract.
+- Existing candidate options may keep their title/status, but missing summary and graph evidence must be repaired from decisive graph evidence.
+- Track `write_scope` defaults must survive normalization even when the input state already has empty `writeScope` arrays.
+- This remains a projection/materialization repair; the readiness gate should stay strict and continue validating the canonical plan contract.
+
+Remaining risk:
+
+- The same live project also showed an auto-mode discussion round whose packet fingerprint no longer matched the current risk packet and whose attempts were pending while queue/session state was empty. If the next live smoke still reports `risk_discussion_pending` after plan signals are repaired, that stale discussion round is the next control-plane fix.
+
+### 0.5.5 2026-05-12 live smoke addendum：code-stage GCD template drift
+
+测试来源：
+
+- Startpoint doc:
+  `/Users/iranb/Library/Mobile Documents/iCloud~md~obsidian/Documents/001-WIKI/entities/autoresarch_projects/25-Mac-CPU-5min-AutoResearch-real-test-startpoints-2026-05-12.md`
+- Topic:
+  `CPU-only SQLite index design for small analytical workloads on macOS: compare no index, single-column index, composite index, and covering index for point and range queries under a 5-minute per-run budget, optimizing p95 query latency while tracking insert overhead and database size.`
+- E2E summary:
+  `.openclaw-research/e2e-runs/2026-05-12T154627Z-experiment-cpu-only-sqlite-index-design-for-small-analytical-workloads-on-macos-compare-no-/AUTO_WORKFLOW_E2E_SUMMARY.json`
+- Live project:
+  `/Users/iranb/Downloads/AutoResearchProjects-karpathy-loop-20260508t122035/cpu-only-sqlite-index-design-for-small-a`
+- Code review packet:
+  `/Users/iranb/Downloads/AutoResearchProjects-karpathy-loop-20260508t122035/cpu-only-sqlite-index-design-for-small-a/reviewer/code-review/CODE_REVIEW_PACKET.json`
+
+Observed validation and new failure:
+
+- The rerun advanced past `plan` into `current_stage=code`, which validates the TODO-12 plan readiness repair.
+- The run ended with `failureReason="final_verdict_not_pass"` after 10 turns because code innovation review rejected the generated implementation packet.
+- The reviewed code bundle was stale for the SQLite topic:
+  - bundle dir: `coder/experiments/.../exp-1__local_consistency_debiasing_probe`
+  - protocol: `GCD_PROTOCOL.json`
+  - dataset: `data/gcd_reference_split.jsonl`
+  - symbols and metrics: `run_fixmatch_consistency`, `known/novel accuracy`, `H-score`
+  - innovation points: unlabeled candidate consistency filtering and class-balance debiasing
+- This is not a reviewer scoring problem. The code-stage materializer was using the generic GCD-compatible defaults for a SQLite index-design startpoint.
+
+Fix contract:
+
+- `materialize_code_experiment_bundle` must resolve one topic profile before writing any code-stage artifacts.
+- SQLite index-design topics must generate:
+  - `exp-1__sqlite_index_latency_benchmark`
+  - `SQLITE_PROTOCOL.json`
+  - `data/sqlite_workload_config.json`
+  - a standard-library `sqlite3` runner with `generate_rows`, `create_index_strategy`, `run_sqlite_index_benchmark`, and p95 latency / insert overhead / database size metrics
+  - SQLite-specific implementation evidence, hyperparameter source map, dataset protocol lock, baseline fairness constraints, README, and reproduction risk wording
+- GCD/FixMatch topics keep the existing GCD reference benchmark behavior.
+- Existing bundle/profile mismatch must be detected as drift and rewritten; a GCD train/protocol/dataset packet must not satisfy a SQLite code-stage contract.
+
+Remaining risk:
+
+- The same live code-review state still showed reviewer attempts failing with
+  `Embedded workflow run is not tracked in the local registry.`
+  That registry tracking problem is downstream of the profile-drift fix and remains the likely next code-review/runtime blocker if the SQLite bundle is now reviewed correctly.
+
+### 0.5.6 2026-05-12 live smoke addendum：同 topic 复用旧项目导致证据污染
+
+测试来源：
+
+- Startpoint doc:
+  `/Users/iranb/Library/Mobile Documents/iCloud~md~obsidian/Documents/001-WIKI/entities/autoresarch_projects/25-Mac-CPU-5min-AutoResearch-real-test-startpoints-2026-05-12.md`
+- Topic:
+  `CPU-only SQLite index design for small analytical workloads on macOS: compare no index, single-column index, composite index, and covering index for point and range queries under a 5-minute per-run budget, optimizing p95 query latency while tracking insert overhead and database size.`
+- First run summary:
+  `.openclaw-research/e2e-runs/2026-05-12T162759Z-experiment-cpu-only-sqlite-index-design-for-small-analytical-workloads-on-macos-compare-no-/AUTO_WORKFLOW_E2E_SUMMARY.json`
+- Short phase-timeout rerun summary:
+  `.openclaw-research/e2e-runs/2026-05-12T163620Z-experiment-cpu-only-sqlite-index-design-for-small-analytical-workloads-on-macos-compare-no-/AUTO_WORKFLOW_E2E_SUMMARY.json`
+- Reused live project:
+  `/Users/iranb/Downloads/AutoResearchProjects-karpathy-loop-20260508t122035/cpu-only-sqlite-index-design-for-small-a`
+
+Observed failure:
+
+- The first run hit parent-level `timeout` before a structured child payload existed, leaving `projectRoot`, `projectId`, and `lanes` empty.
+- With shorter phase timeouts, bootstrap completed and produced durable scorecards, but the run reused the old topic slug project under the configured long-lived `projectsRoot`.
+- Runtime queue/session files were empty after the rerun, but `PROJECT_MANIFEST.json` had top-level `current_stage=completed` while canonical `workflow_control` still reported `stage=experiment`, `blocking_reason=multi_seed_validation_pending`.
+- The reused project still contained the old GCD/FixMatch experiment bundle:
+  `exp-1__local_consistency_debiasing_probe`, `GCD_PROTOCOL.json`, `data/gcd_reference_split.jsonl`, H-score metrics, and `Consistency filtering for unlabeled candidates`.
+- This made the SQLite smoke unable to validate the TODO-13 profile repair because the harness was testing contaminated persisted state instead of a clean live project.
+
+Fix contract:
+
+- Isolated live E2E smoke must be isolated at the project root level, not only at the gateway/conversation level.
+- When the runner starts the default isolated gateway and the caller did not opt into reuse, `projectsRoot` must resolve to the current run root's `projects/` directory even if the OpenClaw config has a long-lived `projectsRoot`.
+- Explicit `--projects-root` and `--reuse-project` continue to support stateful debugging.
+- Discord parity must remain faithful to a native slash command; the fix must not depend on hidden `--project-id` overrides for live Discord parity.
+
+Remaining risk:
+
+- A clean isolated rerun is still needed to confirm the SQLite materializer now produces `SQLITE_PROTOCOL.json` and the SQLite benchmark bundle in a live project.
+- The first parent-level timeout remains diagnostically weak when no child payload exists; the short-timeout rerun avoided it, but the parent timeout summary should still be hardened separately if it recurs.
+
+### 0.5.7 2026-05-13 live smoke addendum：graph ready 后 dormant IDEA-CATALYST requisition 卡住 graph_build
+
+测试来源：
+
+- Startpoint doc:
+  `/Users/iranb/Library/Mobile Documents/iCloud~md~obsidian/Documents/001-WIKI/entities/autoresarch_projects/25-Mac-CPU-5min-AutoResearch-real-test-startpoints-2026-05-12.md`
+- Topic:
+  `CPU-only SQLite index design for small analytical workloads on macOS: compare no index, single-column index, composite index, and covering index for point and range queries under a 5-minute per-run budget, optimizing p95 query latency while tracking insert overhead and database size.`
+- Clean isolated run summary:
+  `.openclaw-research/e2e-runs/2026-05-13T052011Z-experiment-cpu-only-sqlite-index-design-for-small-analytical-workloads-on-macos-compare-no-/AUTO_WORKFLOW_E2E_SUMMARY.json`
+- Run-local project:
+  `.openclaw-research/e2e-runs/2026-05-13T052011Z-experiment-cpu-only-sqlite-index-design-for-small-analytical-workloads-on-macos-compare-no-/projects/cpu-only-sqlite-index-design-for-small-a`
+
+Observed failure:
+
+- The TODO-14 isolation fix worked: `projectsRoot` resolved to the run-local `projects/` directory and the stale long-lived Downloads project was not reused.
+- The run advanced `setup -> graph_build -> frontier_mapping -> idea -> graph_build`, then failed with
+  `live_no_progress stage=graph_build owner=researcher reason=timeout`.
+- The clean project had `paper_ingestion.graph_presence_status=ready` and `workflow_control.completion.status=complete`, but a newly queued `idea_catalyst_requisition` had no launch/session evidence (`attempt_count=0`, no `started_at`, no `last_run_id`, no runtime queue/session entries).
+- Existing stale literature-requisition reconciliation could have degraded the request after its bounded grace window, but the live runner declared failure after the first no-progress turn and never gave the auto-iterator another tick to run that reconciler.
+
+Fix contract:
+
+- Live E2E no-progress handling must not be a terminal decision by itself.
+- After a no-progress stage timeout and short grace wait, run exactly one auto-iterator reconciliation tick before failing.
+- If that tick changes stage/owner or workflow-progress fingerprint, count the turn as progress and continue the normal iteration budget.
+- Keep the IDEA-CATALYST decision contract conservative: fresh requisitions still route through graph_build; only stale graph-ready/no-launch cases are reconciled by bounded preflight evidence.
+
+Remaining risk:
+
+- The clean SQLite smoke still needs to be rerun after this change to confirm the flow reaches code/experiment and validates `SQLITE_PROTOCOL.json` instead of stopping at graph_build.
+- If a real runtime launches a long-running literature acquisition, the existing queued/running fingerprints should keep it observable; this fix only adds a reconciliation tick after no manifest/runtime progress was seen.
 
 ### 0.6 新增真实问题 C：综述项目被实验论文流水线吞掉
 

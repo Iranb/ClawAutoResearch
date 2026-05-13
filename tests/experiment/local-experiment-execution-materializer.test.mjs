@@ -20,6 +20,157 @@ async function writeText(targetPath, value = "") {
   await fs.writeFile(targetPath, value, "utf8");
 }
 
+test("code experiment materializer emits SQLite-specific bundle for SQLite index topics", async (t) => {
+  const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sqlite-code-bundle-"));
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  const topic =
+    "CPU-only SQLite index design for small analytical workloads on macOS: compare no index, single-column index, composite index, and covering index for point and range queries under a 5-minute per-run budget, optimizing p95 query latency while tracking insert overhead and database size.";
+
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "sqlite-index-local-exp",
+    current_stage: "code",
+    owner_agent: "coder",
+    topic,
+    research_program: {
+      status: "approved",
+      goal: topic,
+      primary_metric: "p95 query latency",
+      baseline_reference: "SQLite no-index table scan baseline",
+      datasets: ["synthetic-sqlite-events-workload"],
+      tracks: [
+        {
+          track_id: "track-sqlite",
+          status: "active",
+          hypothesis:
+            "Composite and covering SQLite indexes reduce p95 query latency compared with no index while bounding insert overhead and database size.",
+          novelty_basis:
+            "Use a deterministic local SQLite workload to compare index strategy trade-offs under a CPU-only budget.",
+          main_metric: "p95 query latency",
+          required_baselines: ["no_index"],
+          required_ablations: ["single_column", "composite", "covering"],
+          required_controls: ["same rows", "same query suite", "same PRAGMA settings"],
+          write_scope: {
+            allowed_claim_ids: ["claim-sqlite-p95-latency"],
+          },
+        },
+      ],
+      plan_alternatives: [
+        {
+          option_id: "opt_covering",
+          linked_track_id: "track-sqlite",
+          summary: "Covering index benchmark plan",
+          graph_evidence_paths: ["researcher/PLAN.md#covering-index"],
+        },
+      ],
+      plan_selection: {
+        selected_option_id: "opt_covering",
+        selected_track_id: "track-sqlite",
+        compared_option_ids: [
+          "opt_no_index",
+          "opt_single_column",
+          "opt_composite",
+          "opt_covering",
+        ],
+        decisive_graph_evidence_paths: ["researcher/PLAN_AUDIT.md#sqlite-evidence"],
+      },
+    },
+  });
+
+  const bundle = await materializeCodeExperimentBundleImpl({
+    projectRoot,
+    trigger: "test",
+    agentId: "coder",
+  });
+
+  assert.equal(bundle.experimentId, "exp-1");
+  assert.equal(
+    bundle.bundleDir,
+    "coder/experiments/track-sqlite/exp-1__sqlite_index_latency_benchmark"
+  );
+  assert.ok(bundle.generatedFiles.some((entry) => entry.endsWith("/SQLITE_PROTOCOL.json")));
+  assert.ok(
+    bundle.generatedFiles.some((entry) => entry.endsWith("/data/sqlite_workload_config.json"))
+  );
+  assert.ok(!bundle.generatedFiles.some((entry) => entry.endsWith("/GCD_PROTOCOL.json")));
+  assert.ok(
+    !bundle.generatedFiles.some((entry) => entry.endsWith("/data/gcd_reference_split.jsonl"))
+  );
+
+  const bundleDir = path.join(projectRoot, bundle.bundleDir);
+  const trainPy = await fs.readFile(path.join(bundleDir, "train.py"), "utf8");
+  assert.match(trainPy, /import sqlite3/);
+  assert.match(trainPy, /def create_index_strategy/);
+  assert.match(trainPy, /def run_sqlite_index_benchmark/);
+  assert.doesNotMatch(trainPy, /run_fixmatch_consistency|known_novel_h_score|GCD_PROTOCOL/);
+
+  const experimentManifest = JSON.parse(
+    await fs.readFile(path.join(bundleDir, "EXPERIMENT_MANIFEST.json"), "utf8")
+  );
+  assert.equal(
+    experimentManifest.implementation_type,
+    "local_reference_sqlite_index_benchmark"
+  );
+  assert.equal(experimentManifest.benchmark_protocol_path, `${bundle.bundleDir}/SQLITE_PROTOCOL.json`);
+  assert.equal(
+    experimentManifest.dataset_path,
+    `${bundle.bundleDir}/data/sqlite_workload_config.json`
+  );
+  assert.equal(experimentManifest.reference_dataset.metric, "p95_query_latency_ms");
+  assert.match(JSON.stringify(experimentManifest.innovation_points), /SQLite|index|p95/);
+  assert.match(
+    JSON.stringify(experimentManifest.implementation_proof.integration_points),
+    /generate_rows|create_index_strategy|summarize_latency_metrics/
+  );
+
+  const readme = await fs.readFile(path.join(bundleDir, "README.md"), "utf8");
+  assert.match(readme, /SQLite Index Latency Reference Benchmark/);
+  assert.match(readme, /single-column, composite, and covering indexes/);
+  assert.doesNotMatch(readme, /FixMatch|known\/novel H-score|GCD reference split/);
+
+  const protocol = JSON.parse(await fs.readFile(path.join(bundleDir, "SQLITE_PROTOCOL.json"), "utf8"));
+  assert.deepEqual(protocol.index_strategies, [
+    "no_index",
+    "single_column",
+    "composite",
+    "covering",
+  ]);
+
+  const hyperparameterMap = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "coder", "HYPERPARAMETER_SOURCE_MAP.json"), "utf8")
+  );
+  assert.ok(hyperparameterMap.parameters.some((entry) => entry.name === "query_repeats"));
+  assert.ok(hyperparameterMap.parameters.some((entry) => entry.name === "row_counts"));
+  assert.match(JSON.stringify(hyperparameterMap), /run_sqlite_index_benchmark|index_strategies/);
+
+  const datasetLock = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "coder", "DATASET_PROTOCOL_LOCK.json"), "utf8")
+  );
+  assert.deepEqual(datasetLock.split_contract.index_strategies.strategies, [
+    "no_index",
+    "single_column",
+    "composite",
+    "covering",
+  ]);
+  assert.doesNotMatch(JSON.stringify(datasetLock), /known_classes|novel_classes/);
+
+  const baselineAlignment = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "coder", "BASELINE_ALIGNMENT_PACKET.json"), "utf8")
+  );
+  assert.match(JSON.stringify(baselineAlignment.fairness_constraints), /same generated rows/);
+  assert.equal(baselineAlignment.primary_metric, "p95 query latency");
+  const manifest = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "PROJECT_MANIFEST.json"), "utf8")
+  );
+  assert.equal(manifest.workflow_control.stage, "code");
+  assert.equal(manifest.workflow_control.owner, "coder");
+  assert.equal(manifest.workflow_control.next_action, "/run-experiment");
+  assert.equal(manifest.workflow_control.completion.status, "incomplete");
+  assert.equal(manifest.workflow_control.completion.source, "code_completion");
+});
+
 test("local experiment execution materializer runs and reconciles a code bundle for analysis", async (t) => {
   const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-local-experiment-"));
   t.after(async () => {
@@ -29,6 +180,7 @@ test("local experiment execution materializer runs and reconciles a code bundle 
   await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
     project_id: "local-exp",
     current_stage: "experiment",
+    owner_agent: "researcher",
     topic:
       "TOWARDS UNDERSTANDING WHY FIXMATCH GENERALIZES BETTER THAN SUPERVISED LEARNING 这篇论文里提到的方法改进GCD",
     orchestration_state: {
@@ -139,6 +291,12 @@ test("local experiment execution materializer runs and reconciles a code bundle 
     JSON.stringify(implementationEvidence.implementation_contract.integration_points),
     /run_fixmatch_consistency|FixMatch/i
   );
+  const manifestAfterBundle = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "PROJECT_MANIFEST.json"), "utf8")
+  );
+  assert.equal(manifestAfterBundle.current_stage, "experiment");
+  assert.equal(manifestAfterBundle.owner_agent, "researcher");
+  assert.equal(manifestAfterBundle.orchestration_state.next_transition_candidate, null);
 
   const baselineAlignment = JSON.parse(
     await fs.readFile(path.join(projectRoot, "coder", "BASELINE_ALIGNMENT_PACKET.json"), "utf8")
@@ -270,6 +428,17 @@ test("local experiment execution materializer runs and reconciles a code bundle 
   );
   assert.equal(ledger.experiments[0].metadata.karpathy_inner_loop.mode, "karpathy_fast_keep_discard");
   assert.equal(ledger.experiments[0].metadata.karpathy_inner_loop.keep_discard_decision, "keep");
+  assert.equal(
+    ledger.experiments[0].metadata.trial_contract.source,
+    "local_experiment_execution_materializer"
+  );
+  assert.equal(ledger.experiments[0].metadata.trial_contract.decision, "advance");
+  assert.equal(ledger.experiments[0].metadata.trial_contract.commit_hash, "candidate-local-exp");
+  assert.equal(ledger.experiments[0].metadata.trial_contract.seed, 42);
+  assert.equal(
+    ledger.experiments[0].metadata.trial_contract.primary_metric.delta,
+    ledger.experiments[0].metrics.delta_h_score
+  );
 
   const decision = evaluateExperimentSearchDecision({
     experimentSearch: manifest.experiment_search,
@@ -610,6 +779,16 @@ test("local experiment execution keeps Karpathy loop running when primary metric
   assert.match(loopState.trial_history[0].attempt.stderr_path, /stderr\.log$/);
   assert.equal(loopState.advance.analyze.allowed, false);
   assert.match(loopState.blocking_reason, /No promoted trial exists/i);
+
+  const ledger = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "researcher", "EXPERIMENT_LEDGER.json"), "utf8")
+  );
+  assert.equal(ledger.experiments[0].metadata.trial_contract.decision, "discard");
+  assert.equal(ledger.experiments[0].metadata.trial_contract.commit_hash, "candidate-zero");
+  assert.equal(
+    ledger.experiments[0].metadata.trial_contract.keep_discard_decision,
+    "discard"
+  );
 
   await fs.access(path.join(projectRoot, loopState.trial_history[0].attempt.stdout_path));
   await fs.access(path.join(projectRoot, loopState.trial_history[0].attempt.stderr_path));

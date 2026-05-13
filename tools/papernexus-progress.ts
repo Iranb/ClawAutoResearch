@@ -71,6 +71,8 @@ export type PapernexusProgressRemoteTask = {
 };
 
 export type PapernexusProgressQueue = {
+  sequence?: number | null;
+  last_event_at?: string | null;
   total: number | null;
   pending: number | null;
   running: number | null;
@@ -219,6 +221,8 @@ function normalizeRemoteTaskProgress(
 function normalizeQueueProgress(value: unknown): PapernexusProgressQueue | null {
   const record = asNullableRecord(value) ?? {};
   const normalized: PapernexusProgressQueue = {
+    sequence: normalizeCount(record.sequence),
+    last_event_at: pickString(record, ["last_event_at", "lastEventAt"]),
     total: normalizeCount(record.total),
     pending: normalizeCount(record.pending),
     running: normalizeCount(record.running),
@@ -238,6 +242,8 @@ function normalizeQueueProgress(value: unknown): PapernexusProgressQueue | null 
         : null,
   };
   return normalized.total !== null ||
+    normalized.sequence !== null ||
+    normalized.last_event_at !== null ||
     normalized.pending !== null ||
     normalized.running !== null ||
     normalized.completed !== null ||

@@ -1,4 +1,5 @@
 import { deriveAgentSessionKeyForRole } from "../agent-task-dispatch";
+import { normalizeWorkflowControlContract } from "../workflow-control-contract.js";
 import { readJsonIfExists } from "../workflow-guard-core/fs";
 import { normalizeWritingContractState } from "../workflow-guard-state/writing-contract";
 import { mergeBuiltinWorkflowHooksIntoSummary } from "./builtin-bridge.js";
@@ -53,12 +54,18 @@ async function readWorkflowHookEnvironment(params: {
     (await readJsonIfExists<Record<string, unknown>>(
       `${params.projectRoot}/PROJECT_MANIFEST.json`
     )) ?? {};
+  const workflowControl = normalizeWorkflowControlContract(manifest.workflow_control);
+  const currentStage =
+    workflowControl?.stage ??
+    (typeof manifest.current_stage === "string" && manifest.current_stage.trim()
+      ? manifest.current_stage.trim()
+      : null);
   const writingContract = normalizeWritingContractState(manifest.writing_contract);
   const workflowLine =
     manifest.workflow_line === "survey" ||
     manifest.paper_type === "survey" ||
     writingContract.paperMode === "survey" ||
-    manifest.current_stage === "survey_review"
+    currentStage === "survey_review"
       ? "survey"
       : "experiment";
   return {

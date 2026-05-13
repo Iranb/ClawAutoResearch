@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { deriveAgentSessionKeyForRole } from "../agent-task-dispatch";
+import { normalizeWorkflowControlContract } from "../workflow-control-contract.js";
 import { readJsonIfExists } from "../workflow-guard-core/fs";
 import {
   normalizeWritingContractState,
@@ -62,13 +63,16 @@ async function readHookEnvironment(projectRoot: string): Promise<{
     (await readJsonIfExists<Record<string, unknown>>(
       path.join(projectRoot, "PROJECT_MANIFEST.json")
     )) ?? {};
+  const workflowControl = normalizeWorkflowControlContract(manifest.workflow_control);
+  const currentStage =
+    workflowControl?.stage ?? readString(manifest.current_stage);
   const writingContract = normalizeWritingContractState(manifest.writing_contract);
   return {
     workflowLine:
       readString(manifest.workflow_line) === "survey" ||
       readString(manifest.paper_type) === "survey" ||
       writingContract.paperMode === "survey" ||
-      readString(manifest.current_stage) === "survey_review"
+      currentStage === "survey_review"
         ? "survey"
         : "experiment",
     paperMode: writingContract.paperMode,

@@ -15,6 +15,7 @@ import {
 } from "../workflow-guard-state/revision-control";
 import { normalizeParagraphLogicAuditState } from "../workflow-guard-state/paragraph-logic-audit";
 import { readWorkflowHooksStateStore } from "../workflow-hooks/state.js";
+import { normalizeWorkflowControlContract } from "../workflow-control-contract.js";
 import { normalizePaperStoryState } from "../workflow-guard-state/paper-story";
 import {
   hydrateReviewIssueTrackerState,
@@ -566,8 +567,10 @@ export async function deriveRevisionControlState(params: {
     ...buildParagraphLogicAuditSource(paragraphLogicAudit),
   ];
 
+  const workflowControl = normalizeWorkflowControlContract(manifest.workflow_control);
   const sourceStage =
     params.stage ??
+    workflowControl?.stage ??
     (typeof manifest.current_stage === "string" ? manifest.current_stage : null);
   const currentOwner =
     openSources.length > 0

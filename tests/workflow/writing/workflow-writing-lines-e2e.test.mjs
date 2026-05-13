@@ -8,6 +8,9 @@ import {
   materializeSurveyReviewState,
   runWorkflowAutoIterator,
 } from "../../../tools/workflow-guard.ts";
+import {
+  buildWorkflowControlContract,
+} from "../../../tools/workflow-control-contract.ts";
 
 async function writeJson(targetPath, value) {
   await fs.mkdir(path.dirname(targetPath), { recursive: true });
@@ -191,6 +194,21 @@ test("end-to-end survey paper line advances survey review into survey-mode write
   manifestAfterTransition.current_stage = "write";
   manifestAfterTransition.current_micro_stage = "writing_requested";
   manifestAfterTransition.owner_agent = "academic_writer";
+  manifestAfterTransition.workflow_control = buildWorkflowControlContract({
+    contractId: "wfctl-test-survey-write-activated",
+    reconciledAt: new Date().toISOString(),
+    stage: "write",
+    owner: "academic_writer",
+    nextAction:
+      manifestAfterTransition.next_action ??
+      "Begin survey paper writing from survey review artifacts.",
+    status: "ready",
+    blockingReason: null,
+    completionStatus: "incomplete",
+    completionSource: "write_handoff",
+    completionReason: "owner_work_required",
+    runtimeState: "active",
+  });
   delete manifestAfterTransition.paper_story_state;
   delete manifestAfterTransition.review_pressure_packet;
   manifestAfterTransition.orchestration_state = {

@@ -17,6 +17,7 @@ import {
   normalizeOrchestrationState,
   serializeOrchestrationState,
 } from "../workflow-guard-state/execution-state";
+import { reconcileWorkflowControl } from "../workflow-control-reconciler";
 import {
   normalizeResearchProgramState,
   normalizeResearchProgramTask,
@@ -1049,6 +1050,10 @@ export async function materializePlanStateImpl(params: {
       stop_rules: stopRules,
       rollbackTriggers,
       rollback_triggers: rollbackTriggers,
+      writeScope: {
+        allowedClaimIds,
+        allowedFigureIds,
+      },
       write_scope: {
         allowed_claim_ids: allowedClaimIds,
         allowed_figure_ids: allowedFigureIds,
@@ -1184,14 +1189,59 @@ export async function materializePlanStateImpl(params: {
       ],
     }).planAlternatives[0]
   );
-  const nextPlanAlternatives = Array.from(optionMap.values());
+  const planAlternativesBeforeComparedRepair = Array.from(optionMap.values());
   const comparedOptionIds = uniqueStrings([
     ...current.planSelection.comparedOptionIds,
     ...patchState.planSelection.comparedOptionIds,
     selectedOptionId,
     fallbackOptionId,
-    ...nextPlanAlternatives.slice(0, 2).map((option) => option.optionId),
-  ]).slice(0, Math.max(2, nextPlanAlternatives.length));
+    ...planAlternativesBeforeComparedRepair.slice(0, 2).map((option) => option.optionId),
+  ]).slice(0, Math.max(2, planAlternativesBeforeComparedRepair.length));
+  for (const [index, optionId] of comparedOptionIds.entries()) {
+    const existingOption = optionMap.get(optionId) ?? null;
+    const graphEvidencePaths = existingOption?.graphEvidencePaths.length
+      ? existingOption.graphEvidencePaths
+      : decisiveGraphEvidencePaths;
+    if (
+      !existingOption ||
+      !existingOption.title ||
+      !existingOption.summary ||
+      existingOption.graphEvidencePaths.length === 0
+    ) {
+      generatedDefaults.push(`plan_alternatives.${optionId}`);
+    }
+    const title = existingOption?.title ?? `Comparison plan ${index + 1}`;
+    optionMap.set(
+      optionId,
+      normalizeResearchProgramState({
+        plan_alternatives: [
+          {
+            ...(existingOption ?? {}),
+            optionId,
+            option_id: optionId,
+            linkedTrackId:
+              existingOption?.linkedTrackId ??
+              (optionId === selectedOptionId ? selectedTrackId : null),
+            linked_track_id:
+              existingOption?.linkedTrackId ??
+              (optionId === selectedOptionId ? selectedTrackId : null),
+            title,
+            status:
+              existingOption?.status ??
+              (optionId === selectedOptionId ? "selected" : "candidate"),
+            summary:
+              existingOption?.summary ??
+              `Compare ${title} against the selected plan under the same graph-grounded evaluation protocol.`,
+            graphEvidencePaths,
+            graph_evidence_paths: graphEvidencePaths,
+            keyRisks: existingOption?.keyRisks ?? [],
+            key_risks: existingOption?.keyRisks ?? [],
+          },
+        ],
+      }).planAlternatives[0]
+    );
+  }
+  const nextPlanAlternatives = Array.from(optionMap.values());
   const nextStatus =
     nonMissingStage(patchState.status) ??
     (["approved", "ready", "running"].includes(normalizeStage(current.status) ?? "")
@@ -1361,6 +1411,10 @@ export async function materializePlanStateImpl(params: {
       selectedTrack,
       selectedOption,
     }),
+  });
+  await reconcileWorkflowControl({
+    projectRoot,
+    manifest,
   });
   generatedFiles.push("PROJECT_MANIFEST.json");
   generatedFiles.push(AUTORESEARCH_LOOP_STATE_PATH);

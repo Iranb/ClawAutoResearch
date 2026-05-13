@@ -29,6 +29,19 @@ It captures the stable delivery preferences and workflow-debugging expectations 
   - missing artifacts or incomplete contracts
 - If a manual repair is required, record the repository change needed to prevent the same class of failure.
 
+## Canonical Workflow Completion Contracts
+
+- Treat workflow completion as a canonical contract problem, not a file-count problem.
+- A stage must have exactly one canonical machine-readable completion source for workflow gating.
+- Derived documents and evidence artifacts may inform the completion resolver, but must not directly gate workflow advancement.
+- `PROJECT_MANIFEST.json` semantic summaries such as `paper_ingestion`, `experiment_search`, `survey_review`, and `write_package` are projections unless explicitly documented as the canonical contract.
+- Top-level manifest fields such as `current_stage`, `owner_agent`, `next_action`, and `blocking_reason` should be treated as mirrors of the reconciled workflow control decision, not independent authorities.
+- When derived artifacts and manifest projections disagree, repair or rebuild the projection through the reconciler instead of letting both independently block the same stage.
+- Auto-iterator, handoff, status, and coordinator paths should read a reconciled canonical decision before dispatching work.
+- Runtime queue/session state answers whether work is active, queued, degraded, or stale; it must not decide whether a stage is semantically complete.
+- Prefer a small canonical contract plus a clear reconciler over adding more status files, shadow fields, or implicit heuristics.
+- Automatic advancement should be conservative: one tick may reconcile state, mark stale runtime terminal/superseded, dispatch one owner action, or wait with a structured blocker; it should not chain multiple stage transitions from partial evidence.
+
 ## Workflow-Specific Expectations
 
 When AutoResearch gets stuck, inspect these files first:
@@ -49,7 +62,7 @@ When analyzing a stall, explicitly answer:
 - Who is the current owner?
 - What is the next action?
 - What is the blocking reason?
-- Is the problem in stage readiness, owner routing, handoff delivery, or runtime replay?
+- Is the problem in canonical completion, owner routing, handoff delivery, runtime replay, or projection drift?
 - Is the system actually unable to advance, or is auto mode / launch mode preventing dispatch?
 
 ## Auto Mode And Routing Guardrails
@@ -140,7 +153,7 @@ Avoid changelog-style noise. Report the real outcome and the remaining weak poin
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **ClawAutoResearch** (32704 symbols, 51979 relationships, 300 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **ClawAutoResearch** (32852 symbols, 52325 relationships, 300 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > If any GitNexus tool warns the index is stale, run `npx gitnexus analyze` in terminal first.
 

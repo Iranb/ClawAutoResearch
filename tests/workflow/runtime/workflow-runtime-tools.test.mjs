@@ -962,6 +962,16 @@ test("research_workflow survey-review actions persist and read durable survey st
   assert.equal(setResult.state.topic, "Graph reasoning survey");
   assert.equal(setResult.state.status, "searching");
   assert.equal(setResult.state.queryRoundCount, 10);
+  const manifestAfterSet = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "PROJECT_MANIFEST.json"), "utf8")
+  );
+  assert.equal(manifestAfterSet.workflow_control.stage, "survey_review");
+  assert.equal(manifestAfterSet.workflow_control.owner, "researcher");
+  assert.equal(
+    manifestAfterSet.workflow_control.completion.source,
+    "survey_review_completion"
+  );
+  assert.equal(manifestAfterSet.workflow_control.completion.status, "incomplete");
 
   const summary = await executeWorkflowTool(tool, {
     action: "get_survey_review",
@@ -3375,7 +3385,7 @@ test("research_workflow queue_literature_discovery_requisition bridges a structu
   });
   assert.equal(snapshot.paperIngestionQueuedRequestCount, 1);
   assert.equal(snapshot.paperIngestionRunningRequestCount, 0);
-  assert.equal(snapshot.paperIngestionRuntimeStatus, "idle");
+  assert.equal(snapshot.paperIngestionRuntimeStatus, "waiting_graph");
 });
 
 test("research_workflow materialize_writing_support_artifacts scaffolds durable writer support packets", async (t) => {
@@ -4064,9 +4074,27 @@ test("research_workflow recover_survey_route preserves an active survey write st
     project_id: "survey-demo-project",
     workflow_line: "survey",
     paper_type: "survey",
-    current_stage: "write",
+    current_stage: "plan",
     current_micro_stage: "drafting",
-    owner_agent: "academic_writer",
+    owner_agent: "orchestrator",
+    workflow_control: {
+      schema_version: 1,
+      contract_id: "workflow-control:test",
+      reconciled_at: "2026-05-12T12:00:00.000Z",
+      stage: "write",
+      owner: "academic_writer",
+      next_action: "Continue drafting survey.",
+      status: "ready",
+      blocking_reason: null,
+      completion: {
+        status: "incomplete",
+        source: "write_completion",
+        reason: null,
+      },
+      runtime_state: "idle",
+      queue_key: null,
+      session_key: null,
+    },
     idle_research: { enabled: false },
     writing_contract: {
       paper_mode: "survey",
@@ -4089,6 +4117,8 @@ test("research_workflow recover_survey_route preserves an active survey write st
   assert.equal(manifest.current_stage, "write");
   assert.equal(manifest.owner_agent, "academic_writer");
   assert.equal(manifest.current_micro_stage, "drafting");
+  assert.equal(manifest.workflow_control.stage, "write");
+  assert.equal(manifest.workflow_control.owner, "academic_writer");
 });
 
 test("research_workflow ideation, story, and review-pressure contracts persist through runtime tools", async (t) => {
@@ -5169,7 +5199,7 @@ test("research_workflow capture_diagnostic_bundle materializes a bounded diagnos
     "utf8"
   );
   assert.match(summaryText, /Workflow Diagnostic Bundle/);
-  assert.match(summaryText, /blocking_reason: Waiting for graph presence/);
+  assert.match(summaryText, /blocking_reason: graph_presence_missing_papers/);
   assert.match(summaryText, /revision_control: active/);
   assert.match(summaryText, /auto_dispatch_diagnostics: waiting/);
   assert.match(summaryText, /survey_visual_compiler: ready/);
@@ -7090,6 +7120,7 @@ test("research_workflow start_background_run broadcasts queued status when the r
 
   assert.equal(result.started, false);
   assert.equal(result.reason, "channel_capacity_reached");
+  assert.ok(["active", "queued"].includes(result.ownerRuntimeStatus.status));
   assert.equal(result.statusBroadcast.broadcasted, true);
   assert.ok(
     runtimeCalls.some(
@@ -7175,6 +7206,8 @@ test("research_workflow start_background_run broadcasts reused status context wh
   assert.equal(result.started, true);
   assert.equal(result.reusedIdleSession, true);
   assert.equal(result.sessionKey, reusedSessionKey);
+  assert.ok(["active", "started"].includes(result.ownerRuntimeStatus.status));
+  assert.equal(result.ownerRuntimeStatus.sessionKey, reusedSessionKey);
   assert.equal(result.statusBroadcast.broadcasted, true);
   assert.ok(
     runtimeCalls.some(

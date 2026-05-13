@@ -201,6 +201,190 @@ test("research setter module canonicalizes object-shaped plan track and task pay
   assert.deepEqual(result.state.taskGraph[0].exitCriteria, ["plan locked"]);
 });
 
+test("research setter module preserves canonical plan fields against sparse patches", async (t) => {
+  const projectRoot = await makeProjectRoot({
+    project_id: "demo-project",
+    research_program: {
+      status: "approved",
+      goal: "demo",
+      global_constraints: {},
+      tracks: [
+        {
+          track_id: "track-main",
+          status: "active",
+          hypothesis: "demo hypothesis",
+          novelty_basis: "demo novelty",
+          main_metric: "acc",
+          success_threshold: "acc>=0.9",
+          required_baselines: ["baseline-a"],
+          required_ablations: ["ablation-a"],
+          required_controls: ["seed-control"],
+          experiment_stage_matrix: [
+            "baseline_implementation",
+            "baseline_tuning",
+            "creative_research",
+            "ablation_studies",
+          ],
+          stop_rules: ["stop after no improvement"],
+          rollback_triggers: ["baseline regression"],
+          write_scope: {
+            allowed_claim_ids: ["claim-1"],
+            allowed_figure_ids: ["fig-1"],
+          },
+          budget: {
+            max_runs: 3,
+          },
+        },
+      ],
+      task_graph: [
+        {
+          task_id: "plan-main",
+          stage: "plan",
+          track_id: "track-main",
+          owner: "orchestrator",
+          dependencies: [],
+          entry_criteria: ["track active"],
+          expected_outputs: ["plan ready"],
+          retry_budget: 1,
+          exit_criteria: ["plan locked"],
+        },
+      ],
+      plan_alternatives: [
+        {
+          option_id: "A",
+          linked_track_id: "track-main",
+          title: "Option A",
+          status: "selected",
+          summary: "Selected full-scope plan",
+          graph_evidence_paths: ["graph/A.md"],
+        },
+        {
+          option_id: "B",
+          linked_track_id: "track-main",
+          title: "Option B",
+          status: "candidate",
+          summary: "Narrowed fallback plan",
+          graph_evidence_paths: ["graph/B.md"],
+        },
+        {
+          option_id: "C",
+          linked_track_id: "track-main",
+          title: "Option C",
+          status: "candidate",
+          summary: "Minimal fallback plan",
+          graph_evidence_paths: ["graph/C.md"],
+        },
+        {
+          option_id: "A-fallback",
+          linked_track_id: "track-main",
+          title: "Option A fallback",
+          status: "rejected",
+          summary: "Emergency rollback path",
+          graph_evidence_paths: ["graph/fallback.md"],
+        },
+      ],
+      plan_selection: {
+        selected_option_id: "A",
+        selected_track_id: "track-main",
+        compared_option_ids: ["A", "B", "C", "A-fallback"],
+        rationale: "best coverage",
+        decisive_graph_evidence_paths: ["graph/A.md"],
+        fallback_option_ids: ["A-fallback"],
+      },
+      datasets: ["dataset-a"],
+      success_criteria: ["improve acc"],
+    },
+  });
+
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  const result = await setResearchProgramState({
+    projectRoot,
+    researchProgram: {
+      tracks: [
+        {
+          track_id: "track-main",
+          status: "active",
+          hypothesis: "demo hypothesis",
+          novelty_basis: "demo novelty",
+          main_metric: "acc",
+          success_threshold: "acc>=0.9",
+          required_baselines: ["baseline-a"],
+          required_ablations: ["ablation-a"],
+          required_controls: ["seed-control"],
+          experiment_stage_matrix: [
+            "baseline_implementation",
+            "baseline_tuning",
+            "creative_research",
+            "ablation_studies",
+          ],
+          stop_rules: ["stop after no improvement"],
+          rollback_triggers: ["baseline regression"],
+          write_scope: {
+            allowed_claim_ids: [],
+            allowed_figure_ids: [],
+          },
+          budget: {
+            max_runs: 3,
+          },
+        },
+      ],
+      plan_alternatives: [
+        {
+          option_id: "A",
+          linked_track_id: "track-main",
+          title: "Option A",
+          status: "selected",
+          summary: "Selected full-scope plan",
+          graph_evidence_paths: ["graph/A.md"],
+        },
+        {
+          option_id: "B",
+          linked_track_id: "track-main",
+          status: "candidate",
+          title: null,
+          summary: null,
+          graph_evidence_paths: [],
+        },
+        {
+          option_id: "C",
+          linked_track_id: "track-main",
+          status: "candidate",
+          title: null,
+          summary: null,
+          graph_evidence_paths: [],
+        },
+      ],
+      plan_selection: {
+        selected_option_id: "A",
+        selected_track_id: "track-main",
+        compared_option_ids: ["A", "B", "C"],
+        rationale: "best coverage",
+        decisive_graph_evidence_paths: ["graph/A.md"],
+      },
+    },
+  });
+
+  assert.deepEqual(result.state.tracks[0].writeScope.allowedClaimIds, ["claim-1"]);
+  assert.deepEqual(result.state.tracks[0].writeScope.allowedFigureIds, ["fig-1"]);
+  assert.equal(result.state.planAlternatives.length, 4);
+  const optionB = result.state.planAlternatives.find((option) => option.optionId === "B");
+  const optionC = result.state.planAlternatives.find((option) => option.optionId === "C");
+  const fallback = result.state.planAlternatives.find(
+    (option) => option.optionId === "A-fallback"
+  );
+  assert.equal(optionB?.title, "Option B");
+  assert.equal(optionB?.summary, "Narrowed fallback plan");
+  assert.deepEqual(optionB?.graphEvidencePaths, ["graph/B.md"]);
+  assert.equal(optionC?.title, "Option C");
+  assert.equal(optionC?.summary, "Minimal fallback plan");
+  assert.deepEqual(optionC?.graphEvidencePaths, ["graph/C.md"]);
+  assert.equal(fallback?.title, "Option A fallback");
+  assert.deepEqual(result.state.planSelection.fallbackOptionIds, ["A-fallback"]);
+});
+
 test("writing setter module copies templates and updates review state", async (t) => {
   const templateFile = await fs.mkdtemp(
     path.join(os.tmpdir(), "openclaw-writing-template-")

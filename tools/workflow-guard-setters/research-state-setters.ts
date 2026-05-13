@@ -62,6 +62,7 @@ import {
   normalizeExperimentReviewState,
   serializeExperimentReviewState,
 } from "../workflow-guard-state/experiment-review";
+import { normalizeWorkflowControlContract } from "../workflow-control-contract.js";
 import {
   getExperimentSearchPath,
   loadExperimentSearchState,
@@ -75,6 +76,7 @@ import {
   normalizeExperimentSearchSpec,
   resolveExperimentSearchSpecPath,
 } from "../workflow-guard-state/experiment-search-spec";
+import { reconcileWorkflowControl } from "../workflow-control-reconciler";
 import {
   getExperimentReviewStatePath,
   loadExperimentReviewState,
@@ -100,6 +102,9 @@ type WritePackageState = ReturnType<typeof normalizeWritePackageState>;
 type ExperimentSearchState = ReturnType<typeof normalizeExperimentSearchState>;
 type ExperimentReviewState = ReturnType<typeof normalizeExperimentReviewState>;
 type SurveyReviewState = ReturnType<typeof normalizeSurveyReviewState>;
+type ResearchProgramTrackState = ResearchProgramState["tracks"][number];
+type ResearchProgramTaskState = ResearchProgramState["taskGraph"][number];
+type ResearchProgramPlanAlternativeState = ResearchProgramState["planAlternatives"][number];
 
 const DEFAULT_BRAINSTORM_CYCLE_DIR = "researcher/brainstorm-cycle";
 
@@ -162,6 +167,256 @@ async function fileHasNonWhitespaceContent(targetPath: string | null): Promise<b
   }
   const raw = await readTextIfExists(targetPath);
   return Boolean(raw && raw.trim().length > 0);
+}
+
+function preserveStringArray(
+  nextValues: string[],
+  currentValues: string[]
+): string[] {
+  return nextValues.length > 0 ? nextValues : currentValues;
+}
+
+function preserveStringValue(
+  nextValue: string | null | undefined,
+  currentValue: string | null | undefined
+): string | null {
+  if (nextValue && nextValue.trim().length > 0) {
+    return nextValue;
+  }
+  return currentValue ?? null;
+}
+
+function preserveNumberValue(
+  nextValue: number | null | undefined,
+  currentValue: number | null | undefined
+): number | null {
+  if (nextValue != null) {
+    return nextValue;
+  }
+  return currentValue ?? null;
+}
+
+function stabilizeResearchProgramTrack(params: {
+  currentTrack: ResearchProgramTrackState | null;
+  nextTrack: ResearchProgramTrackState;
+}): ResearchProgramTrackState {
+  const { currentTrack, nextTrack } = params;
+  if (!currentTrack) {
+    return nextTrack;
+  }
+  return {
+    ...nextTrack,
+    priority: preserveNumberValue(nextTrack.priority, currentTrack.priority),
+    status:
+      nextTrack.status === "draft" && currentTrack.status !== "draft"
+        ? currentTrack.status
+        : nextTrack.status,
+    hypothesis: preserveStringValue(nextTrack.hypothesis, currentTrack.hypothesis),
+    noveltyBasis: preserveStringValue(nextTrack.noveltyBasis, currentTrack.noveltyBasis),
+    mainMetric: preserveStringValue(nextTrack.mainMetric, currentTrack.mainMetric),
+    successThreshold: preserveStringValue(
+      nextTrack.successThreshold,
+      currentTrack.successThreshold
+    ),
+    requiredBaselines: preserveStringArray(
+      nextTrack.requiredBaselines,
+      currentTrack.requiredBaselines
+    ),
+    requiredAblations: preserveStringArray(
+      nextTrack.requiredAblations,
+      currentTrack.requiredAblations
+    ),
+    requiredControls: preserveStringArray(
+      nextTrack.requiredControls,
+      currentTrack.requiredControls
+    ),
+    experimentStageMatrix: preserveStringArray(
+      nextTrack.experimentStageMatrix,
+      currentTrack.experimentStageMatrix
+    ),
+    budget: {
+      gpuHours: preserveNumberValue(
+        nextTrack.budget.gpuHours,
+        currentTrack.budget.gpuHours
+      ),
+      maxRuns: preserveNumberValue(nextTrack.budget.maxRuns, currentTrack.budget.maxRuns),
+      maxDebugIterations: preserveNumberValue(
+        nextTrack.budget.maxDebugIterations,
+        currentTrack.budget.maxDebugIterations
+      ),
+    },
+    stopRules: preserveStringArray(nextTrack.stopRules, currentTrack.stopRules),
+    rollbackTriggers: preserveStringArray(
+      nextTrack.rollbackTriggers,
+      currentTrack.rollbackTriggers
+    ),
+    writeScope: {
+      allowedClaimIds: preserveStringArray(
+        nextTrack.writeScope.allowedClaimIds,
+        currentTrack.writeScope.allowedClaimIds
+      ),
+      allowedFigureIds: preserveStringArray(
+        nextTrack.writeScope.allowedFigureIds,
+        currentTrack.writeScope.allowedFigureIds
+      ),
+    },
+  };
+}
+
+function stabilizeResearchProgramTask(params: {
+  currentTask: ResearchProgramTaskState | null;
+  nextTask: ResearchProgramTaskState;
+}): ResearchProgramTaskState {
+  const { currentTask, nextTask } = params;
+  if (!currentTask) {
+    return nextTask;
+  }
+  return {
+    ...nextTask,
+    stage: preserveStringValue(nextTask.stage, currentTask.stage) ?? null,
+    trackId: preserveStringValue(nextTask.trackId, currentTask.trackId) ?? null,
+    owner: preserveStringValue(nextTask.owner, currentTask.owner) ?? null,
+    dependencies: preserveStringArray(nextTask.dependencies, currentTask.dependencies),
+    entryCriteria: preserveStringArray(nextTask.entryCriteria, currentTask.entryCriteria),
+    expectedOutputs: preserveStringArray(nextTask.expectedOutputs, currentTask.expectedOutputs),
+    retryBudget: preserveNumberValue(nextTask.retryBudget, currentTask.retryBudget),
+    exitCriteria: preserveStringArray(nextTask.exitCriteria, currentTask.exitCriteria),
+  };
+}
+
+function stabilizeResearchProgramPlanAlternative(params: {
+  currentOption: ResearchProgramPlanAlternativeState | null;
+  nextOption: ResearchProgramPlanAlternativeState;
+}): ResearchProgramPlanAlternativeState {
+  const { currentOption, nextOption } = params;
+  if (!currentOption) {
+    return nextOption;
+  }
+  return {
+    ...nextOption,
+    linkedTrackId: preserveStringValue(
+      nextOption.linkedTrackId,
+      currentOption.linkedTrackId
+    ) ?? null,
+    sourceDirectionId: preserveStringValue(
+      nextOption.sourceDirectionId,
+      currentOption.sourceDirectionId
+    ) ?? null,
+    title: preserveStringValue(nextOption.title, currentOption.title) ?? null,
+    status:
+      nextOption.status === "candidate" &&
+      currentOption.status &&
+      currentOption.status !== "candidate"
+        ? currentOption.status
+        : nextOption.status,
+    summary: preserveStringValue(nextOption.summary, currentOption.summary) ?? null,
+    graphEvidencePaths: preserveStringArray(
+      nextOption.graphEvidencePaths,
+      currentOption.graphEvidencePaths
+    ),
+    keyRisks: preserveStringArray(nextOption.keyRisks, currentOption.keyRisks),
+  };
+}
+
+function mergeResearchProgramTracks(params: {
+  current: ResearchProgramState;
+  merged: ResearchProgramState;
+}): ResearchProgramTrackState[] {
+  const currentById = new Map(
+    params.current.tracks.map((track) => [track.trackId, track] as const)
+  );
+  const nextById = new Map<string, ResearchProgramTrackState>();
+  for (const currentTrack of params.current.tracks) {
+    nextById.set(currentTrack.trackId, currentTrack);
+  }
+  for (const nextTrack of params.merged.tracks) {
+    nextById.set(
+      nextTrack.trackId,
+      stabilizeResearchProgramTrack({
+        currentTrack: currentById.get(nextTrack.trackId) ?? null,
+        nextTrack,
+      })
+    );
+  }
+  return Array.from(nextById.values());
+}
+
+function mergeResearchProgramTasks(params: {
+  current: ResearchProgramState;
+  merged: ResearchProgramState;
+}): ResearchProgramTaskState[] {
+  const currentById = new Map(
+    params.current.taskGraph.map((task) => [task.taskId, task] as const)
+  );
+  const nextById = new Map<string, ResearchProgramTaskState>();
+  for (const currentTask of params.current.taskGraph) {
+    nextById.set(currentTask.taskId, currentTask);
+  }
+  for (const nextTask of params.merged.taskGraph) {
+    nextById.set(
+      nextTask.taskId,
+      stabilizeResearchProgramTask({
+        currentTask: currentById.get(nextTask.taskId) ?? null,
+        nextTask,
+      })
+    );
+  }
+  return Array.from(nextById.values());
+}
+
+function mergeResearchProgramPlanAlternatives(params: {
+  current: ResearchProgramState;
+  merged: ResearchProgramState;
+}): ResearchProgramPlanAlternativeState[] {
+  const currentById = new Map(
+    params.current.planAlternatives.map((option) => [option.optionId, option] as const)
+  );
+  const nextById = new Map<string, ResearchProgramPlanAlternativeState>();
+  for (const currentOption of params.current.planAlternatives) {
+    nextById.set(currentOption.optionId, currentOption);
+  }
+  for (const nextOption of params.merged.planAlternatives) {
+    nextById.set(
+      nextOption.optionId,
+      stabilizeResearchProgramPlanAlternative({
+        currentOption: currentById.get(nextOption.optionId) ?? null,
+        nextOption,
+      })
+    );
+  }
+  return Array.from(nextById.values());
+}
+
+function mergeResearchProgramPlanSelection(params: {
+  current: ResearchProgramState;
+  merged: ResearchProgramState;
+}): ResearchProgramState["planSelection"] {
+  const currentSelection = params.current.planSelection;
+  const nextSelection = params.merged.planSelection;
+  return {
+    ...nextSelection,
+    selectedOptionId:
+      preserveStringValue(nextSelection.selectedOptionId, currentSelection.selectedOptionId) ??
+      null,
+    selectedTrackId:
+      preserveStringValue(nextSelection.selectedTrackId, currentSelection.selectedTrackId) ??
+      null,
+    comparedOptionIds: preserveStringArray(
+      nextSelection.comparedOptionIds,
+      currentSelection.comparedOptionIds
+    ),
+    rationale: preserveStringValue(nextSelection.rationale, currentSelection.rationale) ?? null,
+    decisiveGraphEvidencePaths: preserveStringArray(
+      nextSelection.decisiveGraphEvidencePaths,
+      currentSelection.decisiveGraphEvidencePaths
+    ),
+    fallbackOptionIds: preserveStringArray(
+      nextSelection.fallbackOptionIds,
+      currentSelection.fallbackOptionIds
+    ),
+    lastComparedAt:
+      preserveStringValue(nextSelection.lastComparedAt, currentSelection.lastComparedAt) ?? null,
+  };
 }
 
 function getBrainstormCycleRootRelativeDir(trackId: string | null): string {
@@ -931,14 +1186,41 @@ export async function setResearchProgramState(params: {
       pickString(patch, ["lastUpdatedAt", "last_updated_at"]) ??
       new Date().toISOString(),
   });
-  manifest.research_program = serializeResearchProgramState(merged);
+  const stabilizedTracks = hasTracksPatch
+    ? mergeResearchProgramTracks({ current, merged })
+    : current.tracks;
+  const stabilizedTaskGraph = hasTaskGraphPatch
+    ? mergeResearchProgramTasks({ current, merged })
+    : current.taskGraph;
+  const stabilizedPlanAlternatives = mergeResearchProgramPlanAlternatives({
+    current,
+    merged,
+  });
+  const stabilizedPlanSelection = mergeResearchProgramPlanSelection({
+    current,
+    merged,
+  });
+  const stabilized = normalizeResearchProgramState({
+    ...serializeResearchProgramState(merged),
+    tracks: stabilizedTracks.map((track) => serializeResearchProgramTrack(track)),
+    task_graph: stabilizedTaskGraph.map((task) => serializeResearchProgramTask(task)),
+    plan_alternatives: stabilizedPlanAlternatives,
+    plan_selection: stabilizedPlanSelection,
+  });
+  manifest.research_program = serializeResearchProgramState(stabilized);
   await saveManifest(params.projectRoot, manifest);
   const projectId = pickString(manifest, ["project_id", "projectId"]);
   return {
-    state: merged,
-    validationErrors: getResearchProgramValidationErrors(merged),
-    onboardingStatus: getResearchProgramOnboardingStatus({ state: merged, projectId }),
-    onboardingGaps: getResearchProgramOnboardingGaps({ state: merged, projectId }),
+    state: stabilized,
+    validationErrors: getResearchProgramValidationErrors(stabilized),
+    onboardingStatus: getResearchProgramOnboardingStatus({
+      state: stabilized,
+      projectId,
+    }),
+    onboardingGaps: getResearchProgramOnboardingGaps({
+      state: stabilized,
+      projectId,
+    }),
   };
 }
 
@@ -970,7 +1252,11 @@ export async function setSurveyReviewState(params: {
   manifest.current_micro_stage = next.currentPhase ?? "survey_requested";
   manifest.owner_agent = STAGE_REQUIREMENTS.survey_review?.owner ?? "researcher";
   await saveManifest(params.projectRoot, manifest);
-  return getSurveyReviewStateSummary(manifest);
+  const reconciled = await reconcileWorkflowControl({
+    projectRoot: params.projectRoot,
+    manifest,
+  });
+  return getSurveyReviewStateSummary(reconciled.manifest);
 }
 
 export async function setIdeationContractState(params: {
@@ -1109,8 +1395,11 @@ export async function setOrchestrationState(params: {
   const manifest = await readManifestEnsured(params.projectRoot);
   const current = normalizeOrchestrationState(manifest.orchestration_state);
   const patch = asRecord(params.orchestrationState) ?? {};
+  const workflowControl = normalizeWorkflowControlContract(manifest.workflow_control);
+  const currentStage =
+    workflowControl?.stage ?? normalizeStage(manifest.current_stage);
   const surveyProject =
-    normalizeStage(manifest.current_stage) === "survey_review" ||
+    currentStage === "survey_review" ||
     normalizeSurveyReviewState(manifest.survey_review).status !== "missing" ||
     normalizeStage((asRecord(manifest.writing_contract) ?? {}).paper_mode) === "survey" ||
     normalizeStage(manifest.workflow_line) === "survey" ||
@@ -1211,7 +1500,7 @@ export async function setOrchestrationState(params: {
     state: next,
     validationErrors: getOrchestrationStateValidationErrors(
       next,
-      normalizeStage(manifest.current_stage)
+      currentStage
     ),
   };
 }

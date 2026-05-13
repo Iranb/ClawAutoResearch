@@ -119,6 +119,50 @@ test("handoff intent store reuses terminal intents by idempotency key", async (t
   assert.equal(store.intents.length, 1);
 });
 
+test("handoff intent store reissues expired stage owner intents by idempotency key", async (t) => {
+  const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-handoff-"));
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  const expired = await upsertWorkflowHandoffIntent({
+    projectRoot,
+    projectId: "demo",
+    idempotencyKey: "stage:demo:plan:orchestrator:revision-1",
+    toRole: "orchestrator",
+    reason: "stage_owner_change",
+    stage: "plan",
+  });
+  await transitionWorkflowHandoffIntent({
+    projectRoot,
+    intentId: expired.intent.intentId,
+    toStatus: "expired",
+    terminalReason: "expiresAt elapsed",
+  });
+  const reissued = await upsertWorkflowHandoffIntent({
+    projectRoot,
+    projectId: "demo",
+    idempotencyKey: "stage:demo:plan:orchestrator:revision-1",
+    toRole: "orchestrator",
+    reason: "stage_owner_change",
+    stage: "plan",
+  });
+
+  assert.equal(reissued.created, true);
+  assert.notEqual(reissued.intent.intentId, expired.intent.intentId);
+  assert.equal(reissued.intent.status, "prepared");
+  const store = await readWorkflowHandoffIntentStore(projectRoot);
+  assert.equal(store.intents.length, 2);
+  assert.equal(
+    store.intents.find((intent) => intent.intentId === expired.intent.intentId)?.status,
+    "expired"
+  );
+  assert.equal(
+    store.intents.find((intent) => intent.intentId === reissued.intent.intentId)?.status,
+    "prepared"
+  );
+});
+
 test("handoff status machine rejects invalid terminal transitions", async (t) => {
   const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-handoff-"));
   t.after(async () => {

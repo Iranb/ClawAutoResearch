@@ -1801,6 +1801,10 @@ test("research_workflow materialize_idea_catalyst_state emits a structured requi
         (entry) => typeof entry.query === "string" && entry.query.trim().length > 0
     )
   );
+  assert.match(
+    requisition.search_queries.map((entry) => entry.query).join("\n"),
+    /Generalized category discovery/i
+  );
   assert.equal(typeof requisition.requisition_id, "string");
   assert.equal(requisition.requisition_id.length > 0, true);
   assert.ok(Array.isArray(requisition.coverage_gap_questions));
@@ -1947,6 +1951,13 @@ test("research_workflow queue_idea_catalyst_requisition bridges a catalyst requi
   assert.match(result.request.commandText ?? "", /INVESTIGATION_REQUISITION\.json/);
   assert.match(result.request.commandText ?? "", /graph-build/i);
   assert.match(result.request.manifestPath ?? "", /CATALYST_REQUISITION\.json$/);
+  const scaffold = JSON.parse(
+    await fs.readFile(path.join(projectRoot, result.request.manifestPath), "utf8")
+  );
+  assert.match(
+    scaffold.catalyst_requisition?.topic_context ?? "",
+    /Generalized category discovery/i
+  );
 
   const updatedManifest = JSON.parse(
     await fs.readFile(path.join(projectRoot, "PROJECT_MANIFEST.json"), "utf8")

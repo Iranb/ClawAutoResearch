@@ -368,6 +368,12 @@ test("authoring closeout promotes coder RESULT_SUMMARY and clears stale QC block
   assert.equal(updatedManifest.paper_qc.pending_reason, null);
   assert.equal(updatedManifest.blocking_reason, null);
   assert.doesNotMatch(updatedManifest.next_action, /graph-build/i);
+  assert.equal(updatedManifest.submission_ready.status, "ready");
+  assert.equal(updatedManifest.workflow_control.stage, "submit");
+  assert.equal(updatedManifest.workflow_control.owner, "reviewer");
+  assert.equal(updatedManifest.workflow_control.completion.status, "complete");
+  assert.equal(updatedManifest.workflow_control.completion.source, "submit_completion");
+  assert.doesNotMatch(updatedManifest.workflow_control.next_action, /graph-build/i);
 });
 
 test("authoring closeout repairs paragraph audit blockers from the audit artifact", async (t) => {

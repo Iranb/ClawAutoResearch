@@ -17,6 +17,7 @@ import {
   maybeTriggerQueuedPaperIngestionRequest,
   startBackgroundWorkflowRun,
 } from "./workflow-fast-paths";
+import { advanceLiteratureDiscoveryRequisition } from "./literature-discovery/requisition-executor";
 import {
   acquireBackgroundWorkflowSession,
   getBackgroundWorkflowRunByQueueKey,
@@ -35,6 +36,10 @@ import {
 } from "./workflow-session-orchestrator.js";
 import { runWorkflowRuntimeMaintenancePass } from "./workflow-runtime-maintenance.js";
 import { reconcileWorkflowRuntimeDispatchState } from "./workflow-runtime-recovery.js";
+import {
+  ensureWorkflowOwnerRuntime,
+  type EnsureWorkflowOwnerRuntimeResult,
+} from "./workflow-owner-runtime";
 import {
   createWorkflowBroadcastRuntimeFromApi,
   createWorkflowExecutionRuntimeFromApi,
@@ -123,6 +128,7 @@ import {
 } from "./workflow-panel-discussion";
 import { buildWorkflowSubagentSessionKey } from "./workflow-subagent-sessions";
 import { asRecord, asString, normalizeStage } from "./workflow-guard-core/coercion";
+import { normalizeWorkflowControlContract } from "./workflow-control-contract.js";
 import { readJsonIfExists } from "./workflow-guard-core/fs";
 import { normalizeWritingContractState } from "./workflow-guard-state/writing-contract";
 import { normalizeSurveyReviewState } from "./workflow-guard-state/survey-review";
@@ -280,6 +286,7 @@ type WorkflowCoordinatorDependencies = {
   getIdleResearchStateSummary: typeof getIdleResearchStateSummary;
   listChannelProjectBindingsForWorkflow: typeof listChannelProjectBindingsForWorkflow;
   runWorkflowRuntimeMaintenancePass: typeof runWorkflowRuntimeMaintenancePass;
+  advanceLiteratureDiscoveryRequisition: typeof advanceLiteratureDiscoveryRequisition;
 };
 
 function resolveWorkflowCoordinatorDependencies(
@@ -297,6 +304,9 @@ function resolveWorkflowCoordinatorDependencies(
       listChannelProjectBindingsForWorkflow,
     runWorkflowRuntimeMaintenancePass:
       overrides?.runWorkflowRuntimeMaintenancePass ?? runWorkflowRuntimeMaintenancePass,
+    advanceLiteratureDiscoveryRequisition:
+      overrides?.advanceLiteratureDiscoveryRequisition ??
+      advanceLiteratureDiscoveryRequisition,
   };
 }
 
@@ -450,6 +460,7 @@ type AutoStageLaunchAttempt = {
   error: string | null;
   reusedServiceSession: boolean;
   activeResearcherSessionsInChannel: number | null;
+  ownerRuntimeStatus?: EnsureWorkflowOwnerRuntimeResult | null;
 };
 
 type AutoGateReviewAttempt = {
@@ -1120,6 +1131,12 @@ function hasWorkflowProjectBinding(params: {
   workflowPolicy?: ReturnType<PluginRegistrationContext["getWorkflowPolicy"]>;
   deps?: Partial<WorkflowCoordinatorDependencies>;
 }): boolean {
+  const notificationTarget = resolveWorkflowNotificationTargetForProjectSync(
+    params.projectRoot
+  );
+  if (notificationTarget?.sessionKey) {
+    return true;
+  }
   const deps = resolveWorkflowCoordinatorDependencies(params.deps);
   const bindings = deps.listChannelProjectBindingsForWorkflow({
     policy: params.workflowPolicy,
@@ -2617,6 +2634,34 @@ export async function maybeLaunchPaperIngestionWorkerForProject(params: {
     label: "workflow_papernexus_upload_worker",
     logger: params.logger,
     task: async (): Promise<PaperIngestionWorkerAttempt> => {
+      const requisitionAdvance = await deps.advanceLiteratureDiscoveryRequisition({
+        projectRoot: params.projectRoot,
+        projectId: params.projectId,
+        workflowPolicy: params.workflowPolicy,
+      });
+      if (requisitionAdvance.advanced) {
+        const requisitionStatus = normalizeStage(requisitionAdvance.status);
+        const blocked =
+          requisitionAdvance.reason === "blocked" ||
+          requisitionAdvance.reason === "marked_needs_repair" ||
+          requisitionStatus === "needs_repair" ||
+          requisitionStatus === "failed";
+        const queued =
+          !blocked &&
+          (requisitionStatus === "queued" || requisitionStatus === "launching");
+        return {
+          launched: !blocked && !queued,
+          queued,
+          reason: blocked ? "blocked" : queued ? "queued" : "started",
+          projectId: params.projectId,
+          projectRoot: params.projectRoot,
+          sessionKey: null,
+          runId: requisitionAdvance.runId,
+          summary: requisitionAdvance.summary,
+          queueKey: requisitionAdvance.requestId,
+        };
+      }
+
       const requesterBinding = resolveWorkflowRequesterBinding({
         projectRoot: params.projectRoot,
         workflowPolicy: params.workflowPolicy,
@@ -3060,6 +3105,7 @@ export async function maybeLaunchAutoStageForProject(params: {
             reusedServiceSession: attempt.reusedServiceSession,
             activeResearcherSessionsInChannel:
               attempt.activeResearcherSessionsInChannel,
+            ownerRuntimeStatus: attempt.ownerRuntimeStatus ?? null,
             error: attempt.error,
             configuredAutoMode:
               params.autoIteratorResult.configuredAutoMode ??
@@ -3249,16 +3295,28 @@ export async function maybeLaunchAutoStageForProject(params: {
         owner: action.owner,
         command: action.command,
       });
+      const dispatchStage = action.stage ?? params.autoIteratorResult.stageAfter ?? null;
+      const staleRuntimeAgeMs = Math.max(
+        60_000,
+        Math.floor((params.workflowPolicy.agentContactCooldownSeconds ?? 300) * 1000)
+      );
       const runtimeReconciliation = await reconcileWorkflowRuntimeDispatchState({
         projectRoot: params.projectRoot,
         projectId: params.projectId,
-        stage: action.stage ?? params.autoIteratorResult.stageAfter ?? null,
+        stage: dispatchStage,
         owner: action.owner,
         queueKey: launchKey,
-        staleSessionAgeMs: Math.max(
-          60_000,
-          Math.floor((params.workflowPolicy.agentContactCooldownSeconds ?? 300) * 1000)
-        ),
+        staleSessionAgeMs: staleRuntimeAgeMs,
+      });
+      const ownerRuntimeStatus = await ensureWorkflowOwnerRuntime({
+        projectRoot: params.projectRoot,
+        projectId: params.projectId,
+        stage: dispatchStage,
+        owner: action.owner,
+        nextAction: action.command,
+        queueKey: launchKey,
+        staleRuntimeAgeMs,
+        writeRuntimeEvent: false,
       });
       if (runtimeReconciliation.status === "stale_reclaimed") {
         params.launchedStageKeys.delete(params.projectRoot);
@@ -3283,6 +3341,7 @@ export async function maybeLaunchAutoStageForProject(params: {
           reusedServiceSession: false,
           activeResearcherSessionsInChannel:
             runtimeReconciliation.activeSessionKeys.length,
+          ownerRuntimeStatus,
         });
       }
       const lastLaunch = params.launchedStageKeys.get(params.projectRoot);
@@ -3429,6 +3488,7 @@ export async function maybeLaunchAutoStageForProject(params: {
             reusedServiceSession: false,
             activeResearcherSessionsInChannel:
               pooledSessionLease.activeResearcherSessionsInChannel,
+            ownerRuntimeStatus,
           });
         }
       }
@@ -3487,6 +3547,7 @@ export async function maybeLaunchAutoStageForProject(params: {
           reusedServiceSession: false,
           activeResearcherSessionsInChannel:
             pooledSessionLease?.activeResearcherSessionsInChannel ?? null,
+          ownerRuntimeStatus,
         });
       }
       const terminality = await verifyWorkflowDispatchTerminality({
@@ -3515,6 +3576,7 @@ export async function maybeLaunchAutoStageForProject(params: {
           reusedServiceSession: false,
           activeResearcherSessionsInChannel:
             pooledSessionLease?.activeResearcherSessionsInChannel ?? null,
+          ownerRuntimeStatus,
         });
       }
 
@@ -3611,6 +3673,16 @@ export async function maybeLaunchAutoStageForProject(params: {
         toAgent: action.owner as Parameters<typeof deriveAgentSessionKeyForRole>[0]["targetRole"],
         channel: "sessions_spawn",
       });
+      const postLaunchOwnerRuntimeStatus = await ensureWorkflowOwnerRuntime({
+        projectRoot: params.projectRoot,
+        projectId: params.projectId,
+        stage: dispatchStage,
+        owner: action.owner,
+        nextAction: action.command,
+        queueKey: launchKey,
+        staleRuntimeAgeMs,
+        writeRuntimeEvent: false,
+      });
       return finalizeAttempt({
         launched: true,
         reason: "started",
@@ -3626,6 +3698,7 @@ export async function maybeLaunchAutoStageForProject(params: {
         reusedServiceSession: pooledSessionLease?.reusedIdleSession ?? false,
         activeResearcherSessionsInChannel:
           pooledSessionLease?.activeResearcherSessionsInChannel ?? null,
+        ownerRuntimeStatus: postLaunchOwnerRuntimeStatus,
       });
     },
   });
@@ -4503,12 +4576,15 @@ export async function maybeAdvanceWorkflowHookPointForProject(params: {
         (await readJsonIfExists<Record<string, unknown>>(
           path.join(params.projectRoot, "PROJECT_MANIFEST.json")
         )) ?? {};
+      const workflowControl = normalizeWorkflowControlContract(manifest.workflow_control);
+      const currentStage =
+        workflowControl?.stage ?? readString(manifest.current_stage);
       const writingContract = normalizeWritingContractState(manifest.writing_contract);
       const workflowLine =
         readString(manifest.workflow_line) === "survey" ||
         readString(manifest.paper_type) === "survey" ||
         writingContract.paperMode === "survey" ||
-        readString(manifest.current_stage) === "survey_review"
+        currentStage === "survey_review"
           ? "survey"
           : "experiment";
       const summary = await evaluateWorkflowHooksForPoint({
@@ -4693,11 +4769,90 @@ export async function maybeAdvanceAutoCodeReviewForProject(params: {
         });
         return attempt;
       };
+      const retireInactiveCodeReviewRound = async (
+        reason: Extract<
+          AutoCodeReviewAttempt["reason"],
+          "disabled" | "not_code_gate" | "bundle_incomplete"
+        >
+      ) => {
+        const store = await readCodeReviewStore(params.projectRoot);
+        const staleRound = store.currentRound;
+        if (staleRound?.gateId !== "CODE-REVIEW" || staleRound.status !== "reviewing") {
+          return;
+        }
+        const retirementReason =
+          `Code innovation review is no longer active (${reason}); retiring the stale reviewer runtime round.`;
+        const staleQueueKeys = new Set(
+          staleRound.attempts
+            .map((attempt) => readString(attempt.queueKey))
+            .filter((entry): entry is string => Boolean(entry))
+        );
+        await retireWorkflowPanelRuntimeAttemptState({
+          projectRoot: params.projectRoot,
+          projectId: params.projectId,
+          attempts: staleRound.attempts,
+          source: "workflow_auto_code_review",
+          kind: "workflow_auto_code_review",
+          reason: retirementReason,
+          eventKind: "auto_code_review_runtime_retired",
+          diagnosticAction: "auto_code_review_inactive_round_retired",
+          diagnosticSummary:
+            "Retired stale code review runtime state after the code review gate became inactive.",
+          logger: params.logger,
+        });
+        if (staleQueueKeys.size > 0) {
+          const currentAt = nowIso();
+          await updateWorkflowRuntimeQueueStore({
+            projectRoot: params.projectRoot,
+            projectId: params.projectId,
+            updater: (queueStore) =>
+              queueStore.entries.map((entry) => {
+                if (
+                  !staleQueueKeys.has(entry.queueKey) ||
+                  entry.kind !== "workflow_auto_code_review" ||
+                  !ACTIVE_WORKFLOW_PANEL_QUEUE_STATUSES.has(entry.status)
+                ) {
+                  return entry;
+                }
+                return {
+                  ...entry,
+                  status: "completed",
+                  lastCheckedAt: currentAt,
+                  nextRetryAt: null,
+                  lastError: entry.lastError ?? retirementReason,
+                };
+              }),
+          });
+        }
+        await saveCodeReviewStore(params.projectRoot, {
+          ...store,
+          updatedAt: nowIso(),
+          currentRound: null,
+        });
+        await appendWorkflowDiagnosticEvent({
+          projectRoot: params.projectRoot,
+          projectId: params.projectId,
+          component: "service",
+          action: "auto_code_review_inactive_round_cleared",
+          status: "completed",
+          stage: "code",
+          owner: "reviewer",
+          summary:
+            "Cleared the stale code innovation review round because the code review gate is no longer active.",
+          details: {
+            reason,
+            staleFingerprint: staleRound.packetFingerprint,
+            staleStatus: staleRound.status,
+            reviewCount: staleRound.aggregate?.reviewCount ?? 0,
+          },
+        });
+      };
       if (
         !params.workflowPolicy.autoGate.enabled ||
         (params.autoIteratorResult.effectiveAutoMode ?? params.workflowPolicy.autoMode) !==
           "aggressive"
       ) {
+        await retireInactiveCodeReviewRound("disabled");
         return finish({
           launched: false,
           reason: "disabled",
@@ -4714,6 +4869,7 @@ export async function maybeAdvanceAutoCodeReviewForProject(params: {
         params.autoIteratorResult.stageAfter !== "code" ||
         params.autoIteratorResult.gateBlocking !== true
       ) {
+        await retireInactiveCodeReviewRound("not_code_gate");
         return finish({
           launched: false,
           reason: "not_code_gate",
@@ -4733,6 +4889,7 @@ export async function maybeAdvanceAutoCodeReviewForProject(params: {
           )
         : [];
       if (missingStageSignals.length > 0) {
+        await retireInactiveCodeReviewRound("bundle_incomplete");
         return finish({
           launched: false,
           reason: "bundle_incomplete",

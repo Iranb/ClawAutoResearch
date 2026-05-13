@@ -42,6 +42,84 @@ function parseAgentIdFromSessionKey(sessionKey) {
   return readString(match?.[1])?.toLowerCase() ?? null;
 }
 
+function stripSubagentSuffix(sessionKey) {
+  const normalized = readString(sessionKey);
+  if (!normalized) {
+    return null;
+  }
+  const marker = normalized.indexOf(":subagent:");
+  return marker > 0 ? normalized.slice(0, marker) : normalized;
+}
+
+export function resolveGatewayOriginatingRoute(runParams = {}, defaults = {}) {
+  const explicitChannel =
+    readString(runParams.originatingChannel) ?? readString(defaults.originatingChannel);
+  const explicitTo =
+    readString(runParams.originatingTo) ?? readString(defaults.originatingTo);
+  if (explicitChannel && explicitTo) {
+    return {
+      originatingChannel: explicitChannel,
+      originatingTo: explicitTo,
+      originatingAccountId:
+        readString(runParams.originatingAccountId) ??
+        readString(defaults.originatingAccountId) ??
+        "default",
+    };
+  }
+
+  const candidates = [
+    stripSubagentSuffix(runParams.requesterSessionKey),
+    stripSubagentSuffix(runParams.sessionKey),
+  ].filter((value) => Boolean(value));
+  for (const candidate of candidates) {
+    const match = /^agent:[^:]+:(local|discord):(conversation|channel|user|direct|slash):(.+)$/.exec(
+      candidate
+    );
+    if (!match?.[1] || !match[2] || !match[3]) {
+      continue;
+    }
+    const channel = match[1];
+    const rawTargetKind = match[2];
+    const targetValue = readString(match[3]);
+    if (!targetValue) {
+      continue;
+    }
+    if (channel === "local") {
+      const targetKind = rawTargetKind === "channel" ? "conversation" : rawTargetKind;
+      if (targetKind === "conversation" || targetKind === "user") {
+        return {
+          originatingChannel: "local",
+          originatingTo: `${targetKind}:${targetValue}`,
+          originatingAccountId:
+            readString(runParams.originatingAccountId) ??
+            readString(defaults.originatingAccountId) ??
+            "default",
+        };
+      }
+      continue;
+    }
+    if (channel === "discord") {
+      const targetKind = rawTargetKind === "direct" ? "user" : rawTargetKind;
+      if (targetKind === "channel" || targetKind === "user") {
+        return {
+          originatingChannel: "discord",
+          originatingTo: `${targetKind}:${targetValue}`,
+          originatingAccountId:
+            readString(runParams.originatingAccountId) ??
+            readString(defaults.originatingAccountId) ??
+            "default",
+        };
+      }
+    }
+  }
+
+  return {
+    originatingChannel: null,
+    originatingTo: null,
+    originatingAccountId: null,
+  };
+}
+
 function resolveOpenClawHome(params = {}) {
   const explicit = readString(params.openclawHome);
   if (explicit) {
@@ -654,9 +732,9 @@ export async function createGatewayHarnessClient(params = {}) {
 
 export async function createGatewayRuntimeSubagent(params = {}) {
   const client = await createGatewayHarnessClient(params);
-  const defaultOriginatingChannel = params.originatingChannel ?? "discord";
+  const defaultOriginatingChannel = readString(params.originatingChannel) ?? null;
   const defaultOriginatingTo = params.originatingTo ?? null;
-  const defaultOriginatingAccountId = params.originatingAccountId ?? "default";
+  const defaultOriginatingAccountId = readString(params.originatingAccountId) ?? null;
   const runSessionKeys = new Map();
   const inspectSession = async (inspectParams) =>
     await inspectGatewayAgentSessionFromStore({
@@ -669,14 +747,27 @@ export async function createGatewayRuntimeSubagent(params = {}) {
     client,
     runtimeSubagent: {
       async run(runParams) {
+        const originatingRoute = resolveGatewayOriginatingRoute(runParams, {
+          originatingChannel: defaultOriginatingChannel,
+          originatingTo: defaultOriginatingTo,
+          originatingAccountId: defaultOriginatingAccountId,
+        });
         const started = await client.chatSend({
           sessionKey: runParams.sessionKey,
           message: buildGatewayRuntimeMessage(runParams),
           idempotencyKey: runParams.idempotencyKey,
-          originatingChannel: runParams.originatingChannel ?? defaultOriginatingChannel,
-          originatingTo: runParams.originatingTo ?? defaultOriginatingTo,
-          originatingAccountId:
-            runParams.originatingAccountId ?? defaultOriginatingAccountId,
+          ...(originatingRoute.originatingChannel
+            ? { originatingChannel: originatingRoute.originatingChannel }
+            : {}),
+          ...(originatingRoute.originatingTo
+            ? { originatingTo: originatingRoute.originatingTo }
+            : {}),
+          ...(originatingRoute.originatingChannel && originatingRoute.originatingTo
+            ? {
+                originatingAccountId:
+                  originatingRoute.originatingAccountId ?? "default",
+              }
+            : {}),
           timeoutMs: params.chatTimeoutMs ?? 30_000,
         });
         if (started?.status !== "started" || typeof started?.runId !== "string") {

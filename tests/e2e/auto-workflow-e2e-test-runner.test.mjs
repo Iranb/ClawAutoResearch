@@ -7,7 +7,11 @@ import { execFile as execFileCb } from "node:child_process";
 import { promisify } from "node:util";
 
 import {
+  buildAutoWorkflowResearchHarnessScorecard,
+  buildAutoWorkflowPrChecklist,
   buildAutoWorkflowTransportParityScorecard,
+  buildAutoWorkflowTraceEvalScorecard,
+  collectAutoWorkflowEnvironmentPreflight,
   configuredProjectsRootFromOpenClawConfig,
   configuredModelRefsForAgent,
   deriveAutoWorkflowChildMaxIterations,
@@ -30,7 +34,9 @@ import {
   detectLivePaperArtifactTerminal,
   detectLiveSubstantiveRevisionTerminal,
   readLiveWorkflowActivation,
+  resolveLiveNoProgressGrace,
   resolveLiveStageHandoffRevision,
+  shouldReplayNativeSlashBootstrap,
   waitForProgress,
   workflowRuntimeProgressFingerprint,
 } from "../../scripts/auto_command_live_orchestrator.mjs";
@@ -151,6 +157,30 @@ test("auto workflow E2E runner rejects hidden project ids in live Discord parity
   );
 });
 
+test("isolated Discord parity uses native slash replay for live bootstrap", () => {
+  assert.equal(
+    shouldReplayNativeSlashBootstrap({
+      bootstrapTransport: "discord",
+      isolatedGatewayEnabled: true,
+    }),
+    true
+  );
+  assert.equal(
+    shouldReplayNativeSlashBootstrap({
+      bootstrapTransport: "discord",
+      isolatedGatewayEnabled: false,
+    }),
+    false
+  );
+  assert.equal(
+    shouldReplayNativeSlashBootstrap({
+      bootstrapTransport: "local",
+      isolatedGatewayEnabled: false,
+    }),
+    true
+  );
+});
+
 test("auto workflow E2E runner forwards strict content to fixture child runs", async (t) => {
   const runRoot = await fs.mkdtemp(path.join(os.tmpdir(), "auto-workflow-strict-forward-"));
   t.after(async () => {
@@ -191,6 +221,7 @@ test("auto workflow E2E runner defaults live projects root to plugin config", as
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "auto-workflow-root-config-"));
   const sourceConfigPath = path.join(tempRoot, "openclaw.json");
   const projectsRoot = path.join(tempRoot, "configured-projects");
+  const fallbackProjectsRoot = path.join(tempRoot, "run-root", "projects");
 
   t.after(async () => {
     await fs.rm(tempRoot, { recursive: true, force: true });
@@ -220,7 +251,29 @@ test("auto workflow E2E runner defaults live projects root to plugin config", as
     await resolveAutoWorkflowProjectsRoot({
       mode: "live",
       sourceConfigPath,
-      fallback: path.join(tempRoot, "run-root", "projects"),
+      fallback: fallbackProjectsRoot,
+    }),
+    path.resolve(projectsRoot)
+  );
+
+  assert.equal(
+    await resolveAutoWorkflowProjectsRoot({
+      mode: "live",
+      sourceConfigPath,
+      fallback: fallbackProjectsRoot,
+      isolatedGateway: true,
+      reuseProject: false,
+    }),
+    path.resolve(fallbackProjectsRoot)
+  );
+
+  assert.equal(
+    await resolveAutoWorkflowProjectsRoot({
+      mode: "live",
+      sourceConfigPath,
+      fallback: fallbackProjectsRoot,
+      isolatedGateway: true,
+      reuseProject: true,
     }),
     path.resolve(projectsRoot)
   );
@@ -394,6 +447,97 @@ test("auto workflow E2E runner builds a Discord parity scorecard", () => {
   );
 });
 
+test("auto workflow E2E runner builds a compact trace/eval scorecard", () => {
+  const scorecard = buildAutoWorkflowTraceEvalScorecard({
+    generatedAt: "2026-05-12T00:00:00.000Z",
+    status: "partial",
+    failureReason: "max_iterations_reached",
+    command: normalizeAutoWorkflowCommand("/auto-research"),
+    topic: "SQLite index design",
+    mode: "live",
+    bootstrapTransport: "discord",
+    preflight: [
+      { name: "node_version", ok: true, detail: "25.4.0" },
+      { name: "papernexus_reachability", ok: false, detail: "timeout" },
+    ],
+    transportParity: { profile: "discord-parity" },
+    resultSummary: {
+      lanes: [
+        {
+          lane: "experiment",
+          transport: "discord",
+          projectRoot: "/tmp/project",
+          finalVerdict: "partial",
+          finalStage: "idea",
+          finalOwner: "researcher",
+          blockingReason: "idea_catalyst_pending",
+          turnCount: 2,
+          turns: [
+            { stage: "graph_build", owner: "researcher", progressed: true },
+            { stage: "idea", owner: "researcher", progressed: false },
+          ],
+          handoffCount: 1,
+          qualityScore100: 48.5,
+          claimStrengthCap: "blocked",
+        },
+      ],
+    },
+  });
+
+  assert.equal(scorecard.preflight.passed, false);
+  assert.equal(scorecard.preflight.failed[0].name, "papernexus_reachability");
+  assert.equal(scorecard.lanes[0].progressedTurnCount, 1);
+  assert.equal(scorecard.lanes[0].lastTurn.stage, "idea");
+  assert.equal(scorecard.lanes[0].blockingReason, "idea_catalyst_pending");
+});
+
+test("auto workflow E2E runner builds a PR checklist artifact model", () => {
+  const checklist = buildAutoWorkflowPrChecklist({
+    generatedAt: "2026-05-12T00:00:00.000Z",
+    status: "partial",
+    failureReason: "max_iterations_reached",
+    command: normalizeAutoWorkflowCommand("/auto-research"),
+    topic: "SQLite index design",
+    mode: "live",
+    bootstrapTransport: "discord",
+    preflight: [
+      { name: "node_version", ok: true, detail: "25.4.0" },
+      { name: "papernexus_reachability", ok: true, detail: "status=200" },
+    ],
+    resultSummary: {
+      lanes: [
+        {
+          lane: "experiment",
+          transport: "discord",
+          projectRoot: "/tmp/project",
+          finalVerdict: "partial",
+          finalStage: "idea",
+          finalOwner: "researcher",
+          blockingReason: "idea_catalyst_pending",
+        },
+      ],
+    },
+    transportParity: {
+      profile: "discord-parity",
+      userPathAligned: true,
+      expectedCommandSource: "native",
+    },
+    summaryPath: "/tmp/run/AUTO_WORKFLOW_E2E_SUMMARY.json",
+    traceEvalScorecardPath: "/tmp/run/TRACE_EVAL_SCORECARD.json",
+    researchHarnessScorecardPath: "/tmp/run/RESEARCH_HARNESS_SCORECARD.json",
+    runRoot: "/tmp/run",
+    projectsRoot: "/tmp/projects",
+  });
+
+  assert.equal(checklist.validationEvidence[0].status, "pass");
+  assert.equal(checklist.validationEvidence[3].profile, "discord-parity");
+  assert.equal(checklist.externalSideEffects.liveRuntimeDispatch, true);
+  assert.equal(checklist.externalSideEffects.discordGatewayUse, true);
+  assert.match(checklist.rollback.strategy, /Revert the code diff/);
+  assert.ok(checklist.residualRisks.includes("run_status_partial"));
+  assert.ok(checklist.residualRisks.includes("writing_stage_not_reached_by_this_run"));
+});
+
 test("auto workflow E2E runner preserves explicit fallback configuration", () => {
   const fromEnv = resolveAutoWorkflowLocalFallbackEnv(
     {
@@ -494,6 +638,94 @@ test("auto workflow E2E runner validates exact runtime model provider state", ()
   });
   assert.equal(missing.ok, false);
   assert.match(missing.detail, /missing_models=bailian\/qwen3\.6-plus/);
+});
+
+test("auto workflow E2E runner preflights environment without leaking secrets", async (t) => {
+  const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-e2e-env-"));
+  t.after(async () => {
+    await fs.rm(repoRoot, { recursive: true, force: true });
+  });
+  await fs.writeFile(path.join(repoRoot, "package.json"), "{}\n");
+  await fs.writeFile(path.join(repoRoot, "package-lock.json"), "{}\n");
+  await fs.mkdir(path.join(repoRoot, "node_modules", "typescript"), { recursive: true });
+  await fs.writeFile(
+    path.join(repoRoot, "node_modules", "typescript", "package.json"),
+    "{}\n"
+  );
+  const sourceConfigPath = path.join(repoRoot, "openclaw.json");
+  await fs.writeFile(sourceConfigPath, JSON.stringify({ gateway: { auth: {} } }));
+
+  let fetched = false;
+  const checks = await collectAutoWorkflowEnvironmentPreflight({
+    repoRoot,
+    mode: "live",
+    bootstrapTransport: "discord",
+    isolatedGateway: false,
+    sourceConfigPath,
+    localPapernexus: {
+      enabled: true,
+      envOverrides: {},
+      pluginOverrides: { papernexusApiTokenEnv: "PAPERNEXUS_API_TOKEN" },
+      summary: {
+        accessMode: "remote_mcp",
+        mcpUrl: "http://user:super-secret@127.0.0.1:4821/mcp?token=super-secret",
+        apiBaseUrl: null,
+        tokenEnv: "PAPERNEXUS_API_TOKEN",
+        tokenProvidedBy: "environment",
+        corpusProvidedBy: "cli",
+        sshTarget: "10.126.56.41",
+        remoteStagingRoot: "/tmp/pn",
+      },
+    },
+    env: {
+      HOME: "/tmp/home",
+      PATH: "/bin",
+      OPENCLAW_GATEWAY_TOKEN: "gateway-secret",
+      PAPERNEXUS_API_TOKEN: "paper-secret",
+      PAPERNEXUS_CORPUS: "EML",
+    },
+    fetchImpl: async (_url, options) => {
+      fetched = true;
+      assert.equal(options.headers.Authorization, "Bearer paper-secret");
+      return { status: 200 };
+    },
+  });
+
+  const byName = Object.fromEntries(checks.map((entry) => [entry.name, entry]));
+  assert.equal(byName.node_dependencies.ok, true);
+  assert.equal(byName.runtime_env.ok, true);
+  assert.equal(byName.papernexus_config.ok, true);
+  assert.equal(byName.papernexus_reachability.ok, true);
+  assert.equal(byName.discord_readiness.ok, true);
+  assert.equal(fetched, true);
+  assert.match(byName.discord_readiness.detail, /gateway_token_source=environment/);
+  assert.match(byName.papernexus_config.detail, /token=environment/);
+
+  const renderedDetails = checks.map((entry) => entry.detail).join("\n");
+  assert.doesNotMatch(renderedDetails, /paper-secret|gateway-secret|super-secret/);
+  assert.doesNotMatch(renderedDetails, /user:super-secret/);
+});
+
+test("auto workflow E2E runner does not require repo node_modules for fixture preflight", async (t) => {
+  const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-e2e-fixture-env-"));
+  t.after(async () => {
+    await fs.rm(repoRoot, { recursive: true, force: true });
+  });
+  await fs.writeFile(path.join(repoRoot, "package.json"), "{}\n");
+
+  const checks = await collectAutoWorkflowEnvironmentPreflight({
+    repoRoot,
+    mode: "fixture",
+    bootstrapTransport: "local",
+    env: {
+      HOME: "/tmp/home",
+      PATH: "/bin",
+    },
+  });
+  const nodeDependencies = checks.find((entry) => entry.name === "node_dependencies");
+  assert.equal(nodeDependencies.ok, true);
+  assert.match(nodeDependencies.detail, /required=false/);
+  assert.match(nodeDependencies.detail, /node_modules=missing/);
 });
 
 test("auto workflow E2E runner materializes temporary model override config from agent catalog", async (t) => {
@@ -719,6 +951,149 @@ test("live E2E progress waits treat runtime queue changes as observable progress
   assert.equal(progress.reason, "runtime_state_changed");
 });
 
+test("live E2E no-progress grace accepts late workflow advancement", async (t) => {
+  const projectRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "openclaw-research-live-progress-grace-")
+  );
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await fs.mkdir(path.join(projectRoot, ".openclaw-research"), { recursive: true });
+  const manifest = {
+    project_id: "progress-grace-project",
+    current_stage: "graph_build",
+    owner_agent: "researcher",
+    next_action: "Run /graph-build.",
+    blocking_reason: "graph_presence_not_ready",
+  };
+  await fs.writeFile(
+    path.join(projectRoot, "PROJECT_MANIFEST.json"),
+    `${JSON.stringify(manifest, null, 2)}\n`,
+    "utf8"
+  );
+
+  const lateAdvance = new Promise((resolve, reject) => {
+    setTimeout(() => {
+      fs.writeFile(
+        path.join(projectRoot, "PROJECT_MANIFEST.json"),
+        `${JSON.stringify(
+          {
+            ...manifest,
+            current_stage: "frontier_mapping",
+            next_action: "Run /frontier-mapping.",
+            blocking_reason: null,
+          },
+          null,
+          2
+        )}\n`,
+        "utf8"
+      ).then(resolve, reject);
+    }, 100);
+  });
+
+  const turn = await resolveLiveNoProgressGrace({
+    projectRoot,
+    lane: "experiment",
+    turn: {
+      owner: "researcher",
+      stage: "graph_build",
+      command: "/graph-build",
+      intentId: null,
+      progressed: false,
+      progressReason: "timeout",
+      manifest,
+    },
+    graceMs: 2_000,
+    pollMs: 50,
+  });
+  await lateAdvance;
+
+  assert.equal(turn.progressed, true);
+  assert.equal(turn.progressReason, "post_timeout_stage_or_owner_changed");
+  assert.equal(turn.manifest.current_stage, "frontier_mapping");
+});
+
+test("live E2E no-progress grace runs one auto-iterator reconciliation before failing", async (t) => {
+  const projectRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "openclaw-research-live-progress-reconcile-")
+  );
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await fs.mkdir(path.join(projectRoot, ".openclaw-research"), { recursive: true });
+  const manifest = {
+    project_id: "progress-reconcile-project",
+    current_stage: "graph_build",
+    owner_agent: "researcher",
+    next_action: "Run /graph-build.",
+    paper_ingestion: {
+      graph_presence_status: "ready",
+      queued_requests: [
+        {
+          request_id: "idea-catalyst-req-demo",
+          request_kind: "requisition",
+          status: "queued",
+          trigger_kind: "idea_catalyst_requisition",
+          attempt_count: 0,
+        },
+      ],
+    },
+  };
+  await fs.writeFile(
+    path.join(projectRoot, "PROJECT_MANIFEST.json"),
+    `${JSON.stringify(manifest, null, 2)}\n`,
+    "utf8"
+  );
+
+  let reconcileCallCount = 0;
+  const turn = await resolveLiveNoProgressGrace({
+    projectRoot,
+    lane: "experiment",
+    turn: {
+      owner: "researcher",
+      stage: "graph_build",
+      command: "/graph-build",
+      intentId: null,
+      progressed: false,
+      progressReason: "timeout",
+      manifest,
+    },
+    graceMs: 120,
+    pollMs: 20,
+    reconcileAfterGrace: async ({ baselineManifest }) => {
+      reconcileCallCount += 1;
+      const nextManifest = {
+        ...baselineManifest,
+        paper_ingestion: {
+          ...baselineManifest.paper_ingestion,
+          queued_requests: baselineManifest.paper_ingestion.queued_requests.map((entry) => ({
+            ...entry,
+            status: "completed",
+            validation_status: "warning",
+          })),
+        },
+      };
+      await fs.writeFile(
+        path.join(projectRoot, "PROJECT_MANIFEST.json"),
+        `${JSON.stringify(nextManifest, null, 2)}\n`,
+        "utf8"
+      );
+      return {
+        progressed: true,
+        reason: "auto_iterator_reconciled",
+        manifest: nextManifest,
+      };
+    },
+  });
+
+  assert.equal(reconcileCallCount, 1);
+  assert.equal(turn.progressed, true);
+  assert.equal(turn.progressReason, "post_timeout_auto_iterator_reconciled");
+  assert.equal(turn.manifest.paper_ingestion.queued_requests[0].status, "completed");
+});
+
 test("live E2E ignores stale paper artifact readiness before write stage", async (t) => {
   const projectRoot = await fs.mkdtemp(
     path.join(os.tmpdir(), "openclaw-research-live-paper-ready-")
@@ -833,6 +1208,87 @@ test("live E2E progress wait accepts paper artifacts once workflow reaches write
   assert.equal(progress.terminal.details.stageAllowsTerminal, true);
 });
 
+test("live E2E progress wait treats literature requisition queue progress as workflow progress", async (t) => {
+  const projectRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "openclaw-research-live-lit-progress-")
+  );
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  const manifest = {
+    project_id: "lit-progress-project",
+    current_stage: "idea",
+    owner_agent: "researcher",
+    next_action: "Wait for PaperNexus literature discovery.",
+    paper_ingestion: {
+      queued_requests: [
+        {
+          request_id: "idea-catalyst-req-demo",
+          request_kind: "requisition",
+          trigger_kind: "idea_catalyst_requisition",
+          status: "running",
+          started_at: "2026-05-13T10:00:00.000Z",
+          last_run_id: "lit-run-1",
+          attempt_count: 1,
+          queue_progress: {
+            sequence: 1,
+            last_event_at: "2026-05-13T10:00:01.000Z",
+            remaining: 4,
+            completed: 1,
+            failed: 0,
+          },
+        },
+      ],
+    },
+  };
+  await fs.writeFile(
+    path.join(projectRoot, "PROJECT_MANIFEST.json"),
+    `${JSON.stringify(manifest, null, 2)}\n`,
+    "utf8"
+  );
+
+  const update = new Promise((resolve, reject) => {
+    setTimeout(() => {
+      const nextManifest = {
+        ...manifest,
+        paper_ingestion: {
+          queued_requests: [
+            {
+              ...manifest.paper_ingestion.queued_requests[0],
+              queue_progress: {
+                sequence: 2,
+                last_event_at: "2026-05-13T10:00:10.000Z",
+                remaining: 3,
+                completed: 2,
+                failed: 0,
+              },
+            },
+          ],
+        },
+      };
+      fs.writeFile(
+        path.join(projectRoot, "PROJECT_MANIFEST.json"),
+        `${JSON.stringify(nextManifest, null, 2)}\n`,
+        "utf8"
+      ).then(resolve, reject);
+    }, 100);
+  });
+
+  const progress = await waitForProgress({
+    projectRoot,
+    baselineManifest: manifest,
+    lane: "experiment",
+    timeoutMs: 2_000,
+    pollMs: 50,
+  });
+  await update;
+
+  assert.equal(progress.progressed, true);
+  assert.equal(progress.reason, "workflow_state_changed");
+  assert.equal(progress.manifest.paper_ingestion.queued_requests[0].queue_progress.sequence, 2);
+});
+
 test("live E2E reuses auto-iterator prepared handoff revision", () => {
   assert.equal(
     resolveLiveStageHandoffRevision({
@@ -850,6 +1306,155 @@ test("live E2E reuses auto-iterator prepared handoff revision", () => {
     }),
     null
   );
+});
+
+test("research harness scorecard reports literature requisition progress fields", async (t) => {
+  const runRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-requisition-scorecard-"));
+  t.after(async () => {
+    await fs.rm(runRoot, { recursive: true, force: true });
+  });
+
+  const createLaneProject = async (name, request, sourceIndex = null) => {
+    const projectRoot = path.join(runRoot, name);
+    await fs.mkdir(path.join(projectRoot, "researcher"), { recursive: true });
+    await fs.writeFile(
+      path.join(projectRoot, "PROJECT_MANIFEST.json"),
+      `${JSON.stringify(
+        {
+          project_id: name,
+          current_stage: "idea",
+          owner_agent: "researcher",
+          paper_ingestion: {
+            queued_requests: [request],
+          },
+        },
+        null,
+        2
+      )}\n`,
+      "utf8"
+    );
+    if (sourceIndex) {
+      await fs.writeFile(
+        path.join(projectRoot, "researcher", "PAPER_SOURCE_INDEX.json"),
+        `${JSON.stringify(sourceIndex, null, 2)}\n`,
+        "utf8"
+      );
+    }
+    return projectRoot;
+  };
+
+  const unlaunchedRoot = await createLaneProject("unlaunched", {
+    request_id: "req-unlaunched",
+    request_kind: "requisition",
+    trigger_kind: "idea_catalyst_requisition",
+    status: "queued",
+    started_at: null,
+    attempt_count: 0,
+  });
+  const remoteRoot = await createLaneProject("remote-progress", {
+    request_id: "req-remote",
+    request_kind: "requisition",
+    trigger_kind: "idea_catalyst_requisition",
+    status: "running",
+    started_at: "2026-05-13T10:00:00.000Z",
+    last_run_id: "lit-run-remote",
+    attempt_count: 1,
+    queue_progress: {
+      sequence: 7,
+      last_event_at: "2026-05-13T10:05:00.000Z",
+      remaining: 2,
+      completed: 3,
+      failed: 0,
+    },
+  });
+  const noSourcesRoot = await createLaneProject("completed-no-sources", {
+    request_id: "req-no-sources",
+    request_kind: "requisition",
+    trigger_kind: "idea_catalyst_requisition",
+    status: "completed",
+    started_at: "2026-05-13T10:00:00.000Z",
+    last_run_id: "lit-run-no-sources",
+    attempt_count: 1,
+    validation_status: "warning",
+  });
+  const indexedRoot = await createLaneProject(
+    "completed-indexed",
+    {
+      request_id: "req-indexed",
+      request_kind: "requisition",
+      trigger_kind: "idea_catalyst_requisition",
+      status: "completed",
+      started_at: "2026-05-13T10:00:00.000Z",
+      last_run_id: "lit-run-indexed",
+      attempt_count: 1,
+      validation_status: "valid",
+      validation_report_path: "graph/paper-ingestion-validation/req-indexed.json",
+    },
+    {
+      papers: [
+        {
+          canonical_id: "paper-1",
+          title: "A source backed paper",
+          source_kind: "markdown",
+          source_path: "researcher/paper_source/md/paper-1.md",
+        },
+      ],
+    }
+  );
+  const failedRoot = await createLaneProject("failed-needs-repair", {
+    request_id: "req-failed",
+    request_kind: "requisition",
+    trigger_kind: "idea_catalyst_requisition",
+    status: "failed",
+    started_at: "2026-05-13T10:00:00.000Z",
+    last_run_id: "lit-run-failed",
+    attempt_count: 2,
+    validation_status: "invalid",
+  });
+
+  const scorecard = await buildAutoWorkflowResearchHarnessScorecard({
+    status: "fail",
+    topic: "GCD",
+    mode: "live",
+    resultSummary: {
+      lanes: [
+        { lane: "unlaunched", projectRoot: unlaunchedRoot },
+        { lane: "remote", projectRoot: remoteRoot },
+        { lane: "no-sources", projectRoot: noSourcesRoot },
+        { lane: "indexed", projectRoot: indexedRoot },
+        { lane: "failed", projectRoot: failedRoot },
+      ],
+    },
+  });
+
+  const byLane = Object.fromEntries(
+    scorecard.lanes.map((lane) => [lane.lane, lane.literature.requisition])
+  );
+  assert.equal(
+    byLane.unlaunched.summaryStatus,
+    "literature_requisition_unlaunched"
+  );
+  assert.equal(byLane.remote.summaryStatus, "literature_requisition_remote_progress");
+  assert.equal(byLane.remote.attemptCount, 1);
+  assert.equal(byLane.remote.lastRunId, "lit-run-remote");
+  assert.equal(byLane.remote.queueProgress.sequence, 7);
+  assert.equal(byLane.remote.queueProgress.remaining, 2);
+  assert.equal(
+    byLane["no-sources"].summaryStatus,
+    "literature_requisition_completed_no_sources"
+  );
+  assert.equal(
+    byLane.indexed.summaryStatus,
+    "literature_requisition_completed_source_indexed"
+  );
+  assert.equal(byLane.indexed.sourceIndex.paperCount, 1);
+  assert.equal(byLane.indexed.sourceIndex.sourceBackedPaperCount, 1);
+  assert.equal(
+    byLane.failed.summaryStatus,
+    "literature_requisition_failed_needs_repair"
+  );
+  assert.equal(byLane.failed.status, "failed");
+  assert.equal(byLane.failed.attemptCount, 2);
 });
 
 test("live E2E harness treats durable reviewer revision as a terminal real-run outcome", async (t) => {
@@ -1220,6 +1825,10 @@ test("auto workflow E2E runner creates a durable local summary for /autoresearch
 
   await fs.access(payload.summaryPath);
   await fs.access(payload.markdownSummaryPath);
+  await fs.access(payload.traceEvalScorecardPath);
+  await fs.access(payload.researchHarnessScorecardPath);
+  await fs.access(payload.prChecklistPath);
+  await fs.access(payload.prChecklistMarkdownPath);
   await fs.access(payload.stdoutPath);
   await fs.access(payload.stderrPath);
   await fs.access(payload.payloadPath);
@@ -1230,6 +1839,18 @@ test("auto workflow E2E runner creates a durable local summary for /autoresearch
   assert.match(payload.projectsDashboardHtmlPath, /E2E_PROJECTS_DASHBOARD\.html$/);
   assert.equal(payload.projectsDashboard.project_count, 1);
   assert.deepEqual(payload.projectsDashboard.final_verdict, { pass: 1 });
+  assert.equal(payload.traceEvalScorecard.status, "pass");
+  assert.equal(payload.traceEvalScorecard.preflight.passed, true);
+  assert.equal(payload.traceEvalScorecard.lanes[0].finalVerdict, "pass");
+  assert.equal(payload.researchHarnessScorecard.status, "pass");
+  assert.equal(typeof payload.researchHarnessScorecard.lanes[0].literature.papernexusStatus, "string");
+  assert.equal(payload.researchHarnessScorecard.lanes[0].experiment.benchmarkStatus, "pass");
+  assert.equal(payload.researchHarnessScorecard.lanes[0].writing.claimStrengthCap, "artifact_complete_content_unscored");
+  assert.equal(payload.prChecklist.status, "pass");
+  assert.equal(payload.prChecklist.validationEvidence[0].status, "pass");
+  assert.equal(payload.prChecklist.externalSideEffects.liveRuntimeDispatch, false);
+  const prChecklistMarkdown = await fs.readFile(payload.prChecklistMarkdownPath, "utf8");
+  assert.match(prChecklistMarkdown, /## Rollback/);
 
   const commandText = await fs.readFile(path.join(runRoot, "command.txt"), "utf8");
   assert.match(commandText, /"--bootstrap-timeout-ms" "1234"/);
