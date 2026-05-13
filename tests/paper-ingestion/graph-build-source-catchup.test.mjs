@@ -992,6 +992,199 @@ test("graph-build source catch-up polls existing remote discovery imports withou
   assert.equal(artifact.remote_queue_progress.summary.completed, 1);
 });
 
+test("graph-build source catch-up refreshes remote artifacts linked from active requisitions", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  const previousToken = process.env.PAPERNEXUS_TEST_TOKEN;
+  const server = await startFakeRemoteDiscoveryMcpServer({
+    importWorkflowPayloads: [
+      {
+        rootPath: "/srv/papernexus/corpora/GCD",
+        summary: {
+          total: 1,
+          pending: 0,
+          running: 0,
+          completed: 1,
+          failed: 0,
+          remaining: 0,
+          overallPercent: 100,
+          sequence: 7,
+          last_event_at: "2026-04-24T10:04:30.000Z",
+        },
+        tasks: [
+          {
+            id: "task-existing-1",
+            status: "completed",
+            progress: { percent: 100 },
+          },
+        ],
+      },
+    ],
+  });
+  t.after(async () => {
+    if (previousToken === undefined) {
+      delete process.env.PAPERNEXUS_TEST_TOKEN;
+    } else {
+      process.env.PAPERNEXUS_TEST_TOKEN = previousToken;
+    }
+    await server.close();
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+  process.env.PAPERNEXUS_TEST_TOKEN = "remote-test-token";
+
+  const catalystRequisitionPath =
+    "researcher/idea-catalyst/requisition/req-active/CATALYST_REQUISITION.json";
+  const failedSatisfactionPath =
+    "researcher/idea-catalyst/requisition/req-active/REQUISITION_SATISFACTION_REPORT.json";
+  const remoteArtifactPath =
+    "researcher/literature-discovery/remote/disc-existing/PAPERNEXUS_LITERATURE_DISCOVERY.json";
+  await writeJson(path.join(projectRoot, catalystRequisitionPath), {
+    catalyst_requisition: {
+      search_queries: [
+        {
+          domain: "computer science",
+          query: "CPU-only graph labeling with source-backed evidence",
+        },
+      ],
+    },
+  });
+  await writeJson(path.join(projectRoot, failedSatisfactionPath), {
+    status: "failed",
+    decision: "needs_repair_missing_requisition_import_evidence",
+    request_id: "req-active",
+    remote_literature_discovery: {
+      artifact_path: remoteArtifactPath,
+    },
+  });
+  await writeJson(path.join(projectRoot, remoteArtifactPath), {
+    contractVersion: "literature-discovery-v1",
+    runId: "disc-existing",
+    local_request_id: "req-active",
+    topic: "CPU-only graph labeling with source-backed evidence",
+    candidates: [
+      {
+        canonicalId: "arxiv:2601.00001",
+        title: "Existing Remote Discovery Paper",
+        year: 2026,
+        identifiers: {
+          arxivId: "2601.00001",
+        },
+        providers: ["arxiv"],
+        source: {
+          sourceKind: "pdf",
+          sourcePath:
+            "/srv/papernexus/corpora/GCD/.papernexus/discovery/staging/pdf/2601.00001.pdf",
+          sourceProvider: "arxiv",
+          resolutionStatus: "fulltext_ready",
+          fullTextStatus: "open_pdf",
+          downloadStatus: "downloaded",
+          pdfUrl: "https://arxiv.org/pdf/2601.00001.pdf",
+        },
+        import: {
+          status: "submitted",
+          taskId: "task-existing-1",
+        },
+      },
+    ],
+    coverage: {
+      verdict: "usable",
+      mergedPaperCount: 1,
+      resolvedFullTextCount: 1,
+      metadataOnlyCount: 0,
+      importedCount: 1,
+    },
+    importSummary: {
+      submitted: 1,
+      deduped: 0,
+      failed: 0,
+      results: [
+        {
+          canonicalId: "arxiv:2601.00001",
+          status: "submitted",
+          taskId: "task-existing-1",
+        },
+      ],
+    },
+  });
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "source-catchup-demo",
+    current_stage: "graph_build",
+    owner_agent: "researcher",
+    paper_ingestion: {
+      runtime_status: "waiting_import",
+      last_batch_manifest_path: remoteArtifactPath,
+      queued_requests: [
+        {
+          request_id: "req-active",
+          request_kind: "requisition",
+          status: "running",
+          wrapper: "papernexus_remote_mcp",
+          manifest_path: catalystRequisitionPath,
+          validation_report_path: failedSatisfactionPath,
+          trigger_kind: "idea_catalyst_requisition",
+          summary: "Active requisition with already-returned remote discovery artifact.",
+          created_at: "2026-04-24T10:00:00.000Z",
+          updated_at: "2026-04-24T10:02:00.000Z",
+          started_at: "2026-04-24T10:00:00.000Z",
+          last_run_id: "disc-existing",
+          attempt_count: 1,
+        },
+      ],
+    },
+  });
+
+  const result = await maybeMaterializeGraphBuildPaperSources({
+    projectRoot,
+    projectId: "source-catchup-demo",
+    workflowPolicy: {
+      papernexusAccessMode: "remote_mcp",
+      papernexusSharedCorpus: "GCD",
+      papernexusMcpUrl: server.url,
+      papernexusApiTokenSource: "env",
+      papernexusApiTokenEnv: "PAPERNEXUS_TEST_TOKEN",
+    },
+    now: "2026-04-24T10:05:00.000Z",
+    fetchImpl: async () =>
+      assert.fail("remote_mcp requisition refresh must not use local fetch fallback"),
+  });
+
+  assert.equal(result.queued, false);
+  assert.equal(result.skippedReason, "remote_literature_discovery_imports_terminal");
+  assert.equal(result.batchManifestPath, remoteArtifactPath);
+  assert.equal(
+    server.requests.filter((entry) => entry.body.params.name === "literature_discovery").length,
+    0
+  );
+  assert.equal(
+    server.requests.filter((entry) => entry.body.params.name === "import_workflow").length,
+    1
+  );
+
+  const manifest = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "PROJECT_MANIFEST.json"), "utf8")
+  );
+  const request = manifest.paper_ingestion.queued_requests[0];
+  assert.equal(request.status, "completed");
+  assert.equal(request.manifest_path, catalystRequisitionPath);
+  assert.equal(request.validation_report_path, remoteArtifactPath);
+  assert.equal(request.queue_progress.sequence, 7);
+  assert.equal(request.queue_progress.last_event_at, "2026-04-24T10:04:30.000Z");
+  assert.equal(request.queue_progress.completed, 1);
+  assert.equal(manifest.paper_ingestion.last_batch_manifest_path, remoteArtifactPath);
+
+  const sourceIndex = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "researcher", "PAPER_SOURCE_INDEX.json"), "utf8")
+  );
+  assert.deepEqual(
+    sourceIndex.papers.map((entry) => entry.canonical_id),
+    ["arxiv:2601.00001"]
+  );
+  const artifact = JSON.parse(
+    await fs.readFile(path.join(projectRoot, remoteArtifactPath), "utf8")
+  );
+  assert.equal(artifact.last_polled_at, "2026-04-24T10:05:00.000Z");
+  assert.equal(artifact.remote_queue_progress.summary.completed, 1);
+});
+
 test("graph-build source catch-up materializes planned arXiv markdown and queues PaperNexus import", async (t) => {
   const projectRoot = await makeProjectRoot();
   t.after(async () => {

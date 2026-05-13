@@ -364,7 +364,7 @@ function isRefreshableLiteratureDiscoveryRequest(
 ): boolean {
   return (
     isLiteratureDiscoveryTriggerKind(request.triggerKind) &&
-    request.manifestPath !== null &&
+    (request.manifestPath !== null || request.validationReportPath !== null) &&
     (ACTIVE_PAPER_INGESTION_REQUEST_STATUSES.has(request.status) ||
       COMPLETED_PAPER_INGESTION_REQUEST_STATUSES.has(request.status))
   );
@@ -1945,6 +1945,135 @@ async function readLiteratureDiscoveryRequisition(params: {
   return (await readJsonIfExists<Record<string, unknown>>(resolved)) ?? null;
 }
 
+type RemoteLiteratureDiscoveryArtifact = {
+  run: Record<string, unknown>;
+  artifactPath: string;
+  artifactRelativePath: string;
+};
+
+function resolveProjectArtifactReference(params: {
+  projectRoot: string;
+  artifactPath: string | null | undefined;
+}): { artifactPath: string; artifactRelativePath: string } | null {
+  const artifactPath = params.artifactPath?.trim();
+  if (!artifactPath) {
+    return null;
+  }
+  const resolvedPath = path.isAbsolute(artifactPath)
+    ? artifactPath
+    : path.join(params.projectRoot, artifactPath);
+  return {
+    artifactPath: resolvedPath,
+    artifactRelativePath: path.isAbsolute(artifactPath)
+      ? relativizeProjectPath(params.projectRoot, resolvedPath)
+      : artifactPath,
+  };
+}
+
+function remoteDiscoveryArtifactMatchesRequest(params: {
+  artifact: Record<string, unknown>;
+  request: NormalizedPaperIngestionQueuedRequest;
+}): boolean {
+  const nested = asRecord(params.artifact.remote_literature_discovery);
+  const artifactRequestId =
+    pickString(params.artifact, [
+      "local_request_id",
+      "localRequestId",
+      "request_id",
+      "requestId",
+    ]) ??
+    pickString(nested ?? {}, ["request_id", "requestId"]);
+  return !artifactRequestId || artifactRequestId === params.request.requestId;
+}
+
+function collectRemoteDiscoveryArtifactReferences(params: {
+  manifest: Record<string, unknown>;
+  request: NormalizedPaperIngestionQueuedRequest;
+}): string[] {
+  const paperIngestion = asRecord(params.manifest.paper_ingestion);
+  return uniqueStrings(
+    [
+      params.request.validationReportPath,
+      params.request.manifestPath,
+      pickString(paperIngestion ?? {}, [
+        "last_batch_manifest_path",
+        "lastBatchManifestPath",
+      ]),
+      pickString(paperIngestion ?? {}, [
+        "validation_report_path",
+        "validationReportPath",
+      ]),
+    ].filter((entry): entry is string => Boolean(entry && entry.trim()))
+  );
+}
+
+function collectNestedRemoteDiscoveryArtifactReferences(
+  artifact: Record<string, unknown>
+): string[] {
+  const nested = asRecord(artifact.remote_literature_discovery);
+  return uniqueStrings(
+    [
+      pickString(nested ?? {}, ["artifact_path", "artifactPath"]),
+      pickString(nested ?? {}, ["batch_manifest_path", "batchManifestPath"]),
+      pickString(nested ?? {}, ["validation_report_path", "validationReportPath"]),
+      pickString(artifact, ["artifact_path", "artifactPath"]),
+      pickString(artifact, ["batch_manifest_path", "batchManifestPath"]),
+    ].filter((entry): entry is string => Boolean(entry && entry.trim()))
+  );
+}
+
+async function readRemoteLiteratureDiscoveryArtifact(params: {
+  projectRoot: string;
+  manifest: Record<string, unknown>;
+  request: NormalizedPaperIngestionQueuedRequest | null;
+}): Promise<RemoteLiteratureDiscoveryArtifact | null> {
+  if (!params.request) {
+    return null;
+  }
+  const pending = collectRemoteDiscoveryArtifactReferences({
+    manifest: params.manifest,
+    request: params.request,
+  });
+  const visited = new Set<string>();
+  for (let index = 0; index < pending.length; index += 1) {
+    const candidate = resolveProjectArtifactReference({
+      projectRoot: params.projectRoot,
+      artifactPath: pending[index],
+    });
+    if (!candidate || visited.has(candidate.artifactPath)) {
+      continue;
+    }
+    visited.add(candidate.artifactPath);
+    const artifact =
+      (await readJsonIfExists<Record<string, unknown>>(candidate.artifactPath)) ?? null;
+    if (!artifact) {
+      continue;
+    }
+    for (const nestedPath of collectNestedRemoteDiscoveryArtifactReferences(artifact)) {
+      if (!pending.includes(nestedPath)) {
+        pending.push(nestedPath);
+      }
+    }
+    if (
+      !remoteDiscoveryArtifactMatchesRequest({
+        artifact,
+        request: params.request,
+      })
+    ) {
+      continue;
+    }
+    if (collectRemoteImportTaskIds(artifact).length === 0) {
+      continue;
+    }
+    return {
+      run: artifact,
+      artifactPath: candidate.artifactPath,
+      artifactRelativePath: candidate.artifactRelativePath,
+    };
+  }
+  return null;
+}
+
 function collectDiscoveryQueryTexts(packet: Record<string, unknown> | null): string[] {
   const discovery = asRecord(packet?.literature_discovery) ?? packet;
   const queries = Array.isArray(discovery?.candidate_queries)
@@ -2828,23 +2957,20 @@ async function maybeRunRemoteLiteratureDiscovery(params: {
     projectRoot: params.projectRoot,
     request: refreshableRequest,
   });
-  if (
-    refreshableRequest?.manifestPath &&
-    requisition &&
-    collectRemoteImportTaskIds(requisition).length > 0
-  ) {
-    const artifactRelativePath = refreshableRequest.manifestPath;
-    const artifactPath = path.isAbsolute(artifactRelativePath)
-      ? artifactRelativePath
-      : path.join(params.projectRoot, artifactRelativePath);
+  const existingRemoteArtifact = await readRemoteLiteratureDiscoveryArtifact({
+    projectRoot: params.projectRoot,
+    manifest: params.manifest,
+    request: refreshableRequest,
+  });
+  if (refreshableRequest && existingRemoteArtifact) {
     return refreshExistingRemoteLiteratureDiscovery({
       projectRoot: params.projectRoot,
       manifest: params.manifest,
       workflowPolicy: params.workflowPolicy,
       request: refreshableRequest,
-      run: requisition,
-      artifactPath,
-      artifactRelativePath,
+      run: existingRemoteArtifact.run,
+      artifactPath: existingRemoteArtifact.artifactPath,
+      artifactRelativePath: existingRemoteArtifact.artifactRelativePath,
       reportPath: params.reportPath,
       clientConfig: client.clientConfig,
       sharedCorpus: client.sharedCorpus,
