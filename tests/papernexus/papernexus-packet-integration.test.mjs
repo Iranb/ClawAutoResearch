@@ -1058,7 +1058,7 @@ test("research_workflow materialize_papernexus_packet_contracts builds idea cont
 
   assert.equal(result.state.ideaCatalystPacketBundleReady, false);
   assert.equal(result.state.ideaCatalystContractReady, true);
-  assert.equal(result.state.innovationPacketReady, false);
+  assert.equal(result.state.innovationPacketReady, true);
   const ideaContract = JSON.parse(
     await fs.readFile(
       path.join(projectRoot, DEFAULT_IDEA_CATALYST_CONTRACT_PATH),
@@ -1072,7 +1072,43 @@ test("research_workflow materialize_papernexus_packet_contracts builds idea cont
   assert.equal(ideaContract.payload_paths.includes("researcher/idea-catalyst/IDEA_FRAGMENTS.json"), true);
   assert.equal(
     result.generatedFiles.includes("orchestrator/INNOVATION_PACKET.json"),
-    false
+    true
+  );
+  const innovationPacket = JSON.parse(
+    await fs.readFile(
+      path.join(projectRoot, "orchestrator", "INNOVATION_PACKET.json"),
+      "utf8"
+    )
+  );
+  assert.equal(innovationPacket.selected_idea_fragment_id, "frag-literature-1");
+  assert.equal(innovationPacket.baseline, "SimGCD");
+  assert.equal(innovationPacket.primary_metric, "ACC");
+  assert.equal(innovationPacket.fixed_budget, "5 minute CPU trial");
+  assert.equal(
+    innovationPacket.supporting_papers.includes("paper:belief-updating"),
+    true
+  );
+  assert.equal(
+    innovationPacket.supporting_kg_nodes.includes("paper:belief-updating"),
+    true
+  );
+  assert.equal(
+    innovationPacket.evidence_paths.includes(DEFAULT_IDEA_CATALYST_CONTRACT_PATH),
+    true
+  );
+  assert.equal(
+    innovationPacket.evidence_paths.includes(DEFAULT_GRAPH_BUILD_DECISION_PATH),
+    true
+  );
+  assert.equal(
+    innovationPacket.evidence_paths.some((entry) =>
+      entry.endsWith("REQUISITION_SATISFACTION_REPORT.json")
+    ),
+    true
+  );
+  assert.equal(
+    innovationPacket.evidence_paths.includes("researcher/idea-catalyst/IDEA_FRAGMENTS.json"),
+    true
   );
 });
 

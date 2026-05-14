@@ -290,6 +290,52 @@ function collectSourceSpanIds(value: unknown): string[] {
     .filter((entry): entry is string => Boolean(entry));
 }
 
+function inferResearchProgramBudgetText(
+  researchProgram: Record<string, unknown>
+): string | null {
+  const explicit = pickString(researchProgram, [
+    "fixed_budget",
+    "fixedBudget",
+    "compute_budget",
+    "computeBudget",
+    "trial_time_budget",
+    "trialTimeBudget",
+  ]);
+  if (explicit) {
+    return explicit;
+  }
+  const budgetCriterion = asStringArray(
+    researchProgram.success_criteria ?? researchProgram.successCriteria
+  ).find((entry) => /\b(budget|minute|min|hour|cpu|gpu)\b/iu.test(entry));
+  if (budgetCriterion) {
+    return budgetCriterion;
+  }
+  const track = readFirstRecord(researchProgram.tracks);
+  const trackBudget = asRecord(track?.budget) ?? {};
+  const parts: string[] = [];
+  const maxRuns = pickNumber(trackBudget, ["maxRuns", "max_runs"]);
+  const gpuHours = pickNumber(trackBudget, ["gpuHours", "gpu_hours"]);
+  const maxDebugIterations = pickNumber(trackBudget, [
+    "maxDebugIterations",
+    "max_debug_iterations",
+  ]);
+  if (maxRuns != null) {
+    parts.push(`max_runs=${maxRuns}`);
+  }
+  if (gpuHours != null) {
+    parts.push(`gpu_hours=${gpuHours}`);
+  }
+  if (maxDebugIterations != null) {
+    parts.push(`max_debug_iterations=${maxDebugIterations}`);
+  }
+  if (parts.length > 0) {
+    return parts.join("; ");
+  }
+  return asStringArray(track?.stop_rules ?? track?.stopRules).find((entry) =>
+    /\b(budget|minute|min|hour|cpu|gpu)\b/iu.test(entry)
+  ) ?? null;
+}
+
 function deriveInnovationPacketFromBundle(params: {
   manifest: Record<string, unknown>;
   existingPacket: Record<string, unknown> | null;
@@ -303,11 +349,14 @@ function deriveInnovationPacketFromBundle(params: {
   challengeInsightPacketPath: string;
   projectRoot: string;
 }): Record<string, unknown> | null {
-  const bundle = params.bundle;
-  if (!bundle || params.ideaCatalystContract?.status !== "ready") {
+  const bundle = params.bundle ?? {};
+  if (params.ideaCatalystContract?.status !== "ready") {
     return null;
   }
-  const ideaFragments = readRecordList(bundle.idea_fragments ?? bundle.ideaFragments);
+  const ideaFragments = [
+    ...readRecordList(bundle.idea_fragments ?? bundle.ideaFragments),
+    ...(params.bundle ? [] : params.ideaCatalystContract.idea_fragments),
+  ];
   const selectedIdeaFragment = ideaFragments[0] ?? null;
   if (!selectedIdeaFragment) {
     return null;
@@ -346,6 +395,7 @@ function deriveInnovationPacketFromBundle(params: {
   const supportingPapers = uniqueStrings([
     ...asStringArray(params.existingPacket?.supporting_papers),
     ...asStringArray(params.existingPacket?.supportingPapers),
+    ...params.ideaCatalystContract.supporting_papers,
     ...readPacketList(selectedIdeaFragment, ["supporting_papers", "supportingPapers"]),
     ...sourceAnalyses.flatMap((entry) =>
       readPacketList(entry, ["supporting_papers", "supportingPapers"])
@@ -359,42 +409,56 @@ function deriveInnovationPacketFromBundle(params: {
     ...collectEvidenceRefNodeIds(
       selectedIdeaFragment.evidence_chain_refs ?? selectedIdeaFragment.evidenceChainRefs
     ),
+    ...collectEvidenceRefNodeIds(params.ideaCatalystContract.evidence_chain_refs),
     ...collectSourceSpanIds(
       selectedIdeaFragment.source_spans ?? selectedIdeaFragment.sourceSpans
     ),
+    ...collectSourceSpanIds(params.ideaCatalystContract.source_spans),
+    ...params.ideaCatalystContract.source_spans
+      .map((entry) => pickString(entry, ["paper_id", "paperId", "canonical_id", "canonicalId"]))
+      .filter((entry): entry is string => Boolean(entry)),
     ...readRecordList(params.mechanismBridgePacket?.bridge_nodes)
       .map((entry) => pickString(entry, ["node_id", "nodeId"]))
       .filter((entry): entry is string => Boolean(entry)),
   ]);
   const evidencePaths = uniqueStrings([
     path.relative(params.projectRoot, params.ideaCatalystContractPath),
-    path.relative(params.projectRoot, params.ideaCatalystPacketBundlePath),
-    path.relative(params.projectRoot, params.mechanismBridgePacketPath),
-    path.relative(params.projectRoot, params.challengeInsightPacketPath),
+    ...(params.bundle
+      ? [path.relative(params.projectRoot, params.ideaCatalystPacketBundlePath)]
+      : []),
+    ...(params.mechanismBridgePacket
+      ? [path.relative(params.projectRoot, params.mechanismBridgePacketPath)]
+      : []),
+    ...(params.challengeInsightPacket
+      ? [path.relative(params.projectRoot, params.challengeInsightPacketPath)]
+      : []),
+    ...params.ideaCatalystContract.payload_paths,
+    ...(params.ideaCatalystContract.graph_decision_path
+      ? [params.ideaCatalystContract.graph_decision_path]
+      : []),
+    ...(params.ideaCatalystContract.source_requisition_report_path
+      ? [params.ideaCatalystContract.source_requisition_report_path]
+      : []),
     ...asStringArray(params.existingPacket?.evidence_paths),
     ...asStringArray(params.existingPacket?.evidencePaths),
   ]);
+  const activeTrack = readFirstRecord(researchProgram.tracks);
 
   const baseline = pickFirstString(
     asString(params.existingPacket?.baseline),
-    pickString(researchProgram, ["baseline_reference", "baselineReference", "baseline"])
+    pickString(researchProgram, ["baseline_reference", "baselineReference", "baseline"]),
+    asStringArray(activeTrack?.required_baselines ?? activeTrack?.requiredBaselines)[0]
   );
   const primaryMetric = pickFirstString(
     asString(params.existingPacket?.primary_metric),
     asString(params.existingPacket?.primaryMetric),
-    pickString(researchProgram, ["primary_metric", "primaryMetric", "metric"])
+    pickString(researchProgram, ["primary_metric", "primaryMetric", "metric"]),
+    pickString(activeTrack ?? {}, ["main_metric", "mainMetric"])
   );
   const fixedBudget = pickFirstString(
     asString(params.existingPacket?.fixed_budget),
     asString(params.existingPacket?.fixedBudget),
-    pickString(researchProgram, [
-      "fixed_budget",
-      "fixedBudget",
-      "compute_budget",
-      "computeBudget",
-      "trial_time_budget",
-      "trialTimeBudget",
-    ])
+    inferResearchProgramBudgetText(researchProgram)
   );
   const integrationMechanism = readIdeaFragmentString(selectedIdeaFragment, [
     "integration_mechanism",

@@ -39,7 +39,7 @@ function buildDeps(overrides = {}) {
       defaultActionExecutedAt: null,
       revisionCount: 0,
     }),
-    normalizeRole: () => "researcher",
+    normalizeRole: (value) => value ?? "researcher",
     inferProjectId: () => "demo-project",
     normalizeWritePackageState: () => ({ status: "missing" }),
     assembleWritePackage: async () => ({}),
@@ -262,6 +262,29 @@ test("experiment decision rollback routes the workflow back to plan with synced 
     idle_research: { enabled: false },
   });
   await writeJson(path.join(projectRoot, "TRACK_REGISTRY.json"), { tracks: [] });
+  const rollbackLedger = {
+    project_id: "demo-project",
+    experiments: [
+      {
+        experimentId: "exp-1",
+        status: "failed",
+        decision: "discard",
+        failureSignature: "under baseline after fair comparison",
+        notes: ["scientific regression"],
+      },
+      {
+        experimentId: "exp-2",
+        status: "failed",
+        decision: "discard",
+        failureSignature: "under baseline after fair comparison",
+        notes: ["scientific regression"],
+      },
+    ],
+  };
+  await writeJson(
+    path.join(projectRoot, "researcher", "EXPERIMENT_LEDGER.json"),
+    rollbackLedger
+  );
 
   const result = await runWorkflowAutoIteratorImpl(
     {
@@ -270,25 +293,7 @@ test("experiment decision rollback routes the workflow back to plan with synced 
       queueMailbox: false,
     },
     buildDeps({
-      experimentLedger: {
-        project_id: "demo-project",
-        experiments: [
-          {
-            experimentId: "exp-1",
-            status: "failed",
-            decision: "discard",
-            failureSignature: "under baseline after fair comparison",
-            notes: ["scientific regression"],
-          },
-          {
-            experimentId: "exp-2",
-            status: "failed",
-            decision: "discard",
-            failureSignature: "under baseline after fair comparison",
-            notes: ["scientific regression"],
-          },
-        ],
-      },
+      experimentLedger: rollbackLedger,
     })
   );
 

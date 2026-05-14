@@ -505,6 +505,17 @@ test("auto iterator commits code to experiment after local execution materialize
       },
     },
   });
+  await writeText(path.join(projectRoot, "orchestrator", "PLAN.md"), "# Plan\n");
+  await writeText(path.join(projectRoot, "orchestrator", "TODOS.md"), "- Run local experiment\n");
+  await writeText(path.join(projectRoot, "orchestrator", "PLAN_AUDIT.md"), "# Plan Audit\n");
+  await writeJson(path.join(projectRoot, "TRACK_REGISTRY.json"), {
+    tracks: [
+      {
+        track_id: "track-main",
+        status: "active",
+      },
+    ],
+  });
 
   const bundle = await materializeCodeExperimentBundleImpl({
     projectRoot,
@@ -555,7 +566,7 @@ test("auto iterator commits code to experiment after local execution materialize
     await fs.readFile(path.join(projectRoot, "PROJECT_MANIFEST.json"), "utf8")
   );
   assert.equal(manifest.current_stage, "experiment");
-  assert.equal(manifest.owner_agent, "researcher");
+  assert.equal(manifest.owner_agent, "analyzer");
   assert.equal(manifest.experiment_search.status, "ready_for_analysis");
   assert.equal(manifest.orchestration_state.pending_handoff_id, null);
 });

@@ -824,6 +824,66 @@ test("graph-build source catch-up sends source-index papers as remote discovery 
   assert.equal(args.maxDownloads, 6);
 });
 
+test("graph-build source catch-up honors remote discovery max env overrides", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  const envKeys = [
+    "PAPERNEXUS_TEST_TOKEN",
+    "PAPERNEXUS_DISCOVERY_MAX_CANDIDATES",
+    "PAPERNEXUS_DISCOVERY_MAX_DOWNLOADS",
+    "PAPERNEXUS_DISCOVERY_MAX_IMPORTED",
+  ];
+  const previousEnv = Object.fromEntries(
+    envKeys.map((key) => [key, process.env[key]])
+  );
+  const server = await startFakeRemoteDiscoveryMcpServer();
+  t.after(async () => {
+    for (const key of envKeys) {
+      if (previousEnv[key] === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = previousEnv[key];
+      }
+    }
+    await server.close();
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+  process.env.PAPERNEXUS_TEST_TOKEN = "remote-test-token";
+  process.env.PAPERNEXUS_DISCOVERY_MAX_CANDIDATES = "1";
+  process.env.PAPERNEXUS_DISCOVERY_MAX_DOWNLOADS = "1";
+  process.env.PAPERNEXUS_DISCOVERY_MAX_IMPORTED = "1";
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "bounded-remote-discovery-demo",
+    current_stage: "graph_build",
+    owner_agent: "researcher",
+    research_program: {
+      goal:
+        "Bound remote literature discovery to one exact source-backed proof candidate.",
+    },
+  });
+
+  const result = await maybeMaterializeGraphBuildPaperSources({
+    projectRoot,
+    projectId: "bounded-remote-discovery-demo",
+    workflowPolicy: {
+      papernexusAccessMode: "remote_mcp",
+      papernexusSharedCorpus: "GCD",
+      papernexusMcpUrl: server.url,
+      papernexusApiTokenSource: "env",
+      papernexusApiTokenEnv: "PAPERNEXUS_TEST_TOKEN",
+    },
+    now: "2026-04-24T10:00:00.000Z",
+    fetchImpl: async () => assert.fail("remote_mcp discovery must not fetch literature locally"),
+  });
+
+  assert.equal(result.queued, true);
+  const request = server.requests.find((entry) => entry.body.params.name === "literature_discovery");
+  assert.ok(request);
+  const args = request.body.params.arguments;
+  assert.equal(args.maxCandidates, 1);
+  assert.equal(args.maxDownloads, 1);
+  assert.equal(args.maxImported, 1);
+});
+
 test("graph-build source catch-up polls existing remote discovery imports without resubmitting discovery", async (t) => {
   const projectRoot = await makeProjectRoot();
   const previousToken = process.env.PAPERNEXUS_TEST_TOKEN;
@@ -1157,6 +1217,10 @@ test("graph-build source catch-up refreshes remote artifacts linked from active 
     owner_agent: "researcher",
     paper_ingestion: {
       runtime_status: "waiting_import",
+      graph_presence_status: "ready",
+      papernexus_certification_status: "ready",
+      papernexus_claim_level: "source_backed_graph",
+      papernexus_source_backed_graph_claim: true,
       last_batch_manifest_path: remoteArtifactPath,
       queued_requests: [
         {
@@ -1258,6 +1322,203 @@ test("graph-build source catch-up refreshes remote artifacts linked from active 
     discoveryPacket.source_contracts.papernexus_remote_discovery.selected_candidate_policy,
     "source_or_import_backed_only"
   );
+});
+
+test("graph-build source catch-up closes source-only remote dedupe evidence", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  const previousToken = process.env.PAPERNEXUS_TEST_TOKEN;
+  const server = await startFakeRemoteDiscoveryMcpServer({
+    importWorkflowPayloads: [
+      {
+        rootPath: "/srv/papernexus/corpora/GCD",
+        summary: {
+          total: 1,
+          pending: 1,
+          running: 0,
+          completed: 0,
+          failed: 0,
+          remaining: 1,
+          overallPercent: 0,
+        },
+        tasks: [
+          {
+            id: "task-source-only-1",
+            status: "pending",
+            stage: "queued",
+            includeInGraph: false,
+            progress: {
+              percent: 0,
+              message: "Queued for source-only processing",
+            },
+          },
+        ],
+      },
+    ],
+  });
+  t.after(async () => {
+    if (previousToken === undefined) {
+      delete process.env.PAPERNEXUS_TEST_TOKEN;
+    } else {
+      process.env.PAPERNEXUS_TEST_TOKEN = previousToken;
+    }
+    await server.close();
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+  process.env.PAPERNEXUS_TEST_TOKEN = "remote-test-token";
+
+  const catalystRequisitionPath =
+    "researcher/idea-catalyst/requisition/req-source-only/CATALYST_REQUISITION.json";
+  const satisfactionPath =
+    "researcher/idea-catalyst/requisition/req-source-only/REQUISITION_SATISFACTION_REPORT.json";
+  const remoteArtifactPath =
+    "researcher/literature-discovery/remote/disc-source-only/PAPERNEXUS_LITERATURE_DISCOVERY.json";
+  await writeJson(path.join(projectRoot, catalystRequisitionPath), {
+    catalyst_requisition: {
+      search_queries: [
+        {
+          domain: "speaker verification",
+          query: "source-backed speaker verification anchor",
+        },
+      ],
+    },
+  });
+  await writeJson(path.join(projectRoot, satisfactionPath), {
+    status: "running",
+    decision: "waiting_remote_import_progress",
+    request_id: "req-source-only",
+    remote_literature_discovery: {
+      artifact_path: remoteArtifactPath,
+    },
+  });
+  await writeJson(path.join(projectRoot, remoteArtifactPath), {
+    contractVersion: "literature-discovery-v1",
+    runId: "disc-source-only",
+    local_request_id: "req-source-only",
+    topic: "source-backed speaker verification anchor",
+    candidates: [
+      {
+        canonicalId: "arxiv:2112.04459",
+        title: "Self-Supervised Speaker Verification with Simple Siamese Network and Self-Supervised Regularization",
+        year: 2021,
+        identifiers: {
+          arxivId: "2112.04459",
+        },
+        providers: ["arxiv"],
+        source: {
+          sourceKind: "markdown",
+          sourcePath:
+            "/srv/papernexus/corpora/GCD/.papernexus/discovery/staging/markdown/arxiv-2112.04459.md",
+          sourceProvider: "arxiv2md-api",
+          resolutionStatus: "fulltext_ready",
+          fullTextStatus: "open_markdown",
+          downloadStatus: "downloaded",
+        },
+        import: {
+          status: "deduped",
+          taskId: "task-source-only-1",
+          includeInGraph: false,
+        },
+      },
+    ],
+    importSummary: {
+      submitted: 0,
+      deduped: 1,
+      failed: 0,
+      results: [
+        {
+          canonicalId: "arxiv:2112.04459",
+          status: "deduped",
+          taskId: "task-source-only-1",
+        },
+      ],
+    },
+  });
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "source-catchup-demo",
+    current_stage: "graph_build",
+    owner_agent: "researcher",
+    paper_ingestion: {
+      runtime_status: "waiting_import",
+      graph_presence_status: "ready",
+      papernexus_certification_status: "ready",
+      papernexus_claim_level: "source_backed_graph",
+      papernexus_source_backed_graph_claim: true,
+      last_batch_manifest_path: remoteArtifactPath,
+      queued_requests: [
+        {
+          request_id: "req-source-only",
+          request_kind: "requisition",
+          status: "running",
+          wrapper: "papernexus_remote_mcp",
+          manifest_path: catalystRequisitionPath,
+          validation_report_path: satisfactionPath,
+          trigger_kind: "idea_catalyst_requisition",
+          summary: "Active requisition with source-only remote discovery evidence.",
+          created_at: "2026-04-24T10:00:00.000Z",
+          updated_at: "2026-04-24T10:02:00.000Z",
+          started_at: "2026-04-24T10:00:00.000Z",
+          last_run_id: "disc-source-only",
+          attempt_count: 1,
+        },
+      ],
+    },
+  });
+
+  const result = await maybeMaterializeGraphBuildPaperSources({
+    projectRoot,
+    projectId: "source-catchup-demo",
+    workflowPolicy: {
+      papernexusAccessMode: "remote_mcp",
+      papernexusSharedCorpus: "GCD",
+      papernexusMcpUrl: server.url,
+      papernexusApiTokenSource: "env",
+      papernexusApiTokenEnv: "PAPERNEXUS_TEST_TOKEN",
+    },
+    now: "2026-04-24T10:06:00.000Z",
+    fetchImpl: async () =>
+      assert.fail("source-only remote dedupe refresh must not use local fetch fallback"),
+  });
+
+  assert.equal(result.queued, false);
+  assert.equal(result.skippedReason, "remote_literature_discovery_imports_terminal");
+
+  const manifest = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "PROJECT_MANIFEST.json"), "utf8")
+  );
+  const request = manifest.paper_ingestion.queued_requests[0];
+  assert.equal(request.status, "completed");
+  assert.equal(request.queue_progress.pending, 1);
+  assert.equal(manifest.paper_ingestion.runtime_status, "waiting_graph");
+
+  const satisfactionReport = JSON.parse(
+    await fs.readFile(path.join(projectRoot, satisfactionPath), "utf8")
+  );
+  assert.equal(satisfactionReport.status, "valid");
+  assert.equal(satisfactionReport.decision, "satisfied_remote_import_evidence");
+  assert.equal(satisfactionReport.evidence_gap_closed, true);
+  assert.equal(satisfactionReport.source_backed_count, 1);
+
+  const discoveryPacket = JSON.parse(
+    await fs.readFile(
+      path.join(
+        projectRoot,
+        "researcher",
+        "literature-discovery",
+        "LITERATURE_DISCOVERY_PACKET.json"
+      ),
+      "utf8"
+    )
+  );
+  assert.equal(discoveryPacket.status, "completed");
+  assert.equal(discoveryPacket.evidence_gap_closed, true);
+  assert.equal(discoveryPacket.selected_papers[0].canonical_id, "arxiv:2112.04459");
+
+  const graphDecision = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "graph", "GRAPH_BUILD_DECISION.json"), "utf8")
+  );
+  assert.equal(graphDecision.decision, "complete");
+  assert.equal(graphDecision.source_backed_graph_claim, true);
+  assert.equal(graphDecision.requisition_satisfaction_report_path, satisfactionPath);
 });
 
 test("graph-build source catch-up chooses the strongest remote literature artifact for a requisition", async (t) => {

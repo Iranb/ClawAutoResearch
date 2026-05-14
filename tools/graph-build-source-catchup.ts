@@ -166,6 +166,12 @@ const DEFAULT_REMOTE_DISCOVERY_MAX_DOWNLOADS = 6;
 const DEFAULT_REMOTE_DISCOVERY_MAX_IMPORTED = 8;
 const DEFAULT_REMOTE_DISCOVERY_MCP_TIMEOUT_MS = 300_000;
 const MAX_REMOTE_DISCOVERY_SEED_PAPERS = 24;
+const REMOTE_DISCOVERY_MAX_CANDIDATES_ENV =
+  "PAPERNEXUS_DISCOVERY_MAX_CANDIDATES";
+const REMOTE_DISCOVERY_MAX_DOWNLOADS_ENV =
+  "PAPERNEXUS_DISCOVERY_MAX_DOWNLOADS";
+const REMOTE_DISCOVERY_MAX_IMPORTED_ENV =
+  "PAPERNEXUS_DISCOVERY_MAX_IMPORTED";
 const REMOTE_DISCOVERY_MCP_TIMEOUT_ENV = "PAPERNEXUS_DISCOVERY_MCP_TIMEOUT_MS";
 const REMOTE_LITERATURE_DISCOVERY_PROVIDER = "papernexus-literature-discovery";
 
@@ -186,6 +192,9 @@ type RemoteDiscoveryWorkflowPolicy = {
   papernexusSshTarget?: string | null;
   papernexusRemoteStagingRoot?: string | null;
   papernexusDiscoveryProviders?: string[] | string | null;
+  papernexusDiscoveryMaxCandidates?: number | null;
+  papernexusDiscoveryMaxDownloads?: number | null;
+  papernexusDiscoveryMaxImported?: number | null;
   papernexusDiscoveryProcessImports?: boolean | null;
   papernexusDiscoveryImportMaxPasses?: number | null;
   papernexusDiscoveryMcpTimeoutMs?: number | null;
@@ -404,6 +413,29 @@ function hasExplicitMissingGraphPresence(manifest: Record<string, unknown>): boo
     paperIngestion?.graph_presence_status ?? paperIngestion?.graphPresenceStatus
   );
   return Boolean(graphPresenceStatus && graphPresenceStatus !== "ready");
+}
+
+function hasReadySourceBackedGraphCertification(
+  manifest: Record<string, unknown> | null
+): boolean {
+  const paperIngestion = asRecord(manifest?.paper_ingestion);
+  const graphPresenceStatus = normalizeStage(
+    paperIngestion?.graph_presence_status ?? paperIngestion?.graphPresenceStatus
+  );
+  const certificationStatus = normalizeStage(
+    paperIngestion?.papernexus_certification_status ??
+      paperIngestion?.papernexusCertificationStatus
+  );
+  const claimLevel = normalizeStage(
+    paperIngestion?.papernexus_claim_level ?? paperIngestion?.papernexusClaimLevel
+  );
+  return (
+    graphPresenceStatus === "ready" &&
+    certificationStatus === "ready" &&
+    (paperIngestion?.papernexus_source_backed_graph_claim === true ||
+      paperIngestion?.papernexusSourceBackedGraphClaim === true ||
+      claimLevel === "source_backed_graph")
+  );
 }
 
 type BootstrapSourceSeed = {
@@ -1951,6 +1983,7 @@ async function writeRemoteDiscoveryGraphBuildReceipt(params: {
   checkedAt: string;
   limitations?: string[];
   repairHints?: string[];
+  requisitionSatisfactionReportPath?: string | null;
 }): Promise<string> {
   const sourceEntries = params.sourceEntries ?? [];
   const sourceBackedEntries = sourceEntries.filter(isRemoteSourceEntrySourceBacked);
@@ -1959,6 +1992,24 @@ async function writeRemoteDiscoveryGraphBuildReceipt(params: {
       .map((entry) => pickString(entry, ["canonical_id", "canonicalId"]))
       .filter((entry): entry is string => Boolean(entry))
   );
+  const manifest =
+    (await readJsonIfExists<Record<string, unknown>>(
+      path.join(params.projectRoot, "PROJECT_MANIFEST.json")
+    )) ?? null;
+  const projectGraphReady =
+    params.status !== "failed" &&
+    params.status !== "source_blocked" &&
+    sourceBackedEntries.length > 0 &&
+    hasReadySourceBackedGraphCertification(manifest);
+  const effectiveStatus: PapernexusGraphBuildReceiptStatus = projectGraphReady
+    ? "graph_ready"
+    : params.status;
+  const effectiveGraphVisibility = projectGraphReady
+    ? "verified"
+    : params.graphVisibility ?? "unverified";
+  const sourceBackedGraphClaim =
+    projectGraphReady ||
+    (effectiveStatus === "graph_ready" && effectiveGraphVisibility === "verified");
   const receiptPath = await writePapernexusGraphBuildReceipt({
     projectRoot: params.projectRoot,
     receipt: {
@@ -1966,26 +2017,28 @@ async function writeRemoteDiscoveryGraphBuildReceipt(params: {
       request_id: params.requestId,
       run_id: params.runId ?? null,
       corpus: params.sharedCorpus ?? null,
-      status: params.status,
-      graph_visibility: params.graphVisibility ?? "unverified",
+      status: effectiveStatus,
+      graph_visibility: effectiveGraphVisibility,
       graph_fingerprint: null,
       checked_at: params.checkedAt,
       canonical_ids_requested: canonicalIds,
-      canonical_ids_in_graph: [],
-      canonical_ids_missing: canonicalIds,
+      canonical_ids_in_graph: projectGraphReady ? canonicalIds : [],
+      canonical_ids_missing: projectGraphReady ? [] : canonicalIds,
       source_backed_count: sourceBackedEntries.length,
       metadata_only_count: Math.max(0, sourceEntries.length - sourceBackedEntries.length),
-      source_backed_graph_claim: false,
+      source_backed_graph_claim: sourceBackedGraphClaim,
       active_in_graph_sources: [],
       task_summary: buildRemoteImportTaskSummary({
         taskIds: params.taskIds ?? [],
         queueProgressPayload: params.queueProgressPayload ?? null,
       }),
       coverage: {
-        min_required_satisfied: false,
+        min_required_satisfied: sourceBackedGraphClaim,
         min_source_backed_papers: Math.max(1, sourceEntries.length > 0 ? 1 : 0),
         notes: [
-          "Remote discovery/import receipt is not graph-ready until graph visibility is verified by PaperNexus.",
+          projectGraphReady
+            ? "Project graph presence certification is already source-backed; remote discovery evidence is request-specific and source-backed."
+            : "Remote discovery/import receipt is not graph-ready until graph visibility is verified by PaperNexus.",
         ],
       },
       evidence_packet_path: null,
@@ -1996,21 +2049,22 @@ async function writeRemoteDiscoveryGraphBuildReceipt(params: {
   await writeGraphBuildDecision({
     projectRoot: params.projectRoot,
     decision:
-      params.status === "graph_ready" && params.graphVisibility === "verified"
+      sourceBackedGraphClaim
         ? "complete"
-        : params.status === "failed" || params.status === "source_blocked"
+        : effectiveStatus === "failed" || effectiveStatus === "source_blocked"
           ? "blocked"
           : "waiting",
     requestId: params.requestId ?? null,
     graphReceiptPath: receiptPath,
     sourceIndexPath:
       sourceEntries.length > 0 ? "researcher/PAPER_SOURCE_INDEX.json" : null,
-    sourceBackedGraphClaim:
-      params.status === "graph_ready" && params.graphVisibility === "verified",
+    sourceBackedGraphClaim,
+    requisitionSatisfactionReportPath:
+      params.requisitionSatisfactionReportPath ?? null,
     reason:
-      params.status === "graph_ready" && params.graphVisibility === "verified"
+      sourceBackedGraphClaim
         ? "PaperNexus graph visibility is verified for request-specific source-backed evidence."
-        : params.status === "source_blocked"
+        : effectiveStatus === "source_blocked"
           ? "PaperNexus remote discovery did not yet produce graph-visible source-backed evidence."
           : "PaperNexus remote discovery/import is not graph-ready yet.",
     limitations: params.limitations ?? [],
@@ -2081,6 +2135,8 @@ async function persistRemoteDiscoveryFailure(params: {
     checkedAt: params.now,
     limitations: [params.message],
     repairHints,
+    requisitionSatisfactionReportPath:
+      params.activeRequest?.validationReportPath ?? null,
   });
   const requestPatch = params.activeRequest
     ? {
@@ -2191,7 +2247,7 @@ function scoreRemoteLiteratureDiscoveryArtifact(
   const sourceBackedCount = countRemoteSourceBackedEntries(sourceEntries);
   const queueProgress = readRemoteQueueProgressFromArtifact(artifact);
   const taskIds = collectRemoteImportTaskIds(artifact);
-  const remaining = getQueueProgressRemaining(queueProgress);
+  const remaining = getGraphBlockingRemoteImportRemaining(queueProgress);
   const completed = getQueueProgressCount(queueProgress, "completed");
   const failed = getQueueProgressCount(queueProgress, "failed");
   const sequence =
@@ -2543,6 +2599,9 @@ function buildRemoteDiscoveryArgs(params: {
   seedPapers: Record<string, unknown>[];
   workflowPolicy?: {
     papernexusDiscoveryProviders?: string[] | string | null;
+    papernexusDiscoveryMaxCandidates?: number | null;
+    papernexusDiscoveryMaxDownloads?: number | null;
+    papernexusDiscoveryMaxImported?: number | null;
     papernexusDiscoveryProcessImports?: boolean | null;
     papernexusDiscoveryImportMaxPasses?: number | null;
     papernexusDiscoveryMcpTimeoutMs?: number | null;
@@ -2590,20 +2649,38 @@ function buildRemoteDiscoveryArgs(params: {
     600_000;
   const seedCount = params.seedPapers.length;
   const maxSeedBound = Math.min(MAX_REMOTE_DISCOVERY_SEED_PAPERS, Math.max(0, seedCount));
+  const maxCandidates = Math.max(
+    normalizePositiveInteger(params.workflowPolicy?.papernexusDiscoveryMaxCandidates) ??
+      normalizePositiveInteger(process.env[REMOTE_DISCOVERY_MAX_CANDIDATES_ENV]) ??
+      DEFAULT_REMOTE_DISCOVERY_MAX_CANDIDATES,
+    maxSeedBound
+  );
+  const maxDownloads = Math.max(
+    normalizePositiveInteger(params.workflowPolicy?.papernexusDiscoveryMaxDownloads) ??
+      normalizePositiveInteger(process.env[REMOTE_DISCOVERY_MAX_DOWNLOADS_ENV]) ??
+      DEFAULT_REMOTE_DISCOVERY_MAX_DOWNLOADS,
+    maxSeedBound
+  );
+  const maxImported = Math.max(
+    normalizePositiveInteger(params.workflowPolicy?.papernexusDiscoveryMaxImported) ??
+      normalizePositiveInteger(process.env[REMOTE_DISCOVERY_MAX_IMPORTED_ENV]) ??
+      DEFAULT_REMOTE_DISCOVERY_MAX_IMPORTED,
+    maxSeedBound
+  );
   return {
     operation: processImports ? "ingest" : "import",
     topic: params.topic,
     corpus: params.sharedCorpus ?? "",
     depth: "default",
-    maxCandidates: Math.max(DEFAULT_REMOTE_DISCOVERY_MAX_CANDIDATES, maxSeedBound),
-    maxDownloads: Math.max(DEFAULT_REMOTE_DISCOVERY_MAX_DOWNLOADS, maxSeedBound),
+    maxCandidates,
+    maxDownloads,
     resolveSources: true,
     preferMarkdown: true,
     generateArxivMarkdownSources: true,
     importResolved: true,
     processImports,
     importMaxPasses,
-    maxImported: Math.max(DEFAULT_REMOTE_DISCOVERY_MAX_IMPORTED, maxSeedBound),
+    maxImported,
     allowDownloads: true,
     persist: true,
     providerRequestSchedulerDelayMs,
@@ -2864,6 +2941,35 @@ function getQueueProgressRemaining(queueProgressPayload: Record<string, unknown>
   return pickNumberValue(summary, ["remaining"]);
 }
 
+function isRemoteImportTaskGraphBlocking(task: Record<string, unknown>): boolean {
+  const status = normalizeStage(pickString(task, ["status"]));
+  if (
+    ![
+      "pending",
+      "queued",
+      "running",
+      "processing",
+      "submitted",
+    ].includes(status ?? "")
+  ) {
+    return false;
+  }
+  if (task.includeInGraph === false || task.include_in_graph === false) {
+    return false;
+  }
+  return true;
+}
+
+function getGraphBlockingRemoteImportRemaining(
+  queueProgressPayload: Record<string, unknown> | null
+): number | null {
+  const tasks = asRecordArray(queueProgressPayload?.tasks);
+  if (tasks.length > 0) {
+    return tasks.filter(isRemoteImportTaskGraphBlocking).length;
+  }
+  return getQueueProgressRemaining(queueProgressPayload);
+}
+
 function getQueueProgressCount(
   queueProgressPayload: Record<string, unknown> | null,
   key: string
@@ -3008,7 +3114,7 @@ async function refreshExistingRemoteLiteratureDiscovery(params: {
     taskIds,
   });
   const queueProgressError = queueProgressPayload.error;
-  const remaining = getQueueProgressRemaining(queueProgressPayload.payload);
+  const remaining = getGraphBlockingRemoteImportRemaining(queueProgressPayload.payload);
   const completedCount = getQueueProgressCount(queueProgressPayload.payload, "completed");
   const failedCount = getQueueProgressCount(queueProgressPayload.payload, "failed");
   const hasRemoteImportWork = taskIds.length > 0;
@@ -3073,36 +3179,6 @@ async function refreshExistingRemoteLiteratureDiscovery(params: {
     queueProgressPayload: queueProgressPayload.payload,
     now: params.now,
   });
-  await writeRemoteDiscoveryGraphBuildReceipt({
-    projectRoot: params.projectRoot,
-    requestId: params.request.requestId,
-    runId,
-    sharedCorpus: params.sharedCorpus,
-    status:
-      requestStatus === "running"
-        ? "waiting_import"
-        : requestStatus === "completed"
-          ? "waiting_graph_commit"
-          : queueProgressError
-            ? "failed"
-            : "source_blocked",
-    graphVisibility: requestStatus === "needs_repair" ? "unavailable" : "unverified",
-    sourceEntries,
-    taskIds,
-    queueProgressPayload: queueProgressPayload.payload,
-    checkedAt: params.now,
-    limitations:
-      requestStatus === "completed"
-        ? ["Import queue is terminal; graph visibility still requires PaperNexus graph presence verification."]
-        : requestStatus === "running"
-          ? ["Import queue is still running; frontier, idea, and writing stages must wait."]
-          : [firstError ?? "PaperNexus import queue failed."],
-    repairHints:
-      requestStatus === "needs_repair"
-        ? ["Inspect PaperNexus import_workflow queue_progress and repair failed imports."]
-        : [],
-  });
-
   const decision = buildLiteratureRequisitionDecisionFields({
     requestStatus,
     queueProgressError,
@@ -3145,6 +3221,37 @@ async function refreshExistingRemoteLiteratureDiscovery(params: {
         params.reportPath
       ),
     },
+  });
+
+  await writeRemoteDiscoveryGraphBuildReceipt({
+    projectRoot: params.projectRoot,
+    requestId: params.request.requestId,
+    runId,
+    sharedCorpus: params.sharedCorpus,
+    status:
+      requestStatus === "running"
+        ? "waiting_import"
+        : requestStatus === "completed"
+          ? "waiting_graph_commit"
+          : queueProgressError
+            ? "failed"
+            : "source_blocked",
+    graphVisibility: requestStatus === "needs_repair" ? "unavailable" : "unverified",
+    sourceEntries,
+    taskIds,
+    queueProgressPayload: queueProgressPayload.payload,
+    checkedAt: params.now,
+    limitations:
+      requestStatus === "completed"
+        ? ["Import queue is terminal; graph visibility still requires PaperNexus graph presence verification."]
+        : requestStatus === "running"
+          ? ["Import queue is still running; frontier, idea, and writing stages must wait."]
+          : [firstError ?? "PaperNexus import queue failed."],
+    repairHints:
+      requestStatus === "needs_repair"
+        ? ["Inspect PaperNexus import_workflow queue_progress and repair failed imports."]
+        : [],
+    requisitionSatisfactionReportPath: satisfactionReportPath,
   });
 
   await setPaperIngestionState({
@@ -3229,9 +3336,9 @@ async function refreshExistingRemoteLiteratureDiscovery(params: {
         status: requestStatus === "needs_repair" ? "failed" : "success",
         detail:
           requestStatus === "running"
-            ? `Remote discovery run ${runId ?? params.request.requestId} still has ${remaining ?? "unknown"} import task(s) remaining.`
+          ? `Remote discovery run ${runId ?? params.request.requestId} still has ${remaining ?? "unknown"} graph-blocking import task(s) remaining.`
             : requestStatus === "completed"
-              ? `Remote discovery run ${runId ?? params.request.requestId} reached a terminal import state.`
+              ? `Remote discovery run ${runId ?? params.request.requestId} has no graph-blocking import work remaining.`
               : firstError ?? "PaperNexus import queue failed.",
         at: params.now,
         url: params.workflowPolicy?.papernexusMcpUrl ?? null,
@@ -3283,6 +3390,9 @@ async function maybeRunRemoteLiteratureDiscovery(params: {
     papernexusSshTarget?: string | null;
     papernexusRemoteStagingRoot?: string | null;
     papernexusDiscoveryProviders?: string[] | string | null;
+    papernexusDiscoveryMaxCandidates?: number | null;
+    papernexusDiscoveryMaxDownloads?: number | null;
+    papernexusDiscoveryMaxImported?: number | null;
     papernexusDiscoveryProcessImports?: boolean | null;
     papernexusDiscoveryImportMaxPasses?: number | null;
     papernexusDiscoveryRequestCache?: boolean | null;
@@ -3482,7 +3592,7 @@ async function maybeRunRemoteLiteratureDiscovery(params: {
   const queueProgressPayload = queueProgressResult.payload;
   const queueProgressError = queueProgressResult.error;
   const importSummary = summarizeRemoteImportResults(run);
-  const remaining = getQueueProgressRemaining(queueProgressPayload);
+  const remaining = getGraphBlockingRemoteImportRemaining(queueProgressPayload);
   const hasRemoteImportWork = taskIds.length > 0 || importSummary.submitted > 0;
   const importComplete =
     !queueProgressError &&
@@ -3548,43 +3658,6 @@ async function maybeRunRemoteLiteratureDiscovery(params: {
       queueProgressPayload,
     })
   );
-  await writeRemoteDiscoveryGraphBuildReceipt({
-    projectRoot: params.projectRoot,
-    requestId,
-    runId,
-    sharedCorpus: client.sharedCorpus,
-    status:
-      requestStatus === "running"
-        ? "waiting_import"
-        : requestStatus === "completed"
-          ? "waiting_graph_commit"
-          : queueProgressError
-            ? "failed"
-            : "source_blocked",
-    graphVisibility: requestStatus === "needs_repair" ? "unavailable" : "unverified",
-    sourceEntries,
-    taskIds,
-    queueProgressPayload,
-    checkedAt: params.now,
-    limitations:
-      requestStatus === "completed"
-        ? ["PaperNexus discovery/import completed; graph visibility has not been verified yet."]
-        : requestStatus === "running"
-          ? ["PaperNexus import work remains in progress."]
-          : [
-              queueProgressError ??
-                "PaperNexus discovery returned no importable source-backed entries.",
-            ],
-    repairHints:
-      requestStatus === "needs_repair"
-        ? [
-            queueProgressError
-              ? "Inspect PaperNexus import_workflow queue_progress and retry after the remote queue is healthy."
-              : "Run PaperNexus literature_discovery supplement to resolve Markdown/PDF sources.",
-          ]
-        : [],
-  });
-
   const decision = buildLiteratureRequisitionDecisionFields({
     requestStatus,
     queueProgressError,
@@ -3628,6 +3701,44 @@ async function maybeRunRemoteLiteratureDiscovery(params: {
         params.reportPath
       ),
     },
+  });
+
+  await writeRemoteDiscoveryGraphBuildReceipt({
+    projectRoot: params.projectRoot,
+    requestId,
+    runId,
+    sharedCorpus: client.sharedCorpus,
+    status:
+      requestStatus === "running"
+        ? "waiting_import"
+        : requestStatus === "completed"
+          ? "waiting_graph_commit"
+          : queueProgressError
+            ? "failed"
+            : "source_blocked",
+    graphVisibility: requestStatus === "needs_repair" ? "unavailable" : "unverified",
+    sourceEntries,
+    taskIds,
+    queueProgressPayload,
+    checkedAt: params.now,
+    limitations:
+      requestStatus === "completed"
+        ? ["PaperNexus discovery/import completed; graph visibility has not been verified yet."]
+        : requestStatus === "running"
+          ? ["PaperNexus import work remains in progress."]
+          : [
+              queueProgressError ??
+                "PaperNexus discovery returned no importable source-backed entries.",
+            ],
+    repairHints:
+      requestStatus === "needs_repair"
+        ? [
+            queueProgressError
+              ? "Inspect PaperNexus import_workflow queue_progress and retry after the remote queue is healthy."
+              : "Run PaperNexus literature_discovery supplement to resolve Markdown/PDF sources.",
+          ]
+        : [],
+    requisitionSatisfactionReportPath: satisfactionReportPath,
   });
 
   const completedPapers =
@@ -4016,6 +4127,9 @@ export async function maybeMaterializeGraphBuildPaperSources(params: {
     papernexusSshTarget?: string | null;
     papernexusRemoteStagingRoot?: string | null;
     papernexusDiscoveryProviders?: string[] | string | null;
+    papernexusDiscoveryMaxCandidates?: number | null;
+    papernexusDiscoveryMaxDownloads?: number | null;
+    papernexusDiscoveryMaxImported?: number | null;
     papernexusDiscoveryProcessImports?: boolean | null;
     papernexusDiscoveryImportMaxPasses?: number | null;
     papernexusDiscoveryRequestCache?: boolean | null;

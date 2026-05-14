@@ -7873,6 +7873,96 @@ test("auto iterator rejects completed literature requisitions without import evi
   );
 });
 
+test("auto iterator preserves completed literature requisitions with valid satisfaction report", async (t) => {
+  const projectRoot = await makeTempProject();
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  const now = await seedSetupCompleteProject(projectRoot, "graph_build");
+  await writeText(path.join(projectRoot, "graph", "GRAPH_BUILD_REPORT.md"));
+  await writeJson(path.join(projectRoot, "graph", "PAPERNEXUS_STATUS.json"), {
+    status: "ready",
+    corpus_name: "GCD",
+    expected_paper_count: 1,
+    present_paper_count: 1,
+  });
+  await writeJson(path.join(projectRoot, "graph", "GRAPH_PRESENCE_CHECK.json"), {
+    status: "ready",
+    expected_paper_count: 1,
+    present_paper_count: 1,
+    missing_paper_count: 0,
+  });
+  await seedReadyBrainstormCycle(projectRoot);
+
+  const satisfactionPath =
+    "researcher/idea-catalyst/requisition/req-computer-science-8-3/REQUISITION_SATISFACTION_REPORT.json";
+  await writeJson(path.join(projectRoot, satisfactionPath), {
+    kind: "literature_requisition_decision",
+    authority: "literature_requisition_satisfaction",
+    status: "valid",
+    decision: "satisfied_remote_import_evidence",
+    request_id: "idea-catalyst-req-computer-science-8-3",
+    evidence_gap_closed: true,
+    source_backed_count: 1,
+    metadata_only_count: 0,
+    reason: "Request-specific PaperNexus source/import-backed evidence was materialized.",
+  });
+
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.paper_ingestion = {
+    runtime_status: "ready",
+    queued_requests: [
+      {
+        request_id: "idea-catalyst-req-computer-science-8-3",
+        request_kind: "requisition",
+        status: "completed",
+        wrapper: "papernexus_remote_mcp",
+        command_text: "remote literature discovery requisition",
+        trigger_kind: "idea_catalyst_requisition",
+        validation_report_path: satisfactionPath,
+        summary: "Graph already contains request-scoped evidence.",
+        created_at: "2026-04-10T08:29:10.804Z",
+        updated_at: "2026-04-10T08:29:10.804Z",
+        finished_at: "2026-04-10T08:35:10.804Z",
+        attempt_count: 1,
+      },
+    ],
+    completed_papers: [],
+    batch_items: [],
+    active_batches: [],
+    paper_operations: [],
+    import_task_ids: [],
+    graph_presence_checked_at: now,
+    graph_presence_status: "ready",
+    graph_presence_report_path: "graph/GRAPH_PRESENCE_CHECK.json",
+    graph_presence_expected_papers: 1,
+    graph_presence_present_papers: 1,
+    graph_presence_missing_papers: [],
+    papernexus_certification_status: "ready",
+    papernexus_claim_level: "source_backed_graph",
+    papernexus_source_backed_graph_claim: true,
+    refresh_required: false,
+  };
+  await writeJson(manifestPath, manifest);
+
+  const result = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+  });
+
+  const updatedManifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  const request = updatedManifest.paper_ingestion.queued_requests[0];
+  assert.equal(request.status, "completed");
+  assert.equal(request.validation_report_path, satisfactionPath);
+  assert.notEqual(request.validation_status, "invalid");
+  const report = JSON.parse(await fs.readFile(path.join(projectRoot, satisfactionPath), "utf8"));
+  assert.equal(report.decision, "satisfied_remote_import_evidence");
+  assert.notEqual(result.blockingReason, "graph_reentry_request_active");
+});
+
 test("auto iterator advances analyze without theory appendix artifacts when proof appendix is not required", async (t) => {
   const projectRoot = await makeTempProject();
   t.after(async () => {
@@ -9995,6 +10085,25 @@ test("auto iterator materializes a local coder experiment bundle when code stage
   await fs.access(path.join(projectRoot, "coder", "EXPERIMENT_INDEX.md"));
   await fs.access(path.join(bundleDir, "train.py"));
   await fs.access(path.join(bundleDir, "README.md"));
+  const dispatch = JSON.parse(
+    await fs.readFile(
+      path.join(projectRoot, "orchestrator", "EXPERIMENT_DISPATCH.json"),
+      "utf8"
+    )
+  );
+  assert.equal(dispatch.authority, "experiment_dispatch");
+  assert.equal(dispatch.status, "dispatched");
+  assert.equal(dispatch.track_id, trackId);
+  assert.equal(dispatch.dispatched_to, "coder");
+  assert.equal(
+    dispatch.experiment_manifest_path,
+    `coder/experiments/${trackId}/exp-1__local_consistency_debiasing_probe/EXPERIMENT_MANIFEST.json`
+  );
+  assert.equal(
+    dispatch.innovation_packet_path,
+    "orchestrator/INNOVATION_PACKET.json"
+  );
+  await fs.access(path.join(projectRoot, "coder", "EXPERIMENT_DISPATCH.json"));
 });
 
 test("auto iterator bootstraps a local coder bundle while committing plan to code", async (t) => {
