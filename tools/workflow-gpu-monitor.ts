@@ -115,6 +115,25 @@ function isActiveRemoteRunStatus(status: string | null): boolean {
   );
 }
 
+function isTerminalRemoteRunStatus(status: string | null): boolean {
+  return Boolean(
+    status &&
+      [
+        "completed",
+        "complete",
+        "succeeded",
+        "success",
+        "failed",
+        "failure",
+        "cancelled",
+        "canceled",
+        "stopped",
+        "timeout",
+        "timed_out",
+      ].includes(status)
+  );
+}
+
 function getMonitorFilePath(projectRoot: string): string {
   return path.join(projectRoot, DEFAULT_EXPERIMENT_GPU_MONITOR_PATH);
 }
@@ -499,6 +518,9 @@ export async function refreshExperimentGpuMonitor(params: {
   const ledgerRuns = await loadLedgerBackedRunRecords(projectRoot);
   const activeRunMap = new Map<string, RemoteRunRecord>();
   for (const run of [...remoteRunFiles, ...ledgerRuns]) {
+    if (isTerminalRemoteRunStatus(run.status)) {
+      continue;
+    }
     if (!isActiveRemoteRunStatus(run.status) && !run.terminalStatus) {
       continue;
     }
