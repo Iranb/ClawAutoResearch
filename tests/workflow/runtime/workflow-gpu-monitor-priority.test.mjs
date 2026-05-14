@@ -78,6 +78,40 @@ test("refreshExperimentGpuMonitor prioritizes stable result summaries over live 
   );
 });
 
+test("refreshExperimentGpuMonitor ignores already completed remote runs with terminal artifacts", async (t) => {
+  const projectRoot = await makeProjectRoot();
+
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  const runDir = path.join(projectRoot, "coder", "demo-exp");
+  await writeJson(path.join(runDir, "REMOTE_RUN.json"), {
+    experiment_id: "exp-complete",
+    experiment_name: "candidate",
+    track_id: "track-main",
+    server: "gpu-server",
+    status: "completed",
+    completed_at: "2026-05-14T08:15:00.000Z",
+  });
+  await writeJson(path.join(runDir, "RUN_TERMINAL.json"), {
+    status: "completed",
+    completed_at: "2026-05-14T08:15:00.000Z",
+  });
+  await writeJson(path.join(runDir, "RESULT_SUMMARY.json"), {
+    status: "completed",
+    metrics: { eer: 0.03 },
+  });
+
+  const refreshed = await refreshExperimentGpuMonitor({
+    projectRoot,
+  });
+
+  assert.equal(refreshed.state.activeTrackedRunCount, 0);
+  assert.equal(refreshed.state.likelyFinishedRunCount, 0);
+  assert.equal(refreshed.state.recommendation, "none");
+});
+
 test("refreshExperimentGpuMonitor treats stale heartbeats as timeout-style completion", async (t) => {
   const projectRoot = await makeProjectRoot();
   const previousPath = process.env.PATH;
