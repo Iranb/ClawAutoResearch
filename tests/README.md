@@ -8,6 +8,28 @@ Run everything:
 npm test
 ```
 
+Select tests from the current git diff:
+
+```bash
+npm run test:changed:list
+npm run test:changed
+```
+
+`test:changed:list` prints the changed files, selected test files, covering
+npm scripts, and the narrow `node --test ...` command. `test:changed` runs the
+selected files. The selector follows relative imports from source files to test
+files, then adds conservative subsystem fallback suites for workflow entrypoints
+that are difficult to prove with static imports alone.
+
+Useful variants:
+
+```bash
+node scripts/select_changed_tests.mjs --base main
+node scripts/select_changed_tests.mjs --staged
+node scripts/select_changed_tests.mjs --files tools/workflow-stage-completion.ts
+node scripts/select_changed_tests.mjs --json
+```
+
 Run a module:
 
 ```bash

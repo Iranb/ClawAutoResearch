@@ -593,7 +593,8 @@ test("graph-build source catch-up delegates missing research and import to remot
     )
   );
   assert.equal(satisfactionReport.kind, "literature_requisition_decision");
-  assert.equal(satisfactionReport.status, "queued");
+  assert.equal(satisfactionReport.authority, "literature_requisition_satisfaction");
+  assert.equal(satisfactionReport.status, "running");
   assert.equal(satisfactionReport.decision, "waiting_remote_import_progress");
   assert.equal(
     satisfactionReport.remote_literature_discovery.artifact_path,
@@ -1026,6 +1027,7 @@ test("graph-build source catch-up polls existing remote discovery imports withou
     )
   );
   assert.equal(satisfactionReport.kind, "literature_requisition_decision");
+  assert.equal(satisfactionReport.authority, "literature_requisition_satisfaction");
   const artifact = JSON.parse(
     await fs.readFile(
       path.join(projectRoot, satisfactionReport.remote_literature_discovery.artifact_path),
@@ -1219,7 +1221,7 @@ test("graph-build source catch-up refreshes remote artifacts linked from active 
     await fs.readFile(path.join(projectRoot, failedSatisfactionPath), "utf8")
   );
   assert.equal(satisfactionReport.kind, "literature_requisition_decision");
-  assert.equal(satisfactionReport.status, "completed");
+  assert.equal(satisfactionReport.status, "valid");
   assert.equal(satisfactionReport.decision, "satisfied_remote_import_evidence");
   assert.equal(satisfactionReport.remote_literature_discovery.artifact_path, remoteArtifactPath);
   assert.equal(satisfactionReport.source_backed_count, 1);
@@ -1454,7 +1456,7 @@ test("graph-build source catch-up chooses the strongest remote literature artifa
   const satisfactionReport = JSON.parse(
     await fs.readFile(path.join(projectRoot, satisfactionPath), "utf8")
   );
-  assert.equal(satisfactionReport.status, "completed");
+  assert.equal(satisfactionReport.status, "valid");
   assert.equal(satisfactionReport.remote_literature_discovery.artifact_path, strongArtifactPath);
   assert.equal(satisfactionReport.source_backed_count, 1);
 

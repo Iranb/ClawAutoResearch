@@ -24,6 +24,8 @@
     "prepare": "npm run build",
     "lint": "eslint index.ts tools/",
     "test": "node --test $(find tests -name '*.test.mjs' -type f | sort)",
+    "test:changed:list": "node scripts/select_changed_tests.mjs --list",
+    "test:changed": "node scripts/select_changed_tests.mjs --run",
     "test:agents": "node --test $(find tests/agents -name '*.test.mjs' -type f | sort)",
     "test:distribution": "node --test $(find tests/distribution -name '*.test.mjs' -type f | sort)",
     "test:e2e": "node --test $(find tests/e2e -name '*.test.mjs' -type f | sort)",

@@ -51,6 +51,11 @@ import {
 import {
   buildWorkflowControlContract,
 } from "../../../tools/workflow-control-contract.ts";
+import {
+  DEFAULT_GRAPH_BUILD_DECISION_PATH,
+  DEFAULT_IDEA_CATALYST_CONTRACT_PATH,
+  LITERATURE_REQUISITION_SATISFACTION_AUTHORITY,
+} from "../../../tools/workflow-authority-registry.ts";
 
 async function makeTempProject() {
   const projectRoot = await fs.mkdtemp(
@@ -68,6 +73,47 @@ async function writeJson(filePath, value) {
 async function writeText(filePath, text = "ok\n") {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
   await fs.writeFile(filePath, text, "utf8");
+}
+
+async function seedReadyGraphBuildDecision(projectRoot, now, options = {}) {
+  await writeJson(path.join(projectRoot, DEFAULT_GRAPH_BUILD_DECISION_PATH), {
+    schema_version: 1,
+    authority: "graph_build_decision",
+    decision: "complete",
+    status: "complete",
+    request_id: options.requestId ?? "req-graph-ready",
+    requisition_satisfaction_report_path:
+      options.requisitionSatisfactionReportPath ?? null,
+    graph_presence_report_path:
+      options.graphPresenceReportPath ?? "graph/GRAPH_PRESENCE_CHECK.json",
+    graph_receipt_path:
+      options.graphReceiptPath ?? "graph/PAPERNEXUS_GRAPH_BUILD_RECEIPT.json",
+    source_index_path: options.sourceIndexPath ?? "researcher/PAPER_SOURCE_INDEX.json",
+    source_backed_graph_claim: true,
+    reason: options.reason ?? "fixture source-backed graph decision",
+    limitations: options.limitations ?? [],
+    created_at: now,
+    updated_at: now,
+  });
+}
+
+async function seedBlockedGraphBuildDecision(projectRoot, now, reason) {
+  await writeJson(path.join(projectRoot, DEFAULT_GRAPH_BUILD_DECISION_PATH), {
+    schema_version: 1,
+    authority: "graph_build_decision",
+    decision: "blocked",
+    status: "blocked",
+    request_id: "req-graph-blocked",
+    requisition_satisfaction_report_path: null,
+    graph_presence_report_path: "graph/GRAPH_PRESENCE_CHECK.json",
+    graph_receipt_path: "graph/PAPERNEXUS_GRAPH_BUILD_RECEIPT.json",
+    source_index_path: "researcher/PAPER_SOURCE_INDEX.json",
+    source_backed_graph_claim: false,
+    reason,
+    limitations: [reason],
+    created_at: now,
+    updated_at: now,
+  });
 }
 
 async function seedVerifiedGraphBuildReceipt(projectRoot, now) {
@@ -103,6 +149,10 @@ async function seedVerifiedGraphBuildReceipt(projectRoot, now) {
     evidence_packet_path: null,
     limitations: [],
     repair_hints: [],
+  });
+  await seedReadyGraphBuildDecision(projectRoot, now, {
+    requestId: "req-upload-ready",
+    graphReceiptPath: "graph/PAPERNEXUS_GRAPH_BUILD_RECEIPT.json",
   });
 }
 
@@ -203,6 +253,12 @@ async function seedSourceBackedPapernexusSyncState(projectRoot, now, options = {
     repair_hints: [],
   };
   await writeJson(path.join(projectRoot, receiptPath), receipt);
+  await seedReadyGraphBuildDecision(projectRoot, now, {
+    requestId: receipt.request_id,
+    graphPresenceReportPath: reportPath,
+    graphReceiptPath: receiptPath,
+    reason: "fixture source-backed graph decision",
+  });
   await writeJson(path.join(projectRoot, reportPath), {
     schema_version: 1,
     project_id: manifest.project_id ?? null,
@@ -671,6 +727,21 @@ async function seedRemoteGraphStatus(
         ? "Remote graph is not ready."
         : null,
   });
+  const sourceBackedCount =
+    sourceBackedPresentCount ?? (readyProofLevel === "source_span" ? presentPaperCount : 0);
+  if (
+    status === "ready" &&
+    missingPapers.length === 0 &&
+    presentPaperCount > 0 &&
+    sourceBackedCount > 0
+  ) {
+    await seedReadyGraphBuildDecision(projectRoot, "2026-03-22T12:05:00.000Z", {
+      requestId: "req-remote-graph-ready",
+      graphPresenceReportPath: "graph/PAPERNEXUS_STATUS.json",
+      graphReceiptPath: null,
+      reason: "fixture remote source-backed graph decision",
+    });
+  }
 }
 
 async function seedReadyBrainstormCycle(
@@ -1032,6 +1103,34 @@ async function seedReadyIdeaCatalystState(
     status: "ready",
     micro_stage: microStage,
   });
+  await writeJson(path.join(projectRoot, DEFAULT_IDEA_CATALYST_CONTRACT_PATH), {
+    schema_version: 1,
+    authority: "idea_catalyst_contract",
+    status: "ready",
+    source_requisition_report_path:
+      "researcher/literature-discovery/requisition/fixture/REQUISITION_SATISFACTION_REPORT.json",
+    graph_decision_path: DEFAULT_GRAPH_BUILD_DECISION_PATH,
+    literature_packet_path:
+      "researcher/literature-discovery/LITERATURE_DISCOVERY_PACKET.json",
+    payload_paths: ["researcher/idea-catalyst/IDEA_FRAGMENTS.json"],
+    idea_fragments: [
+      {
+        fragment_id: "frag-1",
+        source_domain: "Psychology",
+        supporting_papers: ["Catalyst Bridge Paper"],
+        source_spans: [{ span_id: "span-fixture-1" }],
+        evidence_chain_refs: [{ ref_id: "chain-fixture-1" }],
+      },
+    ],
+    supporting_papers: ["Catalyst Bridge Paper"],
+    source_spans: [{ span_id: "span-fixture-1" }],
+    evidence_chain_refs: [{ ref_id: "chain-fixture-1" }],
+    claim_cap: "supported",
+    reason: "fixture ready Idea-Catalyst contract",
+    limitations: [],
+    created_at: "2026-03-22T12:00:00.000Z",
+    updated_at: "2026-03-22T12:00:00.000Z",
+  });
 
   const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
   const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
@@ -1258,6 +1357,7 @@ async function seedProjectReadyForCode(projectRoot) {
       ),
     },
   ]);
+  await seedReadyGraphBuildDecision(projectRoot, now);
   await fs.mkdir(path.join(projectRoot, "graph", "subgraphs"), { recursive: true });
   await writeText(path.join(projectRoot, "graph", "subgraphs", "cluster.md"));
 
@@ -2372,7 +2472,7 @@ test("auto iterator treats file-backed track evidence as repairable and advances
   );
 });
 
-test("auto iterator reconciles stale literature discovery requisitions once track evidence is satisfied", async (t) => {
+test("auto iterator does not satisfy stale literature requisitions from raw track evidence alone", async (t) => {
   const projectRoot = await makeTempProject();
   t.after(async () => {
     await fs.rm(projectRoot, { recursive: true, force: true });
@@ -2411,8 +2511,22 @@ test("auto iterator reconciles stale literature discovery requisitions once trac
       discovery_reason: "idea_track_graph_evidence_gap",
       trigger_kind: "idea_literature_discovery",
       target_track_ids: [trackId],
-      candidate_papers: [{ title: "Graph-backed innovation evidence", track_id: trackId }],
-      selected_papers: [{ title: "Graph-backed innovation evidence", track_id: trackId }],
+      candidate_papers: [
+        {
+          title: "Graph-backed innovation evidence",
+          track_id: trackId,
+          source_backed: true,
+          source_path: "researcher/paper_source/md/graph-backed-innovation-evidence.md",
+        },
+      ],
+      selected_papers: [
+        {
+          title: "Graph-backed innovation evidence",
+          track_id: trackId,
+          source_backed: true,
+          source_path: "researcher/paper_source/md/graph-backed-innovation-evidence.md",
+        },
+      ],
       evidence_gap_closed: false,
     }
   );
@@ -2424,17 +2538,17 @@ test("auto iterator reconciles stale literature discovery requisitions once trac
   });
 
   assert.equal(result.stageBefore, "idea");
-  assert.equal(result.stageAfter, "plan");
+  assert.equal(result.stageAfter, "graph_build");
   const updatedManifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
-  assert.equal(updatedManifest.paper_ingestion.queued_requests[0].status, "completed");
+  assert.equal(updatedManifest.paper_ingestion.queued_requests[0].status, "queued");
   const packet = JSON.parse(
     await fs.readFile(
       path.join(projectRoot, "researcher", "literature-discovery", "LITERATURE_DISCOVERY_PACKET.json"),
       "utf8"
     )
   );
-  assert.equal(packet.evidence_gap_closed, true);
-  assert.equal(packet.closure_reason, "workflow_state_satisfied");
+  assert.equal(packet.evidence_gap_closed, false);
+  assert.equal(packet.closure_reason, undefined);
 });
 
 test("auto iterator auto-materializes the ideation contract during idea before advancing", async (t) => {
@@ -3697,6 +3811,16 @@ test("auto iterator refreshes remote graph presence with the plugin-configured s
               paperId: "paper:plugin-config",
               paperTitle: "Plugin Config Paper",
               activeInGraph: true,
+              graphIndexEvidence: {
+                paperId: "paper:plugin-config",
+                sourceKey:
+                  "/remote/corpora/GCD/md/2501.00015--plugin-config-paper.md",
+              },
+              sourceSpanEvidence: {
+                source_key:
+                  "/remote/corpora/GCD/md/2501.00015--plugin-config-paper.md",
+                count: 1,
+              },
             },
           ],
         })
@@ -4958,8 +5082,12 @@ test("auto iterator uses remote graph status for graph_build when remote PaperNe
   });
 
   assert.equal(result.stageBefore, "graph_build");
-  assert.equal(result.graphPresenceCheck?.status, "ready");
   assert.equal(result.stageAfter, "frontier_mapping");
+  const graphDecision = JSON.parse(
+    await fs.readFile(path.join(projectRoot, DEFAULT_GRAPH_BUILD_DECISION_PATH), "utf8")
+  );
+  assert.equal(graphDecision.decision, "complete");
+  assert.equal(graphDecision.source_backed_graph_claim, true);
 });
 
 test("auto iterator does not rerun graph presence when manifest already records ready graph status without a refresh request", async (t) => {
@@ -5476,6 +5604,10 @@ test("auto iterator advances graph_build to frontier_mapping when graph is ready
       ),
     },
   ]);
+  await seedReadyGraphBuildDecision(
+    projectRoot,
+    "2026-03-22T12:00:00.000Z"
+  );
 
   const result = await runWorkflowAutoIterator({
     projectRoot,
@@ -5489,7 +5621,11 @@ test("auto iterator advances graph_build to frontier_mapping when graph is ready
 
   assert.equal(result.stageBefore, "graph_build");
   assert.equal(result.stageAfter, "frontier_mapping");
-  assert.equal(result.graphPresenceCheck?.status, "ready");
+  const graphDecision = JSON.parse(
+    await fs.readFile(path.join(projectRoot, DEFAULT_GRAPH_BUILD_DECISION_PATH), "utf8")
+  );
+  assert.equal(graphDecision.decision, "complete");
+  assert.equal(graphDecision.source_backed_graph_claim, true);
   assert.equal(result.recommendedActions[0]?.kind, "drive_stage");
   assert.equal(
     result.recommendedActions[0]?.dispatchDespiteMissingSignals,
@@ -5755,6 +5891,8 @@ test("auto iterator completes the IDEA-CATALYST requisition rerun loop back into
   assert.equal(first.stageAfter, "graph_build");
 
   const queuedManifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  const request = queuedManifest.paper_ingestion.queued_requests[0];
+  const reportPath = `${path.dirname(request.manifest_path)}/REQUISITION_SATISFACTION_REPORT.json`;
   queuedManifest.current_stage = "graph_build";
   queuedManifest.current_micro_stage = "uploading";
   queuedManifest.paper_ingestion.graph_presence_checked_at = "2026-04-03T00:00:00.000Z";
@@ -5768,6 +5906,11 @@ test("auto iterator completes the IDEA-CATALYST requisition rerun loop back into
     queuedManifest.paper_ingestion.queued_requests.map((entry) => ({
       ...entry,
       status: "completed",
+      finished_at: "2026-04-03T00:00:00.000Z",
+      validation_status: "valid",
+      validation_summary:
+        "Request-scoped source-backed literature evidence satisfied the catalyst requisition.",
+      validation_report_path: reportPath,
     }));
   queuedManifest.paper_ingestion.completed_papers = [
     {
@@ -5794,6 +5937,64 @@ test("auto iterator completes the IDEA-CATALYST requisition rerun loop back into
       ),
     },
   ]);
+  await writeJson(
+    path.join(
+      projectRoot,
+      "researcher",
+      "literature-discovery",
+      "LITERATURE_DISCOVERY_PACKET.json"
+    ),
+    {
+      schema_version: 1,
+      status: "completed",
+      evidence_gap_closed: true,
+      selected_papers: [
+        {
+          canonical_id: "arxiv:2604.00001",
+          arxiv_id: "2604.00001",
+          title: "Catalyst Bridge Paper",
+          source_kind: "markdown",
+          source_path: "researcher/paper_source/md/2604.00001--catalyst-bridge-paper.md",
+          import_status: "completed",
+        },
+      ],
+      candidate_papers: [
+        {
+          canonical_id: "arxiv:2604.00001",
+          arxiv_id: "2604.00001",
+          title: "Catalyst Bridge Paper",
+          source_kind: "markdown",
+          source_path: "researcher/paper_source/md/2604.00001--catalyst-bridge-paper.md",
+          import_status: "completed",
+        },
+      ],
+    }
+  );
+  await writeJson(path.join(projectRoot, reportPath), {
+    schema_version: 1,
+    kind: "literature_requisition_decision",
+    authority: LITERATURE_REQUISITION_SATISFACTION_AUTHORITY,
+    status: "valid",
+    decision: "satisfied_remote_import_evidence",
+    request_id: request.request_id,
+    trigger_kind: "idea_catalyst_requisition",
+    generation: 1,
+    remote_run_id: "run-catalyst-bridge",
+    selected_paper_count: 1,
+    candidate_paper_count: 1,
+    source_backed_count: 1,
+    metadata_only_count: 0,
+    evidence_gap_closed: true,
+    reason: "Fixture request-scoped source-backed literature evidence is present.",
+    limitations: [],
+    cited_evidence: {
+      literature_packet_path:
+        "researcher/literature-discovery/LITERATURE_DISCOVERY_PACKET.json",
+      source_index_path: "researcher/PAPER_SOURCE_INDEX.json",
+    },
+    created_at: "2026-04-03T00:00:00.000Z",
+    updated_at: "2026-04-03T00:00:00.000Z",
+  });
   const sourceRoot = path.join(
     projectRoot,
     ".papernexus-home",
@@ -5825,6 +6026,10 @@ test("auto iterator completes the IDEA-CATALYST requisition rerun loop back into
     projectRoot,
     "2026-04-03T00:00:00.000Z"
   );
+  await seedReadyGraphBuildDecision(projectRoot, "2026-04-03T00:00:00.000Z", {
+    requestId: request.request_id,
+    requisitionSatisfactionReportPath: reportPath,
+  });
 
   const second = await runWorkflowAutoIterator({
     projectRoot,
@@ -5861,7 +6066,7 @@ test("auto iterator completes the IDEA-CATALYST requisition rerun loop back into
   assert.equal(finalManifest.ideation_contract.selected_track_id, trackId);
 });
 
-test("auto iterator does not reopen a degradably satisfied IDEA-CATALYST requisition after graph reentry", async (t) => {
+test("auto iterator rejects legacy degradably satisfied IDEA-CATALYST reports after graph reentry", async (t) => {
   const projectRoot = await makeTempProject();
   t.after(async () => {
     await fs.rm(projectRoot, { recursive: true, force: true });
@@ -5975,54 +6180,19 @@ test("auto iterator does not reopen a degradably satisfied IDEA-CATALYST requisi
   });
   assert.equal(
     second.stageAfter,
-    "frontier_mapping",
+    "graph_build",
     `stageAfter=${second.stageAfter}; missing=${JSON.stringify(second.missingStageSignals)}; blocking=${second.blockingReason ?? ""}`
   );
-
-  const third = await runWorkflowAutoIterator({
-    projectRoot,
-    mode: "test",
-    queueMailbox: false,
-  });
-  assert.equal(third.stageAfter, "idea");
-
-  const fourth = await runWorkflowAutoIterator({
-    projectRoot,
-    mode: "test",
-    queueMailbox: false,
-  });
-
-  await activatePreparedHandoff(projectRoot, "orchestrator");
-
   const finalManifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
-  assert.equal(fourth.stageBefore, "idea");
-  assert.equal(
-    fourth.stageAfter,
-    "plan",
-    `stageAfter=${fourth.stageAfter}; missing=${JSON.stringify(fourth.missingStageSignals)}; catalyst=${JSON.stringify(finalManifest.idea_catalyst)}`
-  );
-  assert.equal(
-    finalManifest.current_stage,
-    "plan",
-    `stageAfter=${fourth.stageAfter}; missing=${JSON.stringify(fourth.missingStageSignals)}; blocking=${finalManifest.blocking_reason ?? ""}; next=${finalManifest.next_action ?? ""}; catalyst=${JSON.stringify(finalManifest.idea_catalyst)}`
-  );
-  assert.equal(finalManifest.idea_catalyst.status, "ready");
-  assert.equal(finalManifest.idea_catalyst.requisition_required, false);
-  assert.equal(finalManifest.idea_catalyst.last_requisition_cycle, "req-catalyst-degraded");
-  assert.equal(finalManifest.ideation_contract.selected_track_id, trackId);
   assert.equal(
     finalManifest.paper_ingestion.queued_requests[0].validation_status,
     "warning"
   );
-  await fs.access(
-    path.join(projectRoot, "researcher", "idea-catalyst", "IDEA_FRAGMENTS.json")
-  );
-  await fs.access(
-    path.join(projectRoot, "researcher", "idea-catalyst", "RANKED_FRAGMENTS.json")
-  );
+  assert.equal(finalManifest.idea_catalyst.status, "requisition");
+  assert.equal(finalManifest.ideation_contract.selected_track_id, trackId);
 });
 
-test("auto iterator reconciles completed literature requisitions once source-backed graph evidence is ready", async (t) => {
+test("auto iterator keeps completed literature requisitions blocked without request satisfaction report", async (t) => {
   const projectRoot = await makeTempProject();
   t.after(async () => {
     await fs.rm(projectRoot, { recursive: true, force: true });
@@ -6143,18 +6313,25 @@ test("auto iterator reconciles completed literature requisitions once source-bac
     mode: "test",
     queueMailbox: false,
   });
-  assert.equal(second.stageAfter, "frontier_mapping");
+  assert.equal(second.stageAfter, "graph_build");
 
   const repairedManifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
   assert.equal(
     repairedManifest.paper_ingestion.queued_requests[0].validation_status,
-    "warning"
+    "invalid"
   );
   assert.equal(
     repairedManifest.paper_ingestion.queued_requests[0].validation_report_path,
     reportPath
   );
-  await fs.access(path.join(projectRoot, reportPath));
+  assert.equal(
+    repairedManifest.paper_ingestion.queued_requests[0].status,
+    "needs_repair"
+  );
+  const report = JSON.parse(await fs.readFile(path.join(projectRoot, reportPath), "utf8"));
+  assert.equal(report.authority, LITERATURE_REQUISITION_SATISFACTION_AUTHORITY);
+  assert.equal(report.status, "failed");
+  assert.equal(report.evidence_gap_closed, false);
 });
 
 test("auto iterator reconciles non-actionable catalyst requisitions instead of regressing idea back to graph_build", async (t) => {
@@ -6337,6 +6514,10 @@ test("auto iterator advances graph_build once graph presence is ready", async (t
       canonicalSourceKey: path.join(sourceRoot, "md", "2501.00001--alpha-paper.md"),
     },
   ]);
+  await seedReadyGraphBuildDecision(
+    projectRoot,
+    "2026-03-22T12:00:00.000Z"
+  );
   await seedReadyBrainstormCycle(projectRoot);
 
   const result = await runWorkflowAutoIterator({
@@ -6347,7 +6528,11 @@ test("auto iterator advances graph_build once graph presence is ready", async (t
 
   assert.equal(result.stageBefore, "graph_build");
   assert.equal(result.stageAfter, "frontier_mapping");
-  assert.equal(result.graphPresenceCheck?.status, "ready");
+  const graphDecision = JSON.parse(
+    await fs.readFile(path.join(projectRoot, DEFAULT_GRAPH_BUILD_DECISION_PATH), "utf8")
+  );
+  assert.equal(graphDecision.decision, "complete");
+  assert.equal(graphDecision.source_backed_graph_claim, true);
 });
 
 test("auto iterator waits on fresh queued literature discovery requisitions after graph presence is ready", async (t) => {
@@ -6471,6 +6656,10 @@ test("auto iterator keeps stale unlaunched literature discovery requisitions que
       canonicalSourceKey: path.join(sourceRoot, "md", "2501.00001--alpha-paper.md"),
     },
   ]);
+  await seedReadyGraphBuildDecision(projectRoot, now, {
+    requisitionSatisfactionReportPath:
+      "researcher/literature-discovery/requisition/review-story-support-gap/REQUISITION_SATISFACTION_REPORT.json",
+  });
   await seedReadyBrainstormCycle(projectRoot);
   await writeJson(
     path.join(
@@ -6598,6 +6787,7 @@ test("auto iterator ignores stale graph_build catch-up queue once graph presence
       canonicalSourceKey: path.join(sourceRoot, "md", "2603.21852--eml-operator.md"),
     },
   ]);
+  await seedReadyGraphBuildDecision(projectRoot, now);
   await seedReadyBrainstormCycle(projectRoot);
 
   const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
@@ -7006,7 +7196,7 @@ test("auto iterator marks stale retried literature requisitions needs_repair wit
   assert.equal(result.stageAfter, "graph_build");
 });
 
-test("auto iterator resumes literature discovery reentry stage after graph build degradation", async (t) => {
+test("auto iterator resumes literature discovery reentry stage after accepted requisition report", async (t) => {
   const projectRoot = await makeTempProject();
   t.after(async () => {
     await fs.rm(projectRoot, { recursive: true, force: true });
@@ -7059,6 +7249,10 @@ test("auto iterator resumes literature discovery reentry stage after graph build
       canonicalSourceKey: path.join(sourceRoot, "md", "2501.00001--alpha-paper.md"),
     },
   ]);
+  await seedReadyGraphBuildDecision(projectRoot, now, {
+    requisitionSatisfactionReportPath:
+      "researcher/literature-discovery/requisition/review-story-support-gap/REQUISITION_SATISFACTION_REPORT.json",
+  });
   await seedReadyBrainstormCycle(projectRoot);
   const requisitionPath =
     "researcher/literature-discovery/requisition/review-story-support-gap/DISCOVERY_REQUISITION.json";
@@ -7078,17 +7272,23 @@ test("auto iterator resumes literature discovery reentry stage after graph build
     ),
     {
       schema_version: 1,
-      status: "warning",
-      decision: "degraded_satisfied_current_graph",
+      kind: "literature_requisition_decision",
+      authority: LITERATURE_REQUISITION_SATISFACTION_AUTHORITY,
+      status: "valid",
+      decision: "satisfied",
       request_id: "review-story-support-gap-review-story-support-gap",
       trigger_kind: "review_literature_discovery",
       graph_presence_status: "ready",
       selected_paper_count: 1,
       candidate_paper_count: 1,
+      source_backed_count: 1,
+      metadata_only_count: 0,
       evidence_gap_closed: true,
-      remediation_pass: {
-        graph_ready: true,
-        can_proceed_with_existing_graph: true,
+      reason: "Fixture request-scoped report accepts review literature evidence.",
+      limitations: [],
+      cited_evidence: {
+        graph_presence_report_path: "graph/GRAPH_PRESENCE_CHECK.json",
+        source_index_path: "researcher/PAPER_SOURCE_INDEX.json",
       },
     }
   );
@@ -8310,6 +8510,11 @@ test("auto iterator routes idea back to graph_build when graph loses canonical p
   };
   await writeJson(manifestPath, manifest);
   await seedMissingPapernexusSyncState(projectRoot, now);
+  await seedBlockedGraphBuildDecision(
+    projectRoot,
+    now,
+    "Graph presence verification reports missing papers; graph authority is blocked."
+  );
 
   const result = await runWorkflowAutoIterator({
     projectRoot,
@@ -8335,7 +8540,13 @@ test("auto iterator routes idea back to graph_build when graph loses canonical p
   );
   assert.equal(syncState.graph_presence.missing_paper_count, 1);
   assert.equal(syncState.workflow_projection.runtime_status, "waiting_import");
-  assert.match(result.blockingReason ?? "", /graph_presence_status = ready/);
+  assert.match(result.blockingReason ?? "", /graph authority is blocked/i);
+  assert.ok(
+    result.missingStageSignals.some((signal) =>
+      /missing papers|graph authority is blocked/i.test(signal)
+    ),
+    JSON.stringify(result.missingStageSignals)
+  );
 });
 
 test("auto iterator keeps graph_build blocked when downstream reentry finds a missing corpus", async (t) => {
@@ -8364,6 +8575,11 @@ test("auto iterator keeps graph_build blocked when downstream reentry finds a mi
     refresh_required: false,
   };
   await writeJson(manifestPath, manifest);
+  await seedBlockedGraphBuildDecision(
+    projectRoot,
+    now,
+    "Graph presence verification reports missing_corpus; graph authority is blocked."
+  );
 
   const result = await runWorkflowAutoIterator({
     projectRoot,
@@ -8382,10 +8598,10 @@ test("auto iterator keeps graph_build blocked when downstream reentry finds a mi
   assert.equal(result.stageBefore, "idea");
   assert.equal(result.stageEffective, "graph_build");
   assert.equal(result.stageAfter, "graph_build");
-  assert.match(result.blockingReason ?? "", /graph_presence_status = ready/);
+  assert.match(result.blockingReason ?? "", /graph authority is blocked/i);
   assert.ok(
     result.missingStageSignals.some((signal) =>
-      /graph_presence_status = ready \(current: missing_corpus\)/i.test(signal)
+      /missing_corpus|graph authority is blocked/i.test(signal)
     )
   );
 });
@@ -9145,6 +9361,10 @@ test("workflow runtime rewrite E2E migrates a legacy project and walks setup thr
       canonicalSourceKey: path.join(sourceRoot, "md", "2501.00001--alpha-paper.md"),
     },
   ]);
+  await seedReadyGraphBuildDecision(
+    projectRoot,
+    "2026-03-22T12:00:00.000Z"
+  );
   await seedReadyBrainstormCycle(projectRoot);
 
   result = await runWorkflowAutoIterator({

@@ -21,7 +21,6 @@ import {
   collectLocalCodeReviewBlockers,
   type CodeReviewPacket,
 } from "./workflow-code-review";
-import { isIdeaCatalystReadyForPlan } from "./idea-catalyst/workflow-bridge";
 import { normalizeSurveyReviewState } from "./workflow-guard-state/survey-review";
 import { normalizeBrainstormCycleState } from "./workflow-guard-state/research-loop-state";
 import {
@@ -38,6 +37,13 @@ import { isBrainstormCycleReady } from "./workflow-kernel/readiness";
 import { getWritePackageValidationErrors } from "./workflow-guard-writing/write-package-eval";
 import { collectExecutionProofReceipts } from "./workflow-execution-proof";
 import { evaluateExperimentSearchDecision } from "./workflow-experiment-decision";
+import {
+  DEFAULT_GRAPH_BUILD_DECISION_PATH,
+  DEFAULT_IDEA_CATALYST_CONTRACT_PATH,
+  LITERATURE_REQUISITION_SATISFACTION_AUTHORITY,
+} from "./workflow-authority-registry";
+import { readGraphBuildDecision } from "./graph-build-decision";
+import { readIdeaCatalystContract } from "./idea-catalyst/contract";
 import { readWorkflowHooksStateStore } from "./workflow-hooks/state";
 import {
   readWorkflowRuntimeQueueStore,
@@ -46,8 +52,6 @@ import {
   type WorkflowRuntimeSessionEntry,
 } from "./workflow-runtime-state";
 
-const IDEA_CATALYST_PACKET_BUNDLE_PATH =
-  "researcher/papernexus/IDEA_CATALYST_PACKET_BUNDLE.json";
 const LITERATURE_DISCOVERY_PACKET_PATH =
   "researcher/literature-discovery/LITERATURE_DISCOVERY_PACKET.json";
 
@@ -327,18 +331,6 @@ function hasAnyList(record: Record<string, unknown>, keys: string[]): boolean {
   return keys.some((key) => hasListItems(record[key]));
 }
 
-function unwrapPacketBundle(value: unknown): Record<string, unknown> | null {
-  const record = asRecord(value);
-  if (!record) {
-    return null;
-  }
-  return (
-    asRecord(record.packet_bundle) ??
-    asRecord(record.packetBundle) ??
-    record
-  );
-}
-
 function artifactStatus(record: Record<string, unknown> | null): string | null {
   return normalizeStage(record?.status ?? record?.state ?? record?.completion_status);
 }
@@ -362,75 +354,6 @@ function hasLiteratureDiscoveryEvidence(packet: Record<string, unknown> | null):
       "papers",
     ])
   );
-}
-
-function hasIdeaEvidence(record: Record<string, unknown>): boolean {
-  if (
-    hasAnyList(record, [
-      "supporting_papers",
-      "supportingPapers",
-      "evidence_chain_refs",
-      "evidenceChainRefs",
-      "source_spans",
-      "sourceSpans",
-      "bridge_path_ids",
-      "bridgePathIds",
-      "source_takeaways",
-      "sourceTakeaways",
-    ])
-  ) {
-    return true;
-  }
-  const integrationMechanism = asRecord(record.integration_mechanism);
-  return Boolean(
-    integrationMechanism &&
-      hasAnyList(integrationMechanism, ["selected_takeaways", "selectedTakeaways"])
-  );
-}
-
-function hasIdeaCatalystEvidence(packet: Record<string, unknown> | null): boolean {
-  const bundle = unwrapPacketBundle(packet);
-  if (!bundle) {
-    return false;
-  }
-  const fragments = [
-    ...recordList(bundle.idea_fragments),
-    ...recordList(bundle.ideaFragments),
-    ...recordList(bundle.fragments),
-  ];
-  const analyses = [
-    ...recordList(bundle.source_domain_analyses),
-    ...recordList(bundle.sourceDomainAnalyses),
-    ...recordList(bundle.cross_domain_analysis),
-    ...recordList(bundle.crossDomainAnalysis),
-    ...recordList(bundle.cross_domain_searches),
-    ...recordList(bundle.crossDomainSearches),
-  ];
-  const hasUsableFragment = fragments.some((fragment) => {
-    return Boolean(
-      pickString(fragment, ["candidate_id", "candidateId", "id", "title"]) &&
-        (pickString(fragment, ["source_domain", "sourceDomain", "target_challenge", "targetChallenge"]) ||
-          hasIdeaEvidence(fragment))
-    );
-  });
-  const hasSupportingEvidence =
-    fragments.some(hasIdeaEvidence) ||
-    analyses.some((analysis) => {
-      return (
-        hasIdeaEvidence(analysis) ||
-        recordList(analysis.takeaways).some((takeaway) => {
-          return Boolean(
-            hasIdeaEvidence(takeaway) ||
-              pickString(takeaway, [
-                "concept",
-                "mechanism_explanation",
-                "mechanismExplanation",
-              ])
-          );
-        })
-      );
-    });
-  return hasUsableFragment && hasSupportingEvidence;
 }
 
 function hasExperimentLedgerEvidence(ledger: Record<string, unknown> | null): boolean {
@@ -868,28 +791,6 @@ async function completedGraphReentryStage(
   return chooseLatestReentryStage(candidates);
 }
 
-function hasDurableCompletedImportEvidenceForGraphReentry(
-  manifest: Record<string, unknown>
-): boolean {
-  const paperIngestion = asRecord(manifest.paper_ingestion) ?? {};
-  return (
-    recordList(paperIngestion.completed_papers).length > 0 ||
-    recordList(paperIngestion.completedPapers).length > 0 ||
-    recordList(paperIngestion.batch_items).some(
-      (entry) => normalizeStage(entry.status) === "completed"
-    ) ||
-    recordList(paperIngestion.batchItems).some(
-      (entry) => normalizeStage(entry.status) === "completed"
-    ) ||
-    recordList(paperIngestion.paper_operations).some(
-      (entry) => normalizeStage(entry.status) === "completed"
-    ) ||
-    recordList(paperIngestion.paperOperations).some(
-      (entry) => normalizeStage(entry.status) === "completed"
-    )
-  );
-}
-
 function reportNumber(record: Record<string, unknown>, keys: string[]): number | null {
   for (const key of keys) {
     const value = record[key];
@@ -900,46 +801,28 @@ function reportNumber(record: Record<string, unknown>, keys: string[]): number |
   return null;
 }
 
-function isCurrentGraphSatisfactionStatus(value: unknown): boolean {
-  const status = String(value ?? "")
-    .trim()
-    .toLowerCase()
-    .replace(/-/g, "_");
-  return (
-    status === "degraded_satisfied_current_graph" ||
-    status === "satisfied_bounded_with_import_blocker" ||
-    status === "workflow_state_satisfied" ||
-    status === "satisfied_by_verified_graph_import"
-  );
-}
-
-function hasExplicitCurrentGraphSatisfactionEvidence(
-  report: Record<string, unknown>
+function isAcceptedRequisitionSatisfactionReport(
+  report: Record<string, unknown> | null
 ): boolean {
-  const selectedPaperCount =
-    reportNumber(report, ["selected_paper_count", "selectedPaperCount"]) ?? 0;
-  const candidatePaperCount =
-    reportNumber(report, ["candidate_paper_count", "candidatePaperCount"]) ?? 0;
-  const remediation = asRecord(report.remediation_pass ?? report.remediationPass);
-  return (
-    report.evidence_gap_closed === true ||
-    report.evidenceGapClosed === true ||
-    selectedPaperCount > 0 ||
-    candidatePaperCount > 0 ||
-    (remediation?.graph_ready === true &&
-      remediation?.can_proceed_with_existing_graph === true)
-  );
-}
-
-function reportRequiresCurrentGraphEvidence(report: Record<string, unknown> | null): boolean {
   if (!report) {
     return false;
   }
+  if (report.authority !== LITERATURE_REQUISITION_SATISFACTION_AUTHORITY) {
+    return false;
+  }
+  const status = normalizeStage(report.status);
+  const decision = normalizeStage(
+    report.decision ?? report.satisfaction_decision ?? report.satisfactionDecision
+  );
+  const sourceBackedCount =
+    reportNumber(report, ["source_backed_count", "sourceBackedCount"]) ?? 0;
+  const evidenceGapClosed =
+    report.evidence_gap_closed === true || report.evidenceGapClosed === true;
   return (
-    isCurrentGraphSatisfactionStatus(report.status) ||
-    isCurrentGraphSatisfactionStatus(
-      report.decision ?? report.satisfaction_decision ?? report.satisfactionDecision
-    )
+    (status === "valid" || status === "warning") &&
+    (decision === "satisfied_remote_import_evidence" || decision === "satisfied") &&
+    sourceBackedCount > 0 &&
+    evidenceGapClosed
   );
 }
 
@@ -963,13 +846,7 @@ async function hasRequisitionSatisfactionEvidence(params: {
     : path.join(params.projectRoot, validationReportPath);
   const report =
     (await readJsonIfExists<Record<string, unknown>>(resolvedReportPath)) ?? null;
-  if (
-    reportRequiresCurrentGraphEvidence(report) &&
-    (!report || !hasExplicitCurrentGraphSatisfactionEvidence(report))
-  ) {
-    return false;
-  }
-  if (validationStatus === "warning" && !report) {
+  if (!isAcceptedRequisitionSatisfactionReport(report)) {
     return false;
   }
   return validationStatus === "valid" || validationStatus === "warning";
@@ -983,7 +860,6 @@ async function completedGraphReentryRequestMissingTerminalEvidence(params: {
   return (
     isGraphReentryTrigger(requestTrigger(params.request)) &&
     requestStatus(params.request) === "completed" &&
-    !hasDurableCompletedImportEvidenceForGraphReentry(params.manifest) &&
     !(await hasRequisitionSatisfactionEvidence({
       projectRoot: params.projectRoot,
       request: params.request,
@@ -1225,26 +1101,8 @@ export async function resolveGraphCompletion(projectRoot: string): Promise<Stage
     (await readJsonIfExists<Record<string, unknown>>(
       path.join(projectRoot, "PROJECT_MANIFEST.json")
     )) ?? {};
-  const graphPresence =
-    (await readJsonIfExists<Record<string, unknown>>(
-      path.join(projectRoot, "graph", "GRAPH_PRESENCE_CHECK.json")
-    )) ?? {};
-  const syncState =
-    (await readJsonIfExists<Record<string, unknown>>(
-      path.join(projectRoot, "graph", "PAPERNEXUS_SYNC_STATE.json")
-    )) ?? {};
   const paperIngestion = asRecord(manifest.paper_ingestion) ?? {};
-  const workflowProjection = asRecord(syncState.workflow_projection) ?? {};
   const projectionGraphStatus = normalizeStage(paperIngestion.graph_presence_status);
-  const graphPresenceCanContinue =
-    graphPresence.graph_build_can_continue === true ||
-    graphPresence.graphBuildCanContinue === true ||
-    paperIngestion.graph_build_can_continue === true ||
-    paperIngestion.graphBuildCanContinue === true;
-  const graphStatus =
-    projectionGraphStatus && projectionGraphStatus !== "ready" && !graphPresenceCanContinue
-      ? projectionGraphStatus
-      : normalizeStage(graphPresence.status) ?? projectionGraphStatus;
   let invalidCompletedReentryRequest: Record<string, unknown> | null = null;
   for (const request of paperIngestionRequests(manifest)) {
     if (
@@ -1297,27 +1155,11 @@ export async function resolveGraphCompletion(projectRoot: string): Promise<Stage
       contractSource: "graph_completion",
     });
   }
-  const explicitZeroPaperReadyReport =
-    graphStatus === "ready" &&
-    graphPresence.expected_paper_count === 0 &&
-    graphPresence.present_paper_count === 0;
-  const graphPresenceRepairRequired =
-    graphPresence.repair_required === true ||
-    graphPresence.repairRequired === true ||
-    graphPresence.graph_build_requires_source_repair === true ||
-    graphPresence.graphBuildRequiresSourceRepair === true ||
-    paperIngestion.repair_required === true ||
-    paperIngestion.repairRequired === true ||
-    paperIngestion.graph_build_requires_source_repair === true ||
-    paperIngestion.graphBuildRequiresSourceRepair === true;
-  const syncCanContinue =
-    (graphPresenceCanContinue && !graphPresenceRepairRequired) ||
-    workflowProjection.can_continue === true ||
-    readyLike(workflowProjection.runtime_status) ||
-    readyLike(syncState.status) ||
-    (Object.keys(syncState).length === 0 && !graphPresenceRepairRequired);
-
-  if (graphStatus === "ready" && syncCanContinue && !explicitZeroPaperReadyReport) {
+  const graphDecision = await readGraphBuildDecision(projectRoot);
+  if (
+    graphDecision?.decision === "complete" &&
+    graphDecision.source_backed_graph_claim
+  ) {
     const reentryStage = await completedGraphReentryStage(projectRoot, manifest);
     if (reentryStage) {
       return completion({
@@ -1338,18 +1180,42 @@ export async function resolveGraphCompletion(projectRoot: string): Promise<Stage
       repairProjection: normalizeStage(paperIngestion.graph_presence_status) !== "ready",
     });
   }
+  if (graphDecision?.decision === "failed" || graphDecision?.decision === "blocked") {
+    return completion({
+      stage: "graph_build",
+      completionStatus: graphDecision.decision === "failed" ? "failed" : "blocked",
+      owner: "researcher",
+      nextAction: "/graph-build",
+      blockingReason:
+        graphDecision.decision === "failed"
+          ? "graph_build_decision_failed"
+          : "graph_build_decision_blocked",
+      missingSignals: [graphDecision.reason],
+      contractSource: "graph_completion",
+    });
+  }
+  if (graphDecision?.decision === "waiting") {
+    return completion({
+      stage: "graph_build",
+      completionStatus: "incomplete",
+      owner: "researcher",
+      nextAction: "/graph-build",
+      blockingReason: "graph_build_decision_waiting",
+      missingSignals: [graphDecision.reason],
+      contractSource: "graph_completion",
+    });
+  }
 
   return completion({
     stage: "graph_build",
-    completionStatus: failureLike(graphPresence.status) ? "failed" : "incomplete",
+    completionStatus: "incomplete",
     owner: "researcher",
     nextAction: "/graph-build",
-    blockingReason:
-      explicitZeroPaperReadyReport
-        ? `graph_presence_${projectionGraphStatus ?? "missing_sources"}`
-        : graphStatus && graphStatus !== "ready"
-        ? `graph_presence_${graphStatus}`
-        : "graph_presence_not_ready",
+    blockingReason: "graph_build_decision_missing",
+    missingSignals: [
+      `${DEFAULT_GRAPH_BUILD_DECISION_PATH} is required before graph_build can complete.`,
+      projectionGraphStatus ? `graph_presence_projection=${projectionGraphStatus}` : null,
+    ].filter((entry): entry is string => Boolean(entry)),
     contractSource: "graph_completion",
   });
 }
@@ -1846,38 +1712,19 @@ export async function resolveLiteratureReviewCompletion(
 export async function resolveIdeationCompletion(
   projectRoot: string
 ): Promise<StageCompletion> {
-  const manifest =
-    (await readJsonIfExists<Record<string, unknown>>(
-      path.join(projectRoot, "PROJECT_MANIFEST.json")
-    )) ?? {};
-  const directPacket = await readJsonIfExists<Record<string, unknown>>(
-    path.join(projectRoot, "researcher", "IDEA_CATALYST_PACKET.json")
-  );
-  const packetBundle = await readJsonIfExists<Record<string, unknown>>(
-    path.join(projectRoot, IDEA_CATALYST_PACKET_BUNDLE_PATH)
-  );
-  const directStatus = artifactStatus(directPacket);
-  const bundleStatus = artifactStatus(unwrapPacketBundle(packetBundle));
-  if (failureLike(directStatus) || failureLike(bundleStatus)) {
+  const contract = await readIdeaCatalystContract(projectRoot);
+  if (contract?.status === "failed") {
     return completion({
       stage: "ideation",
       completionStatus: "failed",
       owner: "researcher",
       nextAction: "/idea-catalyst",
-      blockingReason: "idea_catalyst_failed",
+      blockingReason: "idea_catalyst_contract_failed",
+      missingSignals: [contract.reason],
       contractSource: "ideation_completion",
     });
   }
-  const directReady =
-    directPacket &&
-    readyLike(directStatus) &&
-    hasIdeaCatalystEvidence(directPacket);
-  const bundleReady = packetBundle && hasIdeaCatalystEvidence(packetBundle);
-  const catalystStateReady = isIdeaCatalystReadyForPlan(
-    manifest.idea_catalyst,
-    manifest
-  );
-  if (directReady || bundleReady || catalystStateReady) {
+  if (contract?.status === "ready") {
     return completion({
       stage: "ideation",
       completionStatus: "complete",
@@ -1892,9 +1739,15 @@ export async function resolveIdeationCompletion(
     owner: "researcher",
     nextAction: "/idea-catalyst",
     blockingReason:
-      directPacket || packetBundle
-        ? "idea_catalyst_packet_incomplete"
-        : "idea_catalyst_packet_missing",
+      contract?.status === "blocked"
+        ? "idea_catalyst_contract_blocked"
+        : contract?.status === "requisition"
+          ? "idea_catalyst_contract_requisition"
+          : "idea_catalyst_contract_missing",
+    missingSignals: [
+      contract?.reason ??
+        `${DEFAULT_IDEA_CATALYST_CONTRACT_PATH} is required before idea can complete.`,
+    ],
     contractSource: "ideation_completion",
   });
 }

@@ -1122,40 +1122,6 @@ function deriveQueuedLaunchabilityDiagnostic(params: {
   };
 }
 
-function hasDurableCompletedImportEvidence(state: PaperIngestionState): boolean {
-  if (
-    state.completedPapers.length > 0 &&
-    normalizeStage(state.lastImportStatus) === "completed" &&
-    (state.importTaskIds.length > 0 ||
-      state.completedPapers.some((paper) => Boolean(paper.importTaskId)))
-  ) {
-    return true;
-  }
-  if (
-    state.importTaskIds.length > 0 &&
-    (normalizeStage(state.lastImportStatus) === "completed" ||
-      state.paperOperations.some(
-        (operation) =>
-          operation.status === "completed" &&
-          Boolean(operation.importTaskId ?? operation.canonicalId ?? operation.title)
-      ))
-  ) {
-    return true;
-  }
-  if (
-    state.batchItems.some(
-      (item) =>
-        (item.status === "completed" || item.synced) &&
-        Boolean(item.importTaskId ?? item.canonicalId ?? item.paperId ?? item.title)
-    )
-  ) {
-    return true;
-  }
-  return state.activeBatches.some(
-    (batch) => batch.status === "completed" && (batch.completed ?? 0) > 0
-  );
-}
-
 function hasRequisitionSatisfactionEvidence(
   request: PaperIngestionQueuedRequest
 ): boolean {
@@ -1175,10 +1141,7 @@ export function hasWorkflowOwnedLiteratureRequisitionCompletionEvidence(params: 
   if (params.request.status !== "completed") {
     return true;
   }
-  return (
-    hasDurableCompletedImportEvidence(params.state) ||
-    hasRequisitionSatisfactionEvidence(params.request)
-  );
+  return hasRequisitionSatisfactionEvidence(params.request);
 }
 
 export function isInvalidCompletedWorkflowOwnedLiteratureRequisitionRequest(params: {

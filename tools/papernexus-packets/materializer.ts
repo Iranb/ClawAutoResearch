@@ -41,6 +41,18 @@ import {
   normalizeIdeaCatalystState,
   serializeIdeaCatalystState,
 } from "../idea-catalyst/state";
+import {
+  collectIdeaContractEvidenceFromBundle,
+  readIdeaCatalystContract,
+  writeIdeaCatalystContract,
+  type IdeaCatalystContract,
+} from "../idea-catalyst/contract";
+import { readGraphBuildDecision } from "../graph-build-decision";
+import {
+  DEFAULT_GRAPH_BUILD_DECISION_PATH,
+  DEFAULT_IDEA_CATALYST_CONTRACT_PATH,
+  LITERATURE_REQUISITION_SATISFACTION_AUTHORITY,
+} from "../workflow-authority-registry";
 
 export const DEFAULT_MECHANISM_BRIDGE_PACKET_PATH =
   "researcher/papernexus/MECHANISM_BRIDGE_PACKET.json";
@@ -52,6 +64,8 @@ export const DEFAULT_GRAPH_STORYLINE_PACKET_SOURCE_PATH =
   "researcher/papernexus/GRAPH_STORYLINE_PACKET.json";
 export const DEFAULT_LITERATURE_DISCOVERY_PACKET_PATH =
   "researcher/literature-discovery/LITERATURE_DISCOVERY_PACKET.json";
+const DEFAULT_IDEA_CATALYST_FRAGMENTS_PATH =
+  "researcher/idea-catalyst/IDEA_FRAGMENTS.json";
 export const DEFAULT_INNOVATION_PACKET_PATH =
   "orchestrator/INNOVATION_PACKET.json";
 
@@ -105,6 +119,90 @@ function readRecordList(value: unknown): Record<string, unknown>[] {
   return value
     .map((entry) => asRecord(entry))
     .filter((entry): entry is Record<string, unknown> => Boolean(entry));
+}
+
+function paperEvidenceId(paper: Record<string, unknown>): string | null {
+  return (
+    pickString(paper, ["canonical_id", "canonicalId", "paper_id", "paperId"]) ??
+    pickString(paper, ["arxiv_id", "arxivId", "doi", "title"])
+  );
+}
+
+function isSourceBackedLiteraturePaper(paper: Record<string, unknown>): boolean {
+  const sourceKind = normalizeStage(
+    pickString(paper, ["source_kind", "sourceKind", "kind"])
+  );
+  const importStatus = normalizeStage(
+    pickString(paper, ["import_status", "importStatus", "status"])
+  );
+  return Boolean(
+    pickString(paper, ["source_path", "sourcePath", "md_path", "mdPath", "pdf_path", "pdfPath"]) ||
+      sourceKind === "markdown" ||
+      sourceKind === "pdf" ||
+      sourceKind === "source_backed" ||
+      importStatus === "completed" ||
+      importStatus === "source_backed"
+  );
+}
+
+function collectIdeaContractEvidenceFromLiteraturePacket(value: unknown): {
+  supportingPapers: string[];
+  sourceSpans: Record<string, unknown>[];
+  evidenceChainRefs: Record<string, unknown>[];
+} {
+  const packet = asRecord(value);
+  if (!packet) {
+    return { supportingPapers: [], sourceSpans: [], evidenceChainRefs: [] };
+  }
+  const seen = new Set<string>();
+  const papers = [
+    ...readRecordList(packet.selected_papers ?? packet.selectedPapers),
+    ...readRecordList(packet.candidate_papers ?? packet.candidatePapers),
+  ].filter((paper) => {
+    if (!isSourceBackedLiteraturePaper(paper)) {
+      return false;
+    }
+    const id = paperEvidenceId(paper);
+    if (!id) {
+      return false;
+    }
+    if (seen.has(id)) {
+      return false;
+    }
+    seen.add(id);
+    return true;
+  });
+  const supportingPapers = uniqueStrings(
+    papers
+      .map((paper) => paperEvidenceId(paper))
+      .filter((entry): entry is string => Boolean(entry))
+  );
+  const sourceSpans = papers.map((paper) => ({
+    paper_id: paperEvidenceId(paper),
+    title: pickString(paper, ["title"]),
+    source_path:
+      pickString(paper, ["source_path", "sourcePath", "md_path", "mdPath", "pdf_path", "pdfPath"]) ??
+      null,
+    source_kind: pickString(paper, ["source_kind", "sourceKind", "kind"]) ?? null,
+    evidence_origin: DEFAULT_LITERATURE_DISCOVERY_PACKET_PATH,
+  }));
+  const evidenceChainRefs = papers.map((paper) => ({
+    ref_id: paperEvidenceId(paper),
+    evidence_type: "literature_discovery_source",
+    path: DEFAULT_LITERATURE_DISCOVERY_PACKET_PATH,
+  }));
+  return { supportingPapers, sourceSpans, evidenceChainRefs };
+}
+
+function collectLegacyIdeaFragments(value: unknown): Record<string, unknown>[] {
+  const record = asRecord(value);
+  if (!record) {
+    return [];
+  }
+  return [
+    ...readRecordList(record.idea_fragments ?? record.ideaFragments),
+    ...readRecordList(record.fragments),
+  ];
 }
 
 function readFirstRecord(value: unknown): Record<string, unknown> | null {
@@ -196,6 +294,8 @@ function deriveInnovationPacketFromBundle(params: {
   manifest: Record<string, unknown>;
   existingPacket: Record<string, unknown> | null;
   bundle: Record<string, unknown> | null;
+  ideaCatalystContract: IdeaCatalystContract | null;
+  ideaCatalystContractPath: string;
   mechanismBridgePacket: Record<string, unknown> | null;
   challengeInsightPacket: Record<string, unknown> | null;
   ideaCatalystPacketBundlePath: string;
@@ -204,7 +304,7 @@ function deriveInnovationPacketFromBundle(params: {
   projectRoot: string;
 }): Record<string, unknown> | null {
   const bundle = params.bundle;
-  if (!bundle) {
+  if (!bundle || params.ideaCatalystContract?.status !== "ready") {
     return null;
   }
   const ideaFragments = readRecordList(bundle.idea_fragments ?? bundle.ideaFragments);
@@ -267,6 +367,7 @@ function deriveInnovationPacketFromBundle(params: {
       .filter((entry): entry is string => Boolean(entry)),
   ]);
   const evidencePaths = uniqueStrings([
+    path.relative(params.projectRoot, params.ideaCatalystContractPath),
     path.relative(params.projectRoot, params.ideaCatalystPacketBundlePath),
     path.relative(params.projectRoot, params.mechanismBridgePacketPath),
     path.relative(params.projectRoot, params.challengeInsightPacketPath),
@@ -325,7 +426,7 @@ function deriveInnovationPacketFromBundle(params: {
     ...(params.existingPacket ?? {}),
     contract_version: "innovation-packet-v1",
     status: ready ? "ready" : "incomplete",
-    generated_from: "papernexus_idea_catalyst_packet_bundle",
+    generated_from: "idea_catalyst_contract",
     selected_idea_fragment_id: selectedIdeaFragmentId,
     supporting_idea_fragment_ids: uniqueStrings([
       selectedIdeaFragmentId,
@@ -825,6 +926,80 @@ ${renderBullets(missingClaims)}
 `;
 }
 
+function isAcceptedRequisitionSatisfactionReport(value: unknown): boolean {
+  const report = asRecord(value);
+  if (!report) {
+    return false;
+  }
+  if (report.authority !== LITERATURE_REQUISITION_SATISFACTION_AUTHORITY) {
+    return false;
+  }
+  const status = normalizeStage(report.status);
+  const decision = normalizeStage(
+    report.decision ?? report.satisfaction_decision ?? report.satisfactionDecision
+  );
+  const sourceBackedCount = Math.max(
+    0,
+    Math.floor(
+      pickNumber(report, ["source_backed_count", "sourceBackedCount"]) ?? 0
+    )
+  );
+  const evidenceGapClosed =
+    report.evidence_gap_closed === true || report.evidenceGapClosed === true;
+  return (
+    (status === "valid" || status === "warning") &&
+    (decision === "satisfied_remote_import_evidence" ||
+      decision === "satisfied" ||
+      decision === "complete" ||
+      decision === "completed") &&
+    sourceBackedCount > 0 &&
+    evidenceGapClosed
+  );
+}
+
+function collectRequisitionReportCandidates(params: {
+  manifest: Record<string, unknown>;
+  graphDecisionReportPath?: string | null;
+}): string[] {
+  const paperIngestion = asRecord(params.manifest.paper_ingestion) ?? {};
+  const queuedRequests = readRecordList(
+    paperIngestion.queued_requests ?? paperIngestion.queuedRequests
+  );
+  return uniqueStrings(
+    [
+      params.graphDecisionReportPath,
+      ...queuedRequests
+        .filter((request) => {
+          const kind = normalizeStage(request.request_kind ?? request.requestKind);
+          return kind === "requisition";
+        })
+        .map((request) =>
+          pickString(request, [
+            "validation_report_path",
+            "validationReportPath",
+            "satisfaction_report_path",
+            "satisfactionReportPath",
+          ])
+        ),
+    ].filter((entry): entry is string => Boolean(entry))
+  );
+}
+
+async function readAcceptedRequisitionSatisfactionReport(params: {
+  projectRoot: string;
+  manifest: Record<string, unknown>;
+  graphDecisionReportPath?: string | null;
+}): Promise<{ path: string; report: Record<string, unknown> } | null> {
+  for (const relativePath of collectRequisitionReportCandidates(params)) {
+    const resolved = resolveProjectArtifactPath(params.projectRoot, relativePath);
+    const report = await readJsonIfExists<Record<string, unknown>>(resolved ?? "");
+    if (isAcceptedRequisitionSatisfactionReport(report)) {
+      return { path: relativePath, report: report as Record<string, unknown> };
+    }
+  }
+  return null;
+}
+
 export async function materializePapernexusPacketContracts(params: {
   projectRoot: string;
   packetPaths?: Record<string, unknown>;
@@ -874,16 +1049,114 @@ export async function materializePapernexusPacketContracts(params: {
         "innovation_packet_path",
       ]) ?? DEFAULT_INNOVATION_PACKET_PATH
     ) ?? path.join(projectRoot, DEFAULT_INNOVATION_PACKET_PATH);
+  const ideaCatalystContractPath =
+    resolveProjectArtifactPath(
+      projectRoot,
+      pickString(packetPaths, [
+        "ideaCatalystContractPath",
+        "idea_catalyst_contract_path",
+      ]) ?? DEFAULT_IDEA_CATALYST_CONTRACT_PATH
+    ) ?? path.join(projectRoot, DEFAULT_IDEA_CATALYST_CONTRACT_PATH);
 
-  const [rawMechanismBridgePacket, rawChallengeInsightPacket, graphStorylinePacket, rawIdeaCatalystPacketBundle, rawInnovationPacket] =
+  const [rawMechanismBridgePacket, rawChallengeInsightPacket, graphStorylinePacket, rawIdeaCatalystPacketBundle, rawInnovationPacket, rawLiteraturePacket, rawLegacyIdeaFragments] =
     await Promise.all([
       readJsonIfExists<Record<string, unknown>>(mechanismBridgePacketPath),
       readJsonIfExists<Record<string, unknown>>(challengeInsightPacketPath),
       readJsonIfExists<Record<string, unknown>>(graphStorylinePacketSourcePath),
       readJsonIfExists<Record<string, unknown>>(ideaCatalystPacketBundlePath),
       readJsonIfExists<Record<string, unknown>>(innovationPacketPath),
+      readJsonIfExists<Record<string, unknown>>(
+        path.join(projectRoot, DEFAULT_LITERATURE_DISCOVERY_PACKET_PATH)
+      ),
+      readJsonIfExists<Record<string, unknown>>(
+        path.join(projectRoot, DEFAULT_IDEA_CATALYST_FRAGMENTS_PATH)
+      ),
     ]);
+  const graphDecision = await readGraphBuildDecision(projectRoot);
+  const acceptedRequisitionReport = await readAcceptedRequisitionSatisfactionReport({
+    projectRoot,
+    manifest,
+    graphDecisionReportPath:
+      graphDecision?.requisition_satisfaction_report_path ?? null,
+  });
   const ideaCatalystPacketBundle = unwrapPacketBundle(rawIdeaCatalystPacketBundle);
+  const ideaContractEvidence =
+    collectIdeaContractEvidenceFromBundle(rawIdeaCatalystPacketBundle);
+  const literatureContractEvidence =
+    collectIdeaContractEvidenceFromLiteraturePacket(rawLiteraturePacket);
+  const ideaFragments = [
+    ...ideaContractEvidence.ideaFragments,
+    ...collectLegacyIdeaFragments(rawLegacyIdeaFragments),
+  ];
+  const supportingPapers = uniqueStrings([
+    ...ideaContractEvidence.supportingPapers,
+    ...literatureContractEvidence.supportingPapers,
+  ]);
+  const sourceSpans = [
+    ...ideaContractEvidence.sourceSpans,
+    ...literatureContractEvidence.sourceSpans,
+  ];
+  const evidenceChainRefs = [
+    ...ideaContractEvidence.evidenceChainRefs,
+    ...literatureContractEvidence.evidenceChainRefs,
+  ];
+  const ideaPayloadReady =
+    ideaFragments.length > 0 &&
+    (supportingPapers.length > 0 ||
+      sourceSpans.length > 0 ||
+      evidenceChainRefs.length > 0);
+  const ideaContractStatus =
+    graphDecision?.decision !== "complete" || !graphDecision.source_backed_graph_claim
+      ? "blocked"
+      : !acceptedRequisitionReport
+        ? "requisition"
+        : !ideaPayloadReady
+          ? "blocked"
+          : "ready";
+  await writeIdeaCatalystContract({
+    projectRoot,
+    status: ideaContractStatus,
+    sourceRequisitionReportPath: acceptedRequisitionReport?.path ?? null,
+    graphDecisionPath: graphDecision ? DEFAULT_GRAPH_BUILD_DECISION_PATH : null,
+    literaturePacketPath: rawLiteraturePacket
+      ? DEFAULT_LITERATURE_DISCOVERY_PACKET_PATH
+      : null,
+    payloadPaths: [
+      rawIdeaCatalystPacketBundle
+        ? path.relative(projectRoot, ideaCatalystPacketBundlePath)
+        : null,
+      rawLegacyIdeaFragments ? DEFAULT_IDEA_CATALYST_FRAGMENTS_PATH : null,
+    ].filter((entry): entry is string => Boolean(entry)),
+    ideaFragments,
+    supportingPapers,
+    sourceSpans,
+    evidenceChainRefs,
+    claimCap:
+      sourceSpans.length > 0 ||
+      evidenceChainRefs.length > 0
+        ? "supported"
+        : "hypothesis",
+    reason:
+      ideaContractStatus === "ready"
+        ? "Graph decision, request-level literature satisfaction, and Idea-Catalyst payload evidence are linked."
+        : !graphDecision
+          ? "Graph build decision authority is missing."
+          : graphDecision.decision !== "complete" ||
+              !graphDecision.source_backed_graph_claim
+            ? "Graph build decision is not complete with a source-backed graph claim."
+            : !acceptedRequisitionReport
+              ? "Accepted request-scoped requisition satisfaction report is missing."
+              : "Idea-Catalyst payload evidence is missing or incomplete.",
+    limitations:
+      ideaContractStatus === "ready"
+        ? []
+        : [
+            "Idea completion must wait for the contract cascade instead of reading raw literature or packet evidence directly.",
+          ],
+    now: nowIso(),
+  });
+  generatedFiles.push(path.relative(projectRoot, ideaCatalystContractPath));
+  const ideaCatalystContract = await readIdeaCatalystContract(projectRoot);
   const derivedMechanismBridgePacket = ideaCatalystPacketBundle
     ? deriveMechanismBridgePacketFromBundle(ideaCatalystPacketBundle)
     : null;
@@ -911,6 +1184,8 @@ export async function materializePapernexusPacketContracts(params: {
     manifest,
     existingPacket: rawInnovationPacket,
     bundle: ideaCatalystPacketBundle,
+    ideaCatalystContract,
+    ideaCatalystContractPath,
     mechanismBridgePacket,
     challengeInsightPacket,
     ideaCatalystPacketBundlePath,
@@ -1152,6 +1427,7 @@ export async function materializePapernexusPacketContracts(params: {
       challengeInsightPacketReady: Boolean(challengeInsightPacket),
       graphStorylinePacketReady: Boolean(graphStorylinePacket),
       ideaCatalystPacketBundleReady: Boolean(ideaCatalystPacketBundle),
+      ideaCatalystContractReady: ideaCatalystContract?.status === "ready",
       innovationPacketReady:
         normalizeStage(innovationPacket?.status) === "ready",
       transferBridgeCount: transferBridges.length,

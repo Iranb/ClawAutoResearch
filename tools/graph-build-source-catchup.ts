@@ -55,6 +55,7 @@ import {
   writePapernexusGraphBuildReceipt,
   type PapernexusGraphBuildReceiptStatus,
 } from "./papernexus-graph-build-receipt";
+import { writeGraphBuildDecision } from "./graph-build-decision";
 
 type FetchResponseLike = {
   ok: boolean;
@@ -1795,14 +1796,14 @@ function buildLiteratureRequisitionDecisionFields(params: {
   firstError?: string | null;
   sourceBackedCount: number;
 }): {
-  status: "queued" | "completed" | "failed";
+  status: "running" | "valid" | "failed";
   decision: string;
   reason: string;
   limitations: string[];
 } {
   if (params.requestStatus === "running") {
     return {
-      status: "queued",
+      status: "running",
       decision: "waiting_remote_import_progress",
       reason: "PaperNexus remote import queue is still running.",
       limitations: [
@@ -1812,7 +1813,7 @@ function buildLiteratureRequisitionDecisionFields(params: {
   }
   if (params.requestStatus === "completed" && params.sourceBackedCount > 0) {
     return {
-      status: "completed",
+      status: "valid",
       decision: "satisfied_remote_import_evidence",
       reason:
         "Request-specific PaperNexus source/import-backed evidence was materialized into the local paper source index.",
@@ -1958,7 +1959,7 @@ async function writeRemoteDiscoveryGraphBuildReceipt(params: {
       .map((entry) => pickString(entry, ["canonical_id", "canonicalId"]))
       .filter((entry): entry is string => Boolean(entry))
   );
-  return writePapernexusGraphBuildReceipt({
+  const receiptPath = await writePapernexusGraphBuildReceipt({
     projectRoot: params.projectRoot,
     receipt: {
       schema_version: 1,
@@ -1992,6 +1993,30 @@ async function writeRemoteDiscoveryGraphBuildReceipt(params: {
       repair_hints: params.repairHints ?? [],
     },
   });
+  await writeGraphBuildDecision({
+    projectRoot: params.projectRoot,
+    decision:
+      params.status === "graph_ready" && params.graphVisibility === "verified"
+        ? "complete"
+        : params.status === "failed" || params.status === "source_blocked"
+          ? "blocked"
+          : "waiting",
+    requestId: params.requestId ?? null,
+    graphReceiptPath: receiptPath,
+    sourceIndexPath:
+      sourceEntries.length > 0 ? "researcher/PAPER_SOURCE_INDEX.json" : null,
+    sourceBackedGraphClaim:
+      params.status === "graph_ready" && params.graphVisibility === "verified",
+    reason:
+      params.status === "graph_ready" && params.graphVisibility === "verified"
+        ? "PaperNexus graph visibility is verified for request-specific source-backed evidence."
+        : params.status === "source_blocked"
+          ? "PaperNexus remote discovery did not yet produce graph-visible source-backed evidence."
+          : "PaperNexus remote discovery/import is not graph-ready yet.",
+    limitations: params.limitations ?? [],
+    now: params.checkedAt,
+  });
+  return receiptPath;
 }
 
 async function persistRemoteDiscoveryFailure(params: {

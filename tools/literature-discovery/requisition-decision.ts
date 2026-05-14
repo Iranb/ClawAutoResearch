@@ -1,21 +1,26 @@
 import * as path from "node:path";
 
 import { writeJsonAtomicEnsured } from "../workflow-guard-core/fs";
+import {
+  DEFAULT_REQUISITION_SATISFACTION_REPORT_BASENAME,
+  LITERATURE_REQUISITION_SATISFACTION_AUTHORITY,
+} from "../workflow-authority-registry";
 
 export type LiteratureRequisitionDecisionStatus =
-  | "completed"
-  | "queued"
+  | "valid"
+  | "running"
   | "failed"
-  | "warning";
+  | "warning"
+  | "invalid";
 
 export function deriveLiteratureDiscoverySatisfactionReportPath(request: {
   requestId: string;
   manifestPath?: string | null;
 }): string {
   if (request.manifestPath?.includes("/")) {
-    return `${request.manifestPath.split("/").slice(0, -1).join("/")}/REQUISITION_SATISFACTION_REPORT.json`;
+    return `${request.manifestPath.split("/").slice(0, -1).join("/")}/${DEFAULT_REQUISITION_SATISFACTION_REPORT_BASENAME}`;
   }
-  return `researcher/literature-discovery/requisition/${request.requestId}/REQUISITION_SATISFACTION_REPORT.json`;
+  return `researcher/literature-discovery/requisition/${request.requestId}/${DEFAULT_REQUISITION_SATISFACTION_REPORT_BASENAME}`;
 }
 
 export async function writeLiteratureRequisitionDecisionReport(params: {
@@ -51,6 +56,7 @@ export async function writeLiteratureRequisitionDecisionReport(params: {
   await writeJsonAtomicEnsured(path.join(params.projectRoot, reportPath), {
     schema_version: 1,
     kind: "literature_requisition_decision",
+    authority: LITERATURE_REQUISITION_SATISFACTION_AUTHORITY,
     status: params.status,
     decision: params.decision,
     request_id: params.requestId,
