@@ -5199,7 +5199,8 @@ test("research_workflow capture_diagnostic_bundle materializes a bounded diagnos
     "utf8"
   );
   assert.match(summaryText, /Workflow Diagnostic Bundle/);
-  assert.match(summaryText, /blocking_reason: graph_presence_missing_papers/);
+  assert.match(summaryText, /blocking_reason: graph_build_decision_blocked/);
+  assert.match(summaryText, /graph_presence: missing_papers/);
   assert.match(summaryText, /revision_control: active/);
   assert.match(summaryText, /auto_dispatch_diagnostics: waiting/);
   assert.match(summaryText, /survey_visual_compiler: ready/);

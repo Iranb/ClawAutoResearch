@@ -15,6 +15,10 @@ import { queueIdeaCatalystRequisition } from "../../tools/idea-catalyst/workflow
 import { queueLiteratureDiscoveryRequisition } from "../../tools/literature-discovery/workflow-bridge.ts";
 import { materializePapernexusPacketContracts } from "../../tools/papernexus-packets/materializer.ts";
 import { resolveExperimentPlanCompletion } from "../../tools/workflow-stage-completion.ts";
+import {
+  DEFAULT_GRAPH_BUILD_DECISION_PATH,
+  DEFAULT_IDEA_CATALYST_CONTRACT_PATH,
+} from "../../tools/workflow-authority-registry.ts";
 
 async function writeJson(targetPath, value) {
   await fs.mkdir(path.dirname(targetPath), { recursive: true });
@@ -24,6 +28,43 @@ async function writeJson(targetPath, value) {
 async function writeText(targetPath, value) {
   await fs.mkdir(path.dirname(targetPath), { recursive: true });
   await fs.writeFile(targetPath, value, "utf8");
+}
+
+async function writeAuthorityCascadeInputs(projectRoot) {
+  const reportPath =
+    "researcher/literature-discovery/requisition/req-packet-demo/REQUISITION_SATISFACTION_REPORT.json";
+  await writeJson(path.join(projectRoot, reportPath), {
+    schema_version: 1,
+    authority: "literature_requisition_satisfaction",
+    status: "valid",
+    decision: "satisfied_remote_import_evidence",
+    request_id: "req-packet-demo",
+    selected_paper_count: 1,
+    candidate_paper_count: 1,
+    source_backed_count: 1,
+    metadata_only_count: 0,
+    evidence_gap_closed: true,
+  });
+  await writeJson(path.join(projectRoot, "researcher", "literature-discovery", "LITERATURE_DISCOVERY_PACKET.json"), {
+    status: "completed",
+    selected_papers: [{ canonical_id: "paper:belief-updating" }],
+  });
+  await writeJson(path.join(projectRoot, DEFAULT_GRAPH_BUILD_DECISION_PATH), {
+    schema_version: 1,
+    authority: "graph_build_decision",
+    decision: "complete",
+    status: "complete",
+    request_id: "req-packet-demo",
+    requisition_satisfaction_report_path: reportPath,
+    graph_presence_report_path: "graph/GRAPH_PRESENCE_CHECK.json",
+    graph_receipt_path: "graph/PAPERNEXUS_GRAPH_BUILD_RECEIPT.json",
+    source_index_path: "researcher/PAPER_SOURCE_INDEX.json",
+    source_backed_graph_claim: true,
+    reason: "fixture graph decision",
+    limitations: [],
+    created_at: "2026-05-14T00:00:00.000Z",
+    updated_at: "2026-05-14T00:00:00.000Z",
+  });
 }
 
 function buildIdeaCatalystPacketBundleFixture() {
@@ -810,7 +851,7 @@ test("queueing a literature discovery requisition preserves graph presence manif
   );
 });
 
-test("research_workflow materialize_papernexus_packet_contracts accepts a PaperNexus idea-catalyst packet bundle as the upstream source of truth", async (t) => {
+test("research_workflow materialize_papernexus_packet_contracts bridges a PaperNexus bundle through idea contract authority", async (t) => {
   const projectRoot = await makeProjectRoot();
   await fs.rm(
     path.join(projectRoot, "researcher", "papernexus", "MECHANISM_BRIDGE_PACKET.json"),
@@ -824,6 +865,7 @@ test("research_workflow materialize_papernexus_packet_contracts accepts a PaperN
     path.join(projectRoot, "researcher", "papernexus", "IDEA_CATALYST_PACKET_BUNDLE.json"),
     buildIdeaCatalystPacketBundleFixture()
   );
+  await writeAuthorityCascadeInputs(projectRoot);
 
   t.after(async () => {
     await fs.rm(projectRoot, { recursive: true, force: true });
@@ -836,9 +878,13 @@ test("research_workflow materialize_papernexus_packet_contracts accepts a PaperN
   });
 
   assert.equal(result.state.ideaCatalystPacketBundleReady, true);
+  assert.equal(result.state.ideaCatalystContractReady, true);
   assert.equal(result.state.mechanismBridgePacketReady, true);
   assert.equal(result.state.challengeInsightPacketReady, true);
   assert.equal(result.state.innovationPacketReady, true);
+  assert.ok(
+    result.generatedFiles.includes(DEFAULT_IDEA_CATALYST_CONTRACT_PATH)
+  );
   assert.ok(result.generatedFiles.includes("orchestrator/INNOVATION_PACKET.json"));
 
   const manifest = JSON.parse(
@@ -881,6 +927,12 @@ test("research_workflow materialize_papernexus_packet_contracts accepts a PaperN
   assert.equal(innovationPacket.supporting_kg_nodes.includes("bridge-psy"), true);
   assert.equal(
     innovationPacket.evidence_paths.includes(
+      DEFAULT_IDEA_CATALYST_CONTRACT_PATH
+    ),
+    true
+  );
+  assert.equal(
+    innovationPacket.evidence_paths.includes(
       "researcher/papernexus/IDEA_CATALYST_PACKET_BUNDLE.json"
     ),
     true
@@ -906,6 +958,122 @@ test("research_workflow materialize_papernexus_packet_contracts accepts a PaperN
   assert.equal(derivedMechanismPacket.selected_domains.includes("Psychology"), true);
   assert.equal(derivedChallengePacket.challenge_clusters.length >= 1, true);
   assert.equal(derivedChallengePacket.insight_clusters.length >= 1, true);
+});
+
+test("research_workflow materialize_papernexus_packet_contracts does not produce innovation packet from bundle alone", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  await fs.rm(path.join(projectRoot, "orchestrator", "INNOVATION_PACKET.json"), {
+    force: true,
+  });
+  await writeJson(
+    path.join(projectRoot, "researcher", "papernexus", "IDEA_CATALYST_PACKET_BUNDLE.json"),
+    buildIdeaCatalystPacketBundleFixture()
+  );
+
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  const result = await materializePapernexusPacketContracts({
+    projectRoot,
+    trigger: "bundle-alone-test",
+    agentId: "researcher",
+  });
+
+  assert.equal(result.state.ideaCatalystPacketBundleReady, true);
+  assert.equal(result.state.ideaCatalystContractReady, false);
+  assert.equal(result.state.innovationPacketReady, false);
+  assert.equal(
+    result.generatedFiles.includes("orchestrator/INNOVATION_PACKET.json"),
+    false
+  );
+  const ideaContract = JSON.parse(
+    await fs.readFile(
+      path.join(projectRoot, DEFAULT_IDEA_CATALYST_CONTRACT_PATH),
+      "utf8"
+    )
+  );
+  assert.equal(ideaContract.status, "blocked");
+  assert.equal(ideaContract.reason, "Graph build decision authority is missing.");
+});
+
+test("research_workflow materialize_papernexus_packet_contracts builds idea contract from requisition and literature packet without bundle", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  await fs.rm(path.join(projectRoot, "researcher", "papernexus"), {
+    recursive: true,
+    force: true,
+  });
+  await fs.rm(path.join(projectRoot, "orchestrator", "INNOVATION_PACKET.json"), {
+    force: true,
+  });
+  await writeAuthorityCascadeInputs(projectRoot);
+  await writeJson(
+    path.join(projectRoot, "researcher", "literature-discovery", "LITERATURE_DISCOVERY_PACKET.json"),
+    {
+      schema_version: 1,
+      status: "completed",
+      evidence_gap_closed: true,
+      selected_papers: [
+        {
+          canonical_id: "paper:belief-updating",
+          title: "Belief Updating Under Uncertainty",
+          source_kind: "markdown",
+          source_path: "researcher/paper_source/md/belief-updating.md",
+          import_status: "completed",
+        },
+      ],
+      candidate_papers: [
+        {
+          canonical_id: "paper:belief-updating",
+          title: "Belief Updating Under Uncertainty",
+          source_kind: "markdown",
+          source_path: "researcher/paper_source/md/belief-updating.md",
+          import_status: "completed",
+        },
+      ],
+    }
+  );
+  await writeJson(
+    path.join(projectRoot, "researcher", "idea-catalyst", "IDEA_FRAGMENTS.json"),
+    {
+      fragments: [
+        {
+          fragment_id: "frag-literature-1",
+          source_domain: "Psychology",
+          summary: "Use belief updating as the cross-domain support mechanism.",
+        },
+      ],
+    }
+  );
+
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  const result = await materializePapernexusPacketContracts({
+    projectRoot,
+    trigger: "literature-packet-contract-test",
+    agentId: "researcher",
+  });
+
+  assert.equal(result.state.ideaCatalystPacketBundleReady, false);
+  assert.equal(result.state.ideaCatalystContractReady, true);
+  assert.equal(result.state.innovationPacketReady, false);
+  const ideaContract = JSON.parse(
+    await fs.readFile(
+      path.join(projectRoot, DEFAULT_IDEA_CATALYST_CONTRACT_PATH),
+      "utf8"
+    )
+  );
+  assert.equal(ideaContract.status, "ready");
+  assert.equal(ideaContract.source_requisition_report_path.endsWith("REQUISITION_SATISFACTION_REPORT.json"), true);
+  assert.equal(ideaContract.supporting_papers.includes("paper:belief-updating"), true);
+  assert.equal(ideaContract.source_spans.length, 1);
+  assert.equal(ideaContract.payload_paths.includes("researcher/idea-catalyst/IDEA_FRAGMENTS.json"), true);
+  assert.equal(
+    result.generatedFiles.includes("orchestrator/INNOVATION_PACKET.json"),
+    false
+  );
 });
 
 test("stage preflight detects a packet bundle even when split PaperNexus packets are absent", async (t) => {

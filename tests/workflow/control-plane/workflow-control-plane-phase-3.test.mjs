@@ -19,6 +19,7 @@ import {
 } from "../../../tools/workflow-guard.ts";
 import { createPluginRegistrationContext } from "../../../tools/plugin-registration-shared.ts";
 import { registerWorkflowTools } from "../../../tools/register-workflow-tools.ts";
+import { DEFAULT_IDEA_CATALYST_CONTRACT_PATH } from "../../../tools/workflow-authority-registry.ts";
 import { getWorkflowTraceLogPath } from "../../../tools/workflow-trace.ts";
 
 async function writeJson(filePath, value) {
@@ -306,6 +307,26 @@ async function seedReadyIdeaCatalystState(
   await writeJson(path.join(root, "CATALYST_SESSION_STATE.json"), {
     status: "ready",
     micro_stage: microStage,
+  });
+  await writeJson(path.join(projectRoot, DEFAULT_IDEA_CATALYST_CONTRACT_PATH), {
+    schema_version: 1,
+    authority: "idea_catalyst_contract",
+    status: "ready",
+    source_requisition_report_path:
+      "researcher/literature-discovery/requisition/req-phase-3/REQUISITION_SATISFACTION_REPORT.json",
+    graph_decision_path: "graph/GRAPH_BUILD_DECISION.json",
+    literature_packet_path:
+      "researcher/literature-discovery/LITERATURE_DISCOVERY_PACKET.json",
+    payload_paths: ["researcher/papernexus/IDEA_CATALYST_PACKET_BUNDLE.json"],
+    idea_fragments: [{ fragment_id: "frag-1", source_domain: "Psychology" }],
+    supporting_papers: ["paper-1"],
+    source_spans: [],
+    evidence_chain_refs: [{ ref_id: "chain-1" }],
+    claim_cap: "hypothesis",
+    reason: "phase-3 fixture idea authority",
+    limitations: [],
+    created_at: "2026-03-26T09:00:00.000Z",
+    updated_at: "2026-03-26T09:00:00.000Z",
   });
 
   const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");

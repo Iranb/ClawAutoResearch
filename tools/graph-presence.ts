@@ -26,6 +26,7 @@ import {
   writePapernexusGraphBuildReceipt,
   type PapernexusGraphBuildReceipt,
 } from "./papernexus-graph-build-receipt";
+import { writeGraphBuildDecision } from "./graph-build-decision";
 import {
   buildPapernexusSyncStateFromGraphPresence,
   writePapernexusSyncState,
@@ -870,6 +871,31 @@ async function writeGraphPresenceBuildReceipt(params: {
   const receiptPath = await writePapernexusGraphBuildReceipt({
     projectRoot: params.projectRoot,
     receipt,
+  });
+  await writeGraphBuildDecision({
+    projectRoot: params.projectRoot,
+    decision:
+      receipt.status === "graph_ready" && receipt.source_backed_graph_claim
+        ? "complete"
+        : receipt.status === "source_blocked"
+          ? "blocked"
+          : "waiting",
+    requestId: receipt.request_id,
+    graphPresenceReportPath: path.relative(
+      params.projectRoot,
+      params.result.reportPath
+    ),
+    graphReceiptPath: receiptPath,
+    sourceIndexPath: params.result.paperSourceIndexPath,
+    sourceBackedGraphClaim: receipt.source_backed_graph_claim,
+    reason:
+      receipt.status === "graph_ready" && receipt.source_backed_graph_claim
+        ? "Graph presence verification produced a source-backed graph-ready receipt."
+        : receipt.status === "source_blocked"
+          ? "Graph presence verification still lacks source-backed graph evidence."
+          : "Graph presence verification is not graph-ready yet.",
+    limitations: receipt.limitations,
+    now: params.result.checkedAt,
   });
   return { path: receiptPath, receipt };
 }

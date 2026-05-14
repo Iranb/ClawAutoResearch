@@ -25,6 +25,11 @@ import {
   resolveWorkflowStageCompletion,
   resolveAnalysisCompletion,
 } from "../../../tools/workflow-stage-completion.ts";
+import {
+  DEFAULT_GRAPH_BUILD_DECISION_PATH,
+  DEFAULT_IDEA_CATALYST_CONTRACT_PATH,
+  WORKFLOW_DIRECT_AUTHORITIES,
+} from "../../../tools/workflow-authority-registry.ts";
 
 async function writeJson(filePath, value) {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
@@ -36,6 +41,50 @@ async function writeText(filePath, value = "ready\n") {
   await fs.writeFile(filePath, value, "utf8");
 }
 
+async function writeGraphDecision(projectRoot, patch = {}) {
+  await writeJson(path.join(projectRoot, DEFAULT_GRAPH_BUILD_DECISION_PATH), {
+    schema_version: 1,
+    authority: "graph_build_decision",
+    decision: "complete",
+    status: "complete",
+    request_id: null,
+    requisition_satisfaction_report_path: null,
+    graph_presence_report_path: "graph/GRAPH_PRESENCE_CHECK.json",
+    graph_receipt_path: "graph/PAPERNEXUS_GRAPH_BUILD_RECEIPT.json",
+    source_index_path: "researcher/PAPER_SOURCE_INDEX.json",
+    source_backed_graph_claim: true,
+    reason: "fixture graph decision",
+    limitations: [],
+    created_at: "2026-05-14T00:00:00.000Z",
+    updated_at: "2026-05-14T00:00:00.000Z",
+    ...patch,
+  });
+}
+
+async function writeIdeaContract(projectRoot, patch = {}) {
+  await writeJson(path.join(projectRoot, DEFAULT_IDEA_CATALYST_CONTRACT_PATH), {
+    schema_version: 1,
+    authority: "idea_catalyst_contract",
+    status: "ready",
+    source_requisition_report_path:
+      "researcher/literature-discovery/requisition/req-1/REQUISITION_SATISFACTION_REPORT.json",
+    graph_decision_path: DEFAULT_GRAPH_BUILD_DECISION_PATH,
+    literature_packet_path:
+      "researcher/literature-discovery/LITERATURE_DISCOVERY_PACKET.json",
+    payload_paths: ["researcher/papernexus/IDEA_CATALYST_PACKET_BUNDLE.json"],
+    idea_fragments: [{ candidate_id: "idea-1", title: "Fixture idea" }],
+    supporting_papers: ["Belief Updating Under Uncertainty"],
+    source_spans: [],
+    evidence_chain_refs: [{ ref_id: "chain-1" }],
+    claim_cap: "hypothesis",
+    reason: "fixture idea contract",
+    limitations: [],
+    created_at: "2026-05-14T00:00:00.000Z",
+    updated_at: "2026-05-14T00:00:00.000Z",
+    ...patch,
+  });
+}
+
 const PAPERGURU_PASS_IDS = [
   "pass_1_structure",
   "pass_2_argumentation",
@@ -44,6 +93,23 @@ const PAPERGURU_PASS_IDS = [
   "pass_5_typography_latex",
   "pass_6_integrity_audit",
 ];
+
+test("workflow authority registry keeps one direct authority per downstream transition", () => {
+  const entries = new Map(
+    WORKFLOW_DIRECT_AUTHORITIES.map((entry) => [
+      entry.transition,
+      entry.directAuthority,
+    ])
+  );
+  assert.equal(
+    entries.get("literature_requisition_terminal_satisfied"),
+    "literature_requisition_satisfaction"
+  );
+  assert.equal(entries.get("graph_build_complete"), "graph_build_decision");
+  assert.equal(entries.get("idea_complete"), "idea_catalyst_contract");
+  assert.equal(entries.get("experiment_plan_complete"), "innovation_packet");
+  assert.equal(entries.size, WORKFLOW_DIRECT_AUTHORITIES.length);
+});
 
 async function makeProject(t, prefix) {
   const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
@@ -141,6 +207,7 @@ test("graph completion ignores stale remote discovery warning when graph proof i
       runtime_status: "ready",
     },
   });
+  await writeGraphDecision(projectRoot);
 
   const completion = await resolveGraphCompletion(projectRoot);
   assert.equal(completion.completionStatus, "complete");
@@ -160,6 +227,32 @@ test("graph completion ignores stale remote discovery warning when graph proof i
     reconciled.manifest.paper_ingestion.graph_presence_status,
     "ready"
   );
+});
+
+test("graph completion does not accept source index or graph presence without graph decision authority", async (t) => {
+  const projectRoot = await makeProject(t, "openclaw-wf-stage-graph-source-only-");
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "graph-source-only",
+    current_stage: "graph_build",
+    owner_agent: "researcher",
+    paper_ingestion: {
+      graph_presence_status: "ready",
+      graph_build_can_continue: true,
+    },
+  });
+  await writeJson(path.join(projectRoot, "researcher", "PAPER_SOURCE_INDEX.json"), {
+    papers: [{ canonical_id: "paper:1", source_kind: "markdown" }],
+  });
+  await writeJson(path.join(projectRoot, "graph", "GRAPH_PRESENCE_CHECK.json"), {
+    status: "ready",
+    expected_paper_count: 1,
+    present_paper_count: 1,
+    graph_build_can_continue: true,
+  });
+
+  const completion = await resolveGraphCompletion(projectRoot);
+  assert.equal(completion.completionStatus, "incomplete");
+  assert.equal(completion.blockingReason, "graph_build_decision_missing");
 });
 
 test("graph completion waits on active workflow-owned literature requisitions", async (t) => {
@@ -565,10 +658,35 @@ test("ideation completion rejects shallow packet status without idea evidence", 
 
   const completion = await resolveIdeationCompletion(projectRoot);
   assert.equal(completion.completionStatus, "incomplete");
-  assert.equal(completion.blockingReason, "idea_catalyst_packet_incomplete");
+  assert.equal(completion.blockingReason, "idea_catalyst_contract_missing");
 });
 
-test("ideation completion accepts PaperNexus idea-catalyst bundle evidence", async (t) => {
+test("ideation completion does not accept literature packet or source index as direct authority", async (t) => {
+  const projectRoot = await makeProject(t, "openclaw-wf-stage-ideation-raw-evidence-");
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "ideation-raw-evidence",
+    current_stage: "idea",
+    owner_agent: "researcher",
+  });
+  await writeJson(path.join(projectRoot, "researcher", "PAPER_SOURCE_INDEX.json"), {
+    papers: [{ canonical_id: "paper:1", source_kind: "markdown" }],
+  });
+  await writeJson(
+    path.join(projectRoot, "researcher", "literature-discovery", "LITERATURE_DISCOVERY_PACKET.json"),
+    {
+      status: "completed",
+      selected_papers: [{ canonical_id: "paper:1" }],
+      candidate_papers: [{ canonical_id: "paper:1" }],
+      evidence_gap_closed: true,
+    }
+  );
+
+  const completion = await resolveIdeationCompletion(projectRoot);
+  assert.equal(completion.completionStatus, "incomplete");
+  assert.equal(completion.blockingReason, "idea_catalyst_contract_missing");
+});
+
+test("ideation completion rejects PaperNexus idea-catalyst bundle without idea contract", async (t) => {
   const projectRoot = await makeProject(t, "openclaw-wf-stage-ideation-bundle-");
   await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
     project_id: "ideation-bundle",
@@ -607,11 +725,11 @@ test("ideation completion accepts PaperNexus idea-catalyst bundle evidence", asy
   );
 
   const completion = await resolveIdeationCompletion(projectRoot);
-  assert.equal(completion.completionStatus, "complete");
-  assert.equal(completion.nextAction, "/plan-experiment");
+  assert.equal(completion.completionStatus, "incomplete");
+  assert.equal(completion.blockingReason, "idea_catalyst_contract_missing");
 });
 
-test("ideation completion accepts canonical ready idea-catalyst state", async (t) => {
+test("ideation completion rejects manifest idea-catalyst projection without idea contract", async (t) => {
   const projectRoot = await makeProject(t, "openclaw-wf-stage-ideation-state-");
   await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
     project_id: "ideation-state",
@@ -624,6 +742,29 @@ test("ideation completion accepts canonical ready idea-catalyst state", async (t
       requisition_required: false,
     },
   });
+
+  const completion = await resolveIdeationCompletion(projectRoot);
+  assert.equal(completion.completionStatus, "incomplete");
+  assert.equal(completion.blockingReason, "idea_catalyst_contract_missing");
+});
+
+test("ideation completion accepts idea catalyst contract authority", async (t) => {
+  const projectRoot = await makeProject(t, "openclaw-wf-stage-ideation-contract-");
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "ideation-contract",
+    current_stage: "idea",
+    owner_agent: "researcher",
+  });
+  await writeJson(path.join(projectRoot, "researcher", "PAPER_SOURCE_INDEX.json"), {
+    papers: [{ canonical_id: "paper:1", source_kind: "markdown" }],
+  });
+  await writeJson(
+    path.join(projectRoot, "researcher", "literature-discovery", "LITERATURE_DISCOVERY_PACKET.json"),
+    {
+      selected_papers: [{ canonical_id: "paper:1" }],
+    }
+  );
+  await writeIdeaContract(projectRoot);
 
   const completion = await resolveIdeationCompletion(projectRoot);
   assert.equal(completion.completionStatus, "complete");
@@ -653,7 +794,7 @@ test("experiment plan completion requires innovation packet evidence trace", asy
     baseline: "FixMatch baseline",
     primary_metric: "H-score",
     fixed_budget: "5m CPU trial",
-    evidence_paths: ["researcher/papernexus/IDEA_CATALYST_PACKET_BUNDLE.json"],
+    evidence_paths: [DEFAULT_IDEA_CATALYST_CONTRACT_PATH],
   });
   const ready = await resolveExperimentPlanCompletion(projectRoot);
   assert.equal(ready.completionStatus, "complete");
