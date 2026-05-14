@@ -38,6 +38,9 @@ import {
   type PapernexusMcpClientConfig,
 } from "./papernexus-packets/mcp-client";
 import {
+  writeLiteratureRequisitionDecisionReport,
+} from "./literature-discovery/requisition-decision";
+import {
   inspectPapernexusRemoteAccess,
   summarizePapernexusRemoteAccessConfig,
   type PapernexusRemoteAccessConfig,
@@ -1782,6 +1785,59 @@ function isRemoteSourceEntrySourceBacked(entry: Record<string, unknown>): boolea
   );
 }
 
+function countRemoteSourceBackedEntries(entries: Record<string, unknown>[]): number {
+  return entries.filter(isRemoteSourceEntrySourceBacked).length;
+}
+
+function buildLiteratureRequisitionDecisionFields(params: {
+  requestStatus: "running" | "completed" | "needs_repair";
+  queueProgressError?: string | null;
+  firstError?: string | null;
+  sourceBackedCount: number;
+}): {
+  status: "queued" | "completed" | "failed";
+  decision: string;
+  reason: string;
+  limitations: string[];
+} {
+  if (params.requestStatus === "running") {
+    return {
+      status: "queued",
+      decision: "waiting_remote_import_progress",
+      reason: "PaperNexus remote import queue is still running.",
+      limitations: [
+        "Frontier, idea, and writing stages must wait until request-specific source/import-backed evidence is materialized.",
+      ],
+    };
+  }
+  if (params.requestStatus === "completed" && params.sourceBackedCount > 0) {
+    return {
+      status: "completed",
+      decision: "satisfied_remote_import_evidence",
+      reason:
+        "Request-specific PaperNexus source/import-backed evidence was materialized into the local paper source index.",
+      limitations: [
+        "Graph visibility may still require a separate PaperNexus graph presence verification.",
+      ],
+    };
+  }
+  const reason =
+    params.queueProgressError ??
+    params.firstError ??
+    "PaperNexus literature discovery did not produce request-specific source/import-backed evidence.";
+  return {
+    status: "failed",
+    decision:
+      params.sourceBackedCount > 0
+        ? "needs_repair_remote_import_failed"
+        : "needs_repair_missing_requisition_import_evidence",
+    reason,
+    limitations: [
+      "Remote completion without source/import-backed local materialization is not enough to satisfy a workflow-owned literature requisition.",
+    ],
+  };
+}
+
 function buildRemoteDiscoveryPacketPaper(entry: Record<string, unknown>): Record<string, unknown> {
   return {
     canonical_id: pickString(entry, ["canonical_id", "canonicalId"]),
@@ -2059,6 +2115,100 @@ type RemoteLiteratureDiscoveryArtifact = {
   artifactRelativePath: string;
 };
 
+function readRemoteQueueProgressFromArtifact(
+  artifact: Record<string, unknown>
+): Record<string, unknown> | null {
+  return (
+    asRecord(artifact.remote_queue_progress) ??
+    asRecord(asRecord(artifact.remote_literature_discovery)?.queue_progress) ??
+    null
+  );
+}
+
+function timestampScoreFromRemoteArtifact(artifact: Record<string, unknown>): number {
+  const direct =
+    pickString(artifact, [
+      "last_polled_at",
+      "updated_at",
+      "updatedAt",
+      "created_at",
+      "createdAt",
+    ]) ??
+    pickString(asRecord(artifact.remote_literature_discovery) ?? {}, [
+      "updated_at",
+      "updatedAt",
+    ]);
+  const directMs = direct ? Date.parse(direct) : Number.NaN;
+  if (Number.isFinite(directMs)) {
+    return directMs;
+  }
+  const runId = pickString(artifact, ["runId", "run_id"]);
+  const match = runId?.match(/\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}(?:-\d{3})?Z/);
+  if (!match) {
+    return 0;
+  }
+  const normalized = match[0].replace(
+    /T(\d{2})-(\d{2})-(\d{2})(?:-(\d{3}))?Z$/,
+    (_whole, hour, minute, second, millis) =>
+      `T${hour}:${minute}:${second}.${millis ?? "000"}Z`
+  );
+  const normalizedMs = Date.parse(normalized);
+  return Number.isFinite(normalizedMs) ? normalizedMs : 0;
+}
+
+function scoreRemoteLiteratureDiscoveryArtifact(
+  artifact: Record<string, unknown>
+): number[] {
+  const sourceEntries = buildSourceIndexEntriesFromRemoteDiscovery({
+    run: artifact,
+    now: "1970-01-01T00:00:00.000Z",
+  });
+  const sourceBackedCount = countRemoteSourceBackedEntries(sourceEntries);
+  const queueProgress = readRemoteQueueProgressFromArtifact(artifact);
+  const taskIds = collectRemoteImportTaskIds(artifact);
+  const remaining = getQueueProgressRemaining(queueProgress);
+  const completed = getQueueProgressCount(queueProgress, "completed");
+  const failed = getQueueProgressCount(queueProgress, "failed");
+  const sequence =
+    pickNumberValue(asRecord(queueProgress?.summary) ?? {}, ["sequence"]) ??
+    pickNumberValue(queueProgress, ["sequence"]) ??
+    0;
+  const terminalRank =
+    taskIds.length > 0 && remaining === 0
+      ? sourceBackedCount > 0 || completed > 0
+        ? 4
+        : failed > 0
+          ? 2
+          : 3
+      : remaining !== null && remaining > 0
+        ? 1
+        : 0;
+  return [
+    terminalRank,
+    sourceBackedCount,
+    completed,
+    asRecordArray(artifact.candidates).length,
+    sourceEntries.length,
+    sequence,
+    timestampScoreFromRemoteArtifact(artifact),
+  ];
+}
+
+function compareRemoteLiteratureDiscoveryArtifactStrength(
+  left: Record<string, unknown>,
+  right: Record<string, unknown>
+): number {
+  const leftScore = scoreRemoteLiteratureDiscoveryArtifact(left);
+  const rightScore = scoreRemoteLiteratureDiscoveryArtifact(right);
+  for (let index = 0; index < Math.max(leftScore.length, rightScore.length); index += 1) {
+    const delta = (leftScore[index] ?? 0) - (rightScore[index] ?? 0);
+    if (delta !== 0) {
+      return delta;
+    }
+  }
+  return 0;
+}
+
 function resolveProjectArtifactReference(params: {
   projectRoot: string;
   artifactPath: string | null | undefined;
@@ -2143,6 +2293,7 @@ async function readRemoteLiteratureDiscoveryArtifact(params: {
     request: params.request,
   });
   const visited = new Set<string>();
+  let bestArtifact: RemoteLiteratureDiscoveryArtifact | null = null;
   for (let index = 0; index < pending.length; index += 1) {
     const candidate = resolveProjectArtifactReference({
       projectRoot: params.projectRoot,
@@ -2173,13 +2324,22 @@ async function readRemoteLiteratureDiscoveryArtifact(params: {
     if (collectRemoteImportTaskIds(artifact).length === 0) {
       continue;
     }
-    return {
+    const candidateArtifact = {
       run: artifact,
       artifactPath: candidate.artifactPath,
       artifactRelativePath: candidate.artifactRelativePath,
     };
+    if (
+      !bestArtifact ||
+      compareRemoteLiteratureDiscoveryArtifactStrength(
+        candidateArtifact.run,
+        bestArtifact.run
+      ) > 0
+    ) {
+      bestArtifact = candidateArtifact;
+    }
   }
-  return null;
+  return bestArtifact;
 }
 
 export async function needsRemoteLiteratureDiscoverySourceIndexRefresh(params: {
@@ -2827,9 +2987,16 @@ async function refreshExistingRemoteLiteratureDiscovery(params: {
   const completedCount = getQueueProgressCount(queueProgressPayload.payload, "completed");
   const failedCount = getQueueProgressCount(queueProgressPayload.payload, "failed");
   const hasRemoteImportWork = taskIds.length > 0;
+  const sourceEntries = buildSourceIndexEntriesFromRemoteDiscovery({
+    run: params.run,
+    now: params.now,
+  });
+  const sourceBackedCount = countRemoteSourceBackedEntries(sourceEntries);
   const requestStatus =
     queueProgressError
       ? "needs_repair"
+      : sourceBackedCount === 0
+        ? "needs_repair"
       : hasRemoteImportWork && remaining !== null && remaining > 0
       ? "running"
       : failedCount > 0 && completedCount === 0
@@ -2841,10 +3008,6 @@ async function refreshExistingRemoteLiteratureDiscovery(params: {
       : requestStatus === "completed"
         ? "waiting_graph"
         : "blocked";
-  const sourceEntries = buildSourceIndexEntriesFromRemoteDiscovery({
-    run: params.run,
-    now: params.now,
-  });
   const metadataGraphSummary = summarizeRemoteMetadataGraph(params.run);
   if (sourceEntries.length > 0) {
     await replaceRemoteLiteratureDiscoverySourceIndexEntries({
@@ -2915,6 +3078,50 @@ async function refreshExistingRemoteLiteratureDiscovery(params: {
         : [],
   });
 
+  const decision = buildLiteratureRequisitionDecisionFields({
+    requestStatus,
+    queueProgressError,
+    firstError,
+    sourceBackedCount,
+  });
+  const satisfactionReportPath = await writeLiteratureRequisitionDecisionReport({
+    projectRoot: params.projectRoot,
+    requestId: params.request.requestId,
+    manifestPath: params.request.manifestPath,
+    triggerKind: params.request.triggerKind,
+    status: decision.status,
+    decision: decision.decision,
+    reason: decision.reason,
+    limitations: decision.limitations,
+    now: params.now,
+    generation: params.request.attemptCount,
+    remoteRunId: runId,
+    remoteArtifactPath: params.artifactRelativePath,
+    sharedCorpus: params.sharedCorpus,
+    mcpUrl: params.workflowPolicy?.papernexusMcpUrl ?? null,
+    importTaskIds: taskIds,
+    queueProgress: queueProgressPayload.payload,
+    queueProgressError,
+    candidatePaperCount: sourceEntries.length,
+    selectedPaperCount: sourceBackedCount,
+    sourceBackedCount,
+    metadataOnlyCount: Math.max(0, sourceEntries.length - sourceBackedCount),
+    evidenceGapClosed: requestStatus === "completed" && sourceBackedCount > 0,
+    citedEvidence: {
+      source_index_path:
+        sourceEntries.length > 0
+          ? relativizeProjectPath(
+              params.projectRoot,
+              resolvePaperSourceIndexPath(params.projectRoot)
+            )
+          : null,
+      graph_build_source_catchup_report_path: relativizeProjectPath(
+        params.projectRoot,
+        params.reportPath
+      ),
+    },
+  });
+
   await setPaperIngestionState({
     projectRoot: params.projectRoot,
     paperIngestion: {
@@ -2959,9 +3166,9 @@ async function refreshExistingRemoteLiteratureDiscovery(params: {
             requestStatus === "needs_repair" ? "invalid" : "valid",
           validation_summary:
             requestStatus === "needs_repair"
-              ? firstError ?? "PaperNexus import queue failed."
+              ? decision.reason
               : "PaperNexus import queue progress was refreshed without resubmitting discovery.",
-          validation_report_path: params.artifactRelativePath,
+          validation_report_path: satisfactionReportPath,
           queue_progress: normalizeRemoteQueueProgressForPaperIngestion(
             queueProgressPayload.payload
           ),
@@ -3231,6 +3438,7 @@ async function maybeRunRemoteLiteratureDiscovery(params: {
     run,
     now: params.now,
   });
+  const sourceBackedCount = countRemoteSourceBackedEntries(sourceEntries);
   const metadataGraphSummary = summarizeRemoteMetadataGraph(run);
   const sourceIndexPath = resolvePaperSourceIndexPath(params.projectRoot);
   if (sourceEntries.length > 0) {
@@ -3258,7 +3466,7 @@ async function maybeRunRemoteLiteratureDiscovery(params: {
   const requestStatus =
     queueProgressError
       ? "needs_repair"
-      : sourceEntries.length === 0
+      : sourceBackedCount === 0
       ? "needs_repair"
       : hasRemoteImportWork && !importComplete
         ? "running"
@@ -3352,6 +3560,51 @@ async function maybeRunRemoteLiteratureDiscovery(params: {
         : [],
   });
 
+  const decision = buildLiteratureRequisitionDecisionFields({
+    requestStatus,
+    queueProgressError,
+    firstError:
+      queueProgressError ??
+      (sourceBackedCount === 0
+        ? "PaperNexus literature_discovery returned no source/import-backed entries."
+        : null),
+    sourceBackedCount,
+  });
+  const satisfactionReportPath = await writeLiteratureRequisitionDecisionReport({
+    projectRoot: params.projectRoot,
+    requestId,
+    manifestPath: activeRequest?.manifestPath ?? null,
+    triggerKind: activeRequest?.triggerKind ?? "graph_build_remote_literature_discovery",
+    status: decision.status,
+    decision: decision.decision,
+    reason: decision.reason,
+    limitations: decision.limitations,
+    now: params.now,
+    generation: (activeRequest?.attemptCount ?? 0) + 1,
+    remoteRunId: runId,
+    remoteArtifactPath: artifactRelativePath,
+    remoteReportPath: reportRelativePath,
+    sharedCorpus: client.sharedCorpus,
+    mcpUrl: params.workflowPolicy?.papernexusMcpUrl ?? null,
+    importTaskIds: taskIds,
+    queueProgress: queueProgressPayload,
+    queueProgressError,
+    candidatePaperCount: sourceEntries.length,
+    selectedPaperCount: sourceBackedCount,
+    sourceBackedCount,
+    metadataOnlyCount: Math.max(0, sourceEntries.length - sourceBackedCount),
+    evidenceGapClosed: requestStatus === "completed" && sourceBackedCount > 0,
+    citedEvidence: {
+      source_index_path: sourceEntries.length > 0
+        ? relativizeProjectPath(params.projectRoot, sourceIndexPath)
+        : null,
+      graph_build_source_catchup_report_path: relativizeProjectPath(
+        params.projectRoot,
+        params.reportPath
+      ),
+    },
+  });
+
   const completedPapers =
     requestStatus === "completed"
       ? sourceEntries.map((entry) => ({
@@ -3410,10 +3663,9 @@ async function maybeRunRemoteLiteratureDiscovery(params: {
           validation_status: requestStatus === "needs_repair" ? "warning" : "valid",
           validation_summary:
             requestStatus === "needs_repair"
-              ? queueProgressError ??
-                "PaperNexus discovery completed but did not resolve importable sources."
+              ? decision.reason
               : "PaperNexus discovery/import result was materialized into local graph-build artifacts.",
-          validation_report_path: artifactRelativePath,
+          validation_report_path: satisfactionReportPath,
           queue_progress: normalizeRemoteQueueProgressForPaperIngestion(
             queueProgressPayload
           ),

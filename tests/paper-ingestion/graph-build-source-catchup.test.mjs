@@ -581,14 +581,27 @@ test("graph-build source catch-up delegates missing research and import to remot
   );
   assert.match(
     manifest.paper_ingestion.queued_requests[0].validation_report_path,
-    /PAPERNEXUS_LITERATURE_DISCOVERY\.json$/
+    /REQUISITION_SATISFACTION_REPORT\.json$/
   );
-  const discoveryArtifact = JSON.parse(
+  const satisfactionReport = JSON.parse(
     await fs.readFile(
       path.join(
         projectRoot,
         manifest.paper_ingestion.queued_requests[0].validation_report_path
       ),
+      "utf8"
+    )
+  );
+  assert.equal(satisfactionReport.kind, "literature_requisition_decision");
+  assert.equal(satisfactionReport.status, "queued");
+  assert.equal(satisfactionReport.decision, "waiting_remote_import_progress");
+  assert.equal(
+    satisfactionReport.remote_literature_discovery.artifact_path,
+    result.batchManifestPath
+  );
+  const discoveryArtifact = JSON.parse(
+    await fs.readFile(
+      path.join(projectRoot, result.batchManifestPath),
       "utf8"
     )
   );
@@ -1003,12 +1016,19 @@ test("graph-build source catch-up polls existing remote discovery imports withou
   assert.equal(manifest.paper_ingestion.runtime_status, "waiting_graph");
   assert.equal(manifest.paper_ingestion.queued_requests[0].status, "completed");
 
-  const artifact = JSON.parse(
+  const satisfactionReport = JSON.parse(
     await fs.readFile(
       path.join(
         projectRoot,
         manifest.paper_ingestion.queued_requests[0].validation_report_path
       ),
+      "utf8"
+    )
+  );
+  assert.equal(satisfactionReport.kind, "literature_requisition_decision");
+  const artifact = JSON.parse(
+    await fs.readFile(
+      path.join(projectRoot, satisfactionReport.remote_literature_discovery.artifact_path),
       "utf8"
     )
   );
@@ -1189,11 +1209,20 @@ test("graph-build source catch-up refreshes remote artifacts linked from active 
   const request = manifest.paper_ingestion.queued_requests[0];
   assert.equal(request.status, "completed");
   assert.equal(request.manifest_path, catalystRequisitionPath);
-  assert.equal(request.validation_report_path, remoteArtifactPath);
+  assert.equal(request.validation_report_path, failedSatisfactionPath);
   assert.equal(request.queue_progress.sequence, 7);
   assert.equal(request.queue_progress.last_event_at, "2026-04-24T10:04:30.000Z");
   assert.equal(request.queue_progress.completed, 1);
   assert.equal(manifest.paper_ingestion.last_batch_manifest_path, remoteArtifactPath);
+
+  const satisfactionReport = JSON.parse(
+    await fs.readFile(path.join(projectRoot, failedSatisfactionPath), "utf8")
+  );
+  assert.equal(satisfactionReport.kind, "literature_requisition_decision");
+  assert.equal(satisfactionReport.status, "completed");
+  assert.equal(satisfactionReport.decision, "satisfied_remote_import_evidence");
+  assert.equal(satisfactionReport.remote_literature_discovery.artifact_path, remoteArtifactPath);
+  assert.equal(satisfactionReport.source_backed_count, 1);
 
   const sourceIndex = JSON.parse(
     await fs.readFile(path.join(projectRoot, "researcher", "PAPER_SOURCE_INDEX.json"), "utf8")
@@ -1226,6 +1255,215 @@ test("graph-build source catch-up refreshes remote artifacts linked from active 
   assert.equal(
     discoveryPacket.source_contracts.papernexus_remote_discovery.selected_candidate_policy,
     "source_or_import_backed_only"
+  );
+});
+
+test("graph-build source catch-up chooses the strongest remote literature artifact for a requisition", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  const previousToken = process.env.PAPERNEXUS_TEST_TOKEN;
+  const server = await startFakeRemoteDiscoveryMcpServer({
+    importWorkflowPayloads: [
+      {
+        rootPath: "/srv/papernexus/corpora/GCD",
+        summary: {
+          total: 1,
+          pending: 0,
+          running: 0,
+          completed: 1,
+          failed: 0,
+          remaining: 0,
+          overallPercent: 100,
+          sequence: 11,
+          last_event_at: "2026-04-24T10:07:30.000Z",
+        },
+        tasks: [
+          {
+            id: "task-strong-1",
+            status: "completed",
+            progress: { percent: 100 },
+          },
+        ],
+      },
+    ],
+  });
+  t.after(async () => {
+    if (previousToken === undefined) {
+      delete process.env.PAPERNEXUS_TEST_TOKEN;
+    } else {
+      process.env.PAPERNEXUS_TEST_TOKEN = previousToken;
+    }
+    await server.close();
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+  process.env.PAPERNEXUS_TEST_TOKEN = "remote-test-token";
+
+  const catalystRequisitionPath =
+    "researcher/idea-catalyst/requisition/req-monotonic/CATALYST_REQUISITION.json";
+  const satisfactionPath =
+    "researcher/idea-catalyst/requisition/req-monotonic/REQUISITION_SATISFACTION_REPORT.json";
+  const weakArtifactPath =
+    "researcher/literature-discovery/remote/disc-2026-05-14T01-20-11-227Z/PAPERNEXUS_LITERATURE_DISCOVERY.json";
+  const strongArtifactPath =
+    "researcher/literature-discovery/remote/disc-2026-05-14T01-22-02-349Z/PAPERNEXUS_LITERATURE_DISCOVERY.json";
+  await writeJson(path.join(projectRoot, catalystRequisitionPath), {
+    catalyst_requisition: {
+      search_queries: [{ query: "request-specific CPU source evidence" }],
+    },
+  });
+  await writeJson(path.join(projectRoot, satisfactionPath), {
+    status: "failed",
+    decision: "needs_repair_missing_requisition_import_evidence",
+    request_id: "req-monotonic",
+    remote_literature_discovery: {
+      artifact_path: strongArtifactPath,
+    },
+  });
+  await writeJson(path.join(projectRoot, weakArtifactPath), {
+    contractVersion: "literature-discovery-v1",
+    runId: "disc-2026-05-14T01-20-11-227Z",
+    local_request_id: "req-monotonic",
+    candidates: [
+      {
+        canonicalId: "arxiv:2601.00002",
+        title: "Metadata Only Weaker Discovery",
+        identifiers: { arxivId: "2601.00002" },
+        source: {
+          sourceKind: "metadata_only",
+          sourcePath: "",
+          resolutionStatus: "metadata_only",
+        },
+        import: { status: "not_submitted" },
+      },
+    ],
+    importSummary: {
+      submitted: 1,
+      failed: 0,
+      results: [
+        {
+          canonicalId: "arxiv:2601.00002",
+          status: "submitted",
+          taskId: "task-weak-1",
+        },
+      ],
+    },
+    remote_queue_progress: {
+      summary: {
+        total: 1,
+        pending: 1,
+        completed: 0,
+        failed: 0,
+        remaining: 1,
+        sequence: 3,
+      },
+    },
+  });
+  await writeJson(path.join(projectRoot, strongArtifactPath), {
+    contractVersion: "literature-discovery-v1",
+    runId: "disc-2026-05-14T01-22-02-349Z",
+    local_request_id: "req-monotonic",
+    candidates: [
+      {
+        canonicalId: "arxiv:2601.00003",
+        title: "Source Backed Stronger Discovery",
+        identifiers: { arxivId: "2601.00003" },
+        source: {
+          sourceKind: "pdf",
+          sourcePath:
+            "/srv/papernexus/corpora/GCD/.papernexus/discovery/staging/pdf/2601.00003.pdf",
+          sourceProvider: "arxiv",
+          resolutionStatus: "fulltext_ready",
+          pdfUrl: "https://arxiv.org/pdf/2601.00003.pdf",
+        },
+        import: { status: "submitted", taskId: "task-strong-1" },
+      },
+    ],
+    importSummary: {
+      submitted: 1,
+      failed: 0,
+      results: [
+        {
+          canonicalId: "arxiv:2601.00003",
+          status: "submitted",
+          taskId: "task-strong-1",
+        },
+      ],
+    },
+    remote_queue_progress: {
+      summary: {
+        total: 1,
+        pending: 0,
+        completed: 1,
+        failed: 0,
+        remaining: 0,
+        sequence: 10,
+      },
+    },
+  });
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "source-catchup-demo",
+    current_stage: "graph_build",
+    owner_agent: "researcher",
+    paper_ingestion: {
+      runtime_status: "waiting_import",
+      last_batch_manifest_path: weakArtifactPath,
+      queued_requests: [
+        {
+          request_id: "req-monotonic",
+          request_kind: "requisition",
+          status: "running",
+          wrapper: "papernexus_remote_mcp",
+          manifest_path: catalystRequisitionPath,
+          validation_report_path: satisfactionPath,
+          trigger_kind: "idea_catalyst_requisition",
+          created_at: "2026-04-24T10:00:00.000Z",
+          updated_at: "2026-04-24T10:06:00.000Z",
+          started_at: "2026-04-24T10:00:00.000Z",
+          last_run_id: "disc-2026-05-14T01-20-11-227Z",
+          attempt_count: 1,
+        },
+      ],
+    },
+  });
+
+  const result = await maybeMaterializeGraphBuildPaperSources({
+    projectRoot,
+    projectId: "source-catchup-demo",
+    workflowPolicy: {
+      papernexusAccessMode: "remote_mcp",
+      papernexusSharedCorpus: "GCD",
+      papernexusMcpUrl: server.url,
+      papernexusApiTokenSource: "env",
+      papernexusApiTokenEnv: "PAPERNEXUS_TEST_TOKEN",
+    },
+    now: "2026-04-24T10:08:00.000Z",
+  });
+
+  assert.equal(result.batchManifestPath, strongArtifactPath);
+  assert.equal(
+    server.requests.filter((entry) => entry.body.params.name === "literature_discovery").length,
+    0
+  );
+  const manifest = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "PROJECT_MANIFEST.json"), "utf8")
+  );
+  const request = manifest.paper_ingestion.queued_requests[0];
+  assert.equal(request.status, "completed");
+  assert.equal(request.validation_report_path, satisfactionPath);
+  assert.equal(request.queue_progress.sequence, 11);
+
+  const satisfactionReport = JSON.parse(
+    await fs.readFile(path.join(projectRoot, satisfactionPath), "utf8")
+  );
+  assert.equal(satisfactionReport.status, "completed");
+  assert.equal(satisfactionReport.remote_literature_discovery.artifact_path, strongArtifactPath);
+  assert.equal(satisfactionReport.source_backed_count, 1);
+
+  const sourceIndex = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "researcher", "PAPER_SOURCE_INDEX.json"), "utf8")
+  );
+  assert.deepEqual(
+    sourceIndex.papers.map((entry) => entry.canonical_id),
+    ["arxiv:2601.00003"]
   );
 });
 
@@ -1421,8 +1659,19 @@ test("literature requisition executor repairs completed remote source-index drif
   assert.equal(manifest.paper_ingestion.queued_requests[0].queue_progress.sequence, 9);
   assert.equal(
     manifest.paper_ingestion.queued_requests[0].validation_report_path,
-    remoteArtifactPath
+    "researcher/literature-discovery/requisition/req-completed/REQUISITION_SATISFACTION_REPORT.json"
   );
+  const satisfactionReport = JSON.parse(
+    await fs.readFile(
+      path.join(
+        projectRoot,
+        manifest.paper_ingestion.queued_requests[0].validation_report_path
+      ),
+      "utf8"
+    )
+  );
+  assert.equal(satisfactionReport.kind, "literature_requisition_decision");
+  assert.equal(satisfactionReport.remote_literature_discovery.artifact_path, remoteArtifactPath);
 });
 
 test("graph-build source catch-up materializes planned arXiv markdown and queues PaperNexus import", async (t) => {
