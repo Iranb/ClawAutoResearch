@@ -175,6 +175,10 @@ export type WorkflowRuntimeMaintenanceResult = {
     autoCodeReviewQueueKeys: string[];
     autoCodeReviewSessionKeys: string[];
   };
+  terminalizedStaleRuntime: {
+    queueKeys: string[];
+    sessionKeys: string[];
+  };
 };
 
 function readString(value: unknown): string | null {
@@ -200,6 +204,18 @@ function parseTimeMs(value: unknown): number | null {
   }
   const parsed = Date.parse(text);
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+function latestParsedTimeMs(values: unknown[]): number | null {
+  let latest: number | null = null;
+  for (const value of values) {
+    const parsed = parseTimeMs(value);
+    if (parsed == null) {
+      continue;
+    }
+    latest = latest == null ? parsed : Math.max(latest, parsed);
+  }
+  return latest;
 }
 
 function uniqueStrings(values: Array<string | null | undefined>): string[] {
@@ -2081,6 +2097,177 @@ async function markLinkedSessionsCompleted(params: {
   return completedSessionKeys;
 }
 
+function queueLinkedSessionKeys(entry: WorkflowRuntimeQueueEntry): Set<string> {
+  return new Set(
+    [
+      entry.preferredSessionKey,
+      entry.requesterSessionKey,
+      ...(entry.dispatchPayload?.preferredSessionKeys ?? []),
+    ].filter((value): value is string => Boolean(readString(value)))
+  );
+}
+
+function sessionLinkedToQueue(
+  session: WorkflowRuntimeSessionEntry,
+  entry: WorkflowRuntimeQueueEntry
+): boolean {
+  return (
+    session.queueKey === entry.queueKey ||
+    queueLinkedSessionKeys(entry).has(session.sessionKey)
+  );
+}
+
+function latestQueueFreshnessMs(entry: WorkflowRuntimeQueueEntry): number | null {
+  return latestParsedTimeMs([
+    entry.lastCheckedAt,
+    entry.lastAttemptedAt,
+    entry.queuedAt,
+  ]);
+}
+
+function latestSessionFreshnessMs(entry: WorkflowRuntimeSessionEntry): number | null {
+  return latestParsedTimeMs([
+    entry.lastHeartbeatAt,
+    entry.lastCheckedAt,
+    entry.startedAt,
+  ]);
+}
+
+function hasFreshActiveLinkedSession(params: {
+  entry: WorkflowRuntimeQueueEntry;
+  sessions: WorkflowRuntimeSessionEntry[];
+  currentMs: number;
+  staleRuntimeAgeMs: number;
+}): boolean {
+  return params.sessions.some((session) => {
+    if (session.status !== "active" || !sessionLinkedToQueue(session, params.entry)) {
+      return false;
+    }
+    const freshnessMs = latestSessionFreshnessMs(session);
+    return (
+      freshnessMs != null &&
+      params.currentMs - freshnessMs <= params.staleRuntimeAgeMs
+    );
+  });
+}
+
+async function terminalizeDeadActiveRuntimeEntries(params: {
+  projectRoot: string;
+  projectId: string | null;
+  staleRuntimeAgeMs?: number;
+}): Promise<{ queueKeys: string[]; sessionKeys: string[] }> {
+  const staleRuntimeAgeMs =
+    typeof params.staleRuntimeAgeMs === "number" && Number.isFinite(params.staleRuntimeAgeMs)
+      ? Math.max(0, Math.floor(params.staleRuntimeAgeMs))
+      : 15 * 60 * 1000;
+  const currentMs = Date.now();
+  const currentAt = nowIso();
+  const [queueStore, sessionsStore] = await Promise.all([
+    readWorkflowRuntimeQueueStore(params.projectRoot),
+    readWorkflowRuntimeSessionsStore(params.projectRoot),
+  ]);
+  const terminalQueueKeys = queueStore.entries
+    .filter((entry) => ["launching", "running"].includes(entry.status))
+    .filter((entry) => {
+      const freshnessMs = latestQueueFreshnessMs(entry);
+      if (freshnessMs == null || currentMs - freshnessMs <= staleRuntimeAgeMs) {
+        return false;
+      }
+      return !hasFreshActiveLinkedSession({
+        entry,
+        sessions: sessionsStore.entries,
+        currentMs,
+        staleRuntimeAgeMs,
+      });
+    })
+    .map((entry) => entry.queueKey);
+  if (terminalQueueKeys.length === 0) {
+    return { queueKeys: [], sessionKeys: [] };
+  }
+  const terminalQueueKeySet = new Set(terminalQueueKeys);
+  const terminalSessionKeys = uniqueStrings(
+    sessionsStore.entries
+      .filter((session) =>
+        queueStore.entries.some(
+          (entry) =>
+            terminalQueueKeySet.has(entry.queueKey) &&
+            sessionLinkedToQueue(session, entry) &&
+            ["active", "idle", "needs_repair"].includes(session.status)
+        )
+      )
+      .map((session) => session.sessionKey)
+  );
+  const terminalSessionKeySet = new Set(terminalSessionKeys);
+  const terminalReason =
+    "Stale active runtime entry had no fresh active linked session; terminalized by runtime maintenance. Semantic stage completion remains governed by workflow_control.";
+  await updateWorkflowRuntimeQueueStore({
+    projectRoot: params.projectRoot,
+    projectId: params.projectId,
+    updater: (store) =>
+      store.entries.map((entry) =>
+        terminalQueueKeySet.has(entry.queueKey)
+          ? {
+              ...entry,
+              status: "failed",
+              lastCheckedAt: currentAt,
+              nextRetryAt: null,
+              lastError: entry.lastError ?? terminalReason,
+            }
+          : entry
+      ),
+  });
+  if (terminalSessionKeys.length > 0) {
+    await updateWorkflowRuntimeSessionsStore({
+      projectRoot: params.projectRoot,
+      projectId: params.projectId,
+      updater: (store) =>
+        store.entries.map((entry) =>
+          terminalSessionKeySet.has(entry.sessionKey)
+            ? {
+                ...entry,
+                status: "failed",
+                lastCheckedAt: currentAt,
+                lastFinishedAt: entry.lastFinishedAt ?? currentAt,
+                lastError: entry.lastError ?? terminalReason,
+              }
+            : entry
+        ),
+    });
+  }
+  await appendWorkflowRuntimeEvent({
+    projectRoot: params.projectRoot,
+    projectId: params.projectId,
+    kind: "stale_active_runtime_terminalized",
+    summary:
+      `Terminalized ${terminalQueueKeys.length} stale active runtime queue entr` +
+      `${terminalQueueKeys.length === 1 ? "y" : "ies"} before recovery replay.`,
+    details: {
+      queueKeys: terminalQueueKeys,
+      sessionKeys: terminalSessionKeys,
+      staleRuntimeAgeMs,
+      terminalStatus: "failed",
+      semanticCompletionAuthority: "workflow_control",
+    },
+  });
+  await appendWorkflowDiagnosticEvent({
+    projectRoot: params.projectRoot,
+    projectId: params.projectId,
+    component: "runtime_maintenance",
+    action: "stale_active_runtime_terminalized",
+    status: "degraded",
+    summary:
+      "Runtime maintenance terminalized stale active queue/session entries before repair replay.",
+    details: {
+      queueKeys: terminalQueueKeys,
+      sessionKeys: terminalSessionKeys,
+      staleRuntimeAgeMs,
+      terminalStatus: "failed",
+      semanticCompletionAuthority: "workflow_control",
+    },
+  });
+  return { queueKeys: terminalQueueKeys, sessionKeys: terminalSessionKeys };
+}
+
 async function retireObsoleteAutoStageDispatchRuntime(params: {
   projectRoot: string;
   projectId: string | null;
@@ -2738,6 +2925,11 @@ export async function runWorkflowRuntimeMaintenancePass(params: {
     },
   });
 
+  const terminalizedStaleRuntime = await terminalizeDeadActiveRuntimeEntries({
+    projectRoot,
+    projectId,
+    staleRuntimeAgeMs: params.staleSessionAgeMs,
+  });
   const recovery = await recoverWorkflowRuntimeState({
     projectRoot,
     projectId,
@@ -3372,6 +3564,7 @@ export async function runWorkflowRuntimeMaintenancePass(params: {
         autoCodeReviewSessionKeys:
           retiredAutoCodeReviewRuntime.retiredSessionKeys,
       },
+      terminalizedStaleRuntime,
       incidentCount: watchdogSummary.incidentCount,
       experimentMaintenance,
     },
@@ -3410,6 +3603,7 @@ export async function runWorkflowRuntimeMaintenancePass(params: {
         autoCodeReviewSessionKeys:
           retiredAutoCodeReviewRuntime.retiredSessionKeys,
       },
+      terminalizedStaleRuntime,
       handoffMaintenance,
       watchdogSummary,
       experimentMaintenance,
@@ -3438,5 +3632,6 @@ export async function runWorkflowRuntimeMaintenancePass(params: {
       autoCodeReviewQueueKeys: retiredAutoCodeReviewRuntime.retiredQueueKeys,
       autoCodeReviewSessionKeys: retiredAutoCodeReviewRuntime.retiredSessionKeys,
     },
+    terminalizedStaleRuntime,
   };
 }

@@ -13,6 +13,7 @@ import {
   readWorkflowRuntimeQueueStore,
   readWorkflowRuntimeSessionsStore,
   writeWorkflowRuntimeQueueStore,
+  writeWorkflowRuntimeSessionsStore,
 } from "../../../tools/workflow-runtime-state.ts";
 import { readWorkflowRuntimeIncidentsStore } from "../../../tools/workflow-runtime-incidents.ts";
 import { runWorkflowRuntimeMaintenancePass } from "../../../tools/workflow-runtime-maintenance.ts";
@@ -1196,6 +1197,203 @@ test("runWorkflowRuntimeMaintenancePass repairs active sessions whose underlying
       (event) =>
         event.component === "runtime_maintenance" &&
         event.action === "session_inspection_repair"
+    ),
+    true
+  );
+});
+
+test("runWorkflowRuntimeMaintenancePass terminalizes stale active queue entries before repair replay", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  const staleQueueKey = "repair:dispatch:dead-running";
+  const freshQueueKey = "repair:dispatch:fresh-running";
+  const staleSessionKey = "agent:researcher:local:conversation:test:subagent:dead";
+  const freshSessionKey = "agent:researcher:local:conversation:test:subagent:fresh";
+
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await makeProject(projectRoot, "terminalize-stale-runtime");
+  await migrateWorkflowRuntimeState({
+    projectRoot,
+    projectId: "terminalize-stale-runtime",
+    compatibilityMode: "sessions_spawn_runtime",
+    reason: "test_bootstrap",
+  });
+
+  const oldIso = "2026-04-10T09:00:00.000Z";
+  const freshIso = new Date().toISOString();
+  const baseQueue = {
+    transitionId: "transition",
+    queueId: "transition",
+    source: "workflow_auto_stage",
+    entryType: "dispatch_task",
+    ownerAgent: "researcher",
+    channelKey: "local:conversation:test",
+    requesterSessionKey: "agent:researcher:local:conversation:test",
+    messageChannel: "local",
+    family: "research",
+    kind: "workflow_stage_dispatch",
+    projectId: "terminalize-stale-runtime",
+    projectRoot,
+    attemptCount: 1,
+    fallbackMode: null,
+    lastError: null,
+    parentSessionKey: null,
+    threadBindingKey: null,
+    depth: 0,
+    runPayload: null,
+    dispatchPayload: {
+      requesterChannel: "local",
+      requesterAccountId: null,
+      preferredSessionKeys: [],
+      fromRole: "researcher",
+      toRole: "researcher",
+      projectRoot,
+      projectId: "terminalize-stale-runtime",
+      stage: "experiment",
+      summary: "Continue experiment reconciliation.",
+      command: "/monitor-experiment",
+      mailboxMessageId: null,
+      requireMailboxAcknowledgement: true,
+      extraBody: null,
+      waitTimeoutMs: 5_000,
+      retryOnTimeout: true,
+      enableSpawnFallback: true,
+      useWorkflowHandoff: true,
+      autoModeActive: true,
+    },
+  };
+  await writeWorkflowRuntimeQueueStore({
+    projectRoot,
+    projectId: "terminalize-stale-runtime",
+    entries: [
+      {
+        ...baseQueue,
+        transitionId: staleQueueKey,
+        queueId: staleQueueKey,
+        queueKey: staleQueueKey,
+        preferredSessionKey: staleSessionKey,
+        queuedAt: oldIso,
+        lastAttemptedAt: oldIso,
+        lastCheckedAt: oldIso,
+        summary: "dead running dispatch",
+        status: "running",
+      },
+      {
+        ...baseQueue,
+        transitionId: freshQueueKey,
+        queueId: freshQueueKey,
+        queueKey: freshQueueKey,
+        preferredSessionKey: freshSessionKey,
+        queuedAt: freshIso,
+        lastAttemptedAt: freshIso,
+        lastCheckedAt: freshIso,
+        summary: "fresh running dispatch",
+        status: "running",
+        dispatchPayload: {
+          ...baseQueue.dispatchPayload,
+          preferredSessionKeys: [freshSessionKey],
+        },
+      },
+    ],
+  });
+  await writeWorkflowRuntimeSessionsStore({
+    projectRoot,
+    projectId: "terminalize-stale-runtime",
+    entries: [
+      {
+        sessionKey: staleSessionKey,
+        sessionId: "session-dead",
+        runtime: "subagent",
+        role: "researcher",
+        agentId: "researcher",
+        ownerAgent: "researcher",
+        family: "research",
+        kind: "workflow_stage_dispatch",
+        channelKey: "local:conversation:test",
+        requesterSessionKey: "agent:researcher:local:conversation:test",
+        projectId: "terminalize-stale-runtime",
+        projectRoot,
+        parentSessionKey: null,
+        threadBindingKey: null,
+        depth: 0,
+        status: "idle",
+        runId: "run-dead",
+        queueKey: staleQueueKey,
+        startedAt: oldIso,
+        lastHeartbeatAt: oldIso,
+        lastAnnounceAt: null,
+        lastCheckedAt: oldIso,
+        lastFinishedAt: null,
+        lastError: null,
+      },
+      {
+        sessionKey: freshSessionKey,
+        sessionId: "session-fresh",
+        runtime: "subagent",
+        role: "researcher",
+        agentId: "researcher",
+        ownerAgent: "researcher",
+        family: "research",
+        kind: "workflow_stage_dispatch",
+        channelKey: "local:conversation:test",
+        requesterSessionKey: "agent:researcher:local:conversation:test",
+        projectId: "terminalize-stale-runtime",
+        projectRoot,
+        parentSessionKey: null,
+        threadBindingKey: null,
+        depth: 0,
+        status: "active",
+        runId: "run-fresh",
+        queueKey: freshQueueKey,
+        startedAt: freshIso,
+        lastHeartbeatAt: freshIso,
+        lastAnnounceAt: null,
+        lastCheckedAt: freshIso,
+        lastFinishedAt: null,
+        lastError: null,
+      },
+    ],
+  });
+
+  const result = await runWorkflowRuntimeMaintenancePass({
+    projectRoot,
+    projectId: "terminalize-stale-runtime",
+    staleSessionAgeMs: 60 * 60 * 1000,
+    maxRepairAttempts: 1,
+  });
+
+  assert.deepEqual(result.terminalizedStaleRuntime.queueKeys, [staleQueueKey]);
+  assert.deepEqual(result.terminalizedStaleRuntime.sessionKeys, [staleSessionKey]);
+  assert.deepEqual(result.replayedQueueKeys, []);
+
+  const queueStore = await readWorkflowRuntimeQueueStore(projectRoot);
+  assert.equal(
+    queueStore.entries.find((entry) => entry.queueKey === staleQueueKey)?.status,
+    "failed"
+  );
+  assert.equal(
+    queueStore.entries.find((entry) => entry.queueKey === freshQueueKey)?.status,
+    "running"
+  );
+  const sessionsStore = await readWorkflowRuntimeSessionsStore(projectRoot);
+  assert.equal(
+    sessionsStore.entries.find((entry) => entry.sessionKey === staleSessionKey)?.status,
+    "failed"
+  );
+  assert.equal(
+    sessionsStore.entries.find((entry) => entry.sessionKey === freshSessionKey)?.status,
+    "active"
+  );
+
+  const diagnostics = await readWorkflowDiagnosticEvents(projectRoot);
+  assert.equal(
+    diagnostics.some(
+      (event) =>
+        event.component === "runtime_maintenance" &&
+        event.action === "stale_active_runtime_terminalized" &&
+        event.details?.semanticCompletionAuthority === "workflow_control"
     ),
     true
   );
