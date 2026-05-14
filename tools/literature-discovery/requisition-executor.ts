@@ -4,6 +4,7 @@ import { asRecord, normalizeStage } from "../workflow-guard-core/coercion";
 import { readJsonIfExists } from "../workflow-guard-core/fs";
 import {
   maybeMaterializeGraphBuildPaperSources,
+  needsRemoteLiteratureDiscoverySourceIndexRefresh,
   type GraphBuildSourceCatchupResult,
 } from "../graph-build-source-catchup";
 import {
@@ -82,6 +83,43 @@ function findAdvanceCandidate(state: PaperIngestionState): PaperIngestionRequest
   );
 }
 
+async function needsCompletedRequisitionSourceIndexRepair(params: {
+  projectRoot: string;
+  manifest: Record<string, unknown>;
+  request: PaperIngestionRequest;
+}): Promise<boolean> {
+  if (
+    !isWorkflowOwnedLiteratureRequisitionRequest(params.request) ||
+    params.request.status !== "completed"
+  ) {
+    return false;
+  }
+  return needsRemoteLiteratureDiscoverySourceIndexRefresh({
+    projectRoot: params.projectRoot,
+    manifest: params.manifest,
+    request: params.request,
+  });
+}
+
+async function findCompletedMaterializationRepairCandidate(params: {
+  projectRoot: string;
+  manifest: Record<string, unknown>;
+  state: PaperIngestionState;
+}): Promise<PaperIngestionRequest | null> {
+  for (const request of params.state.queuedRequests) {
+    if (
+      await needsCompletedRequisitionSourceIndexRepair({
+        projectRoot: params.projectRoot,
+        manifest: params.manifest,
+        request,
+      })
+    ) {
+      return request;
+    }
+  }
+  return null;
+}
+
 function findRequestById(
   state: PaperIngestionState,
   requestId: string | null
@@ -150,7 +188,13 @@ export async function advanceLiteratureDiscoveryRequisition(params: {
   const now = params.now ?? new Date().toISOString();
   const manifest = await readManifest(projectRoot);
   const state = normalizePaperIngestionState(manifest.paper_ingestion);
-  const candidate = findAdvanceCandidate(state);
+  const candidate =
+    findAdvanceCandidate(state) ??
+    (await findCompletedMaterializationRepairCandidate({
+      projectRoot,
+      manifest,
+      state,
+    }));
   if (!candidate) {
     return summarizeResult({
       reason: "no_requisition",

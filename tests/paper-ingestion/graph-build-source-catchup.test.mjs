@@ -8,6 +8,9 @@ import path from "node:path";
 import {
   maybeMaterializeGraphBuildPaperSources,
 } from "../../tools/graph-build-source-catchup.ts";
+import {
+  advanceLiteratureDiscoveryRequisition,
+} from "../../tools/literature-discovery/requisition-executor.ts";
 import { checkGraphPresenceForWorkflow } from "../../tools/graph-presence.ts";
 
 async function makeProjectRoot() {
@@ -1223,6 +1226,202 @@ test("graph-build source catch-up refreshes remote artifacts linked from active 
   assert.equal(
     discoveryPacket.source_contracts.papernexus_remote_discovery.selected_candidate_policy,
     "source_or_import_backed_only"
+  );
+});
+
+test("literature requisition executor repairs completed remote source-index drift", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  const previousToken = process.env.PAPERNEXUS_TEST_TOKEN;
+  const server = await startFakeRemoteDiscoveryMcpServer({
+    importWorkflowPayloads: [
+      {
+        rootPath: "/srv/papernexus/corpora/GCD",
+        summary: {
+          total: 1,
+          pending: 0,
+          running: 0,
+          completed: 1,
+          failed: 0,
+          remaining: 0,
+          overallPercent: 100,
+          sequence: 9,
+          last_event_at: "2026-05-14T01:04:30.000Z",
+        },
+        tasks: [
+          {
+            id: "task-completed-1",
+            status: "completed",
+            progress: { percent: 100 },
+          },
+        ],
+      },
+    ],
+  });
+  t.after(async () => {
+    if (previousToken === undefined) {
+      delete process.env.PAPERNEXUS_TEST_TOKEN;
+    } else {
+      process.env.PAPERNEXUS_TEST_TOKEN = previousToken;
+    }
+    await server.close();
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+  process.env.PAPERNEXUS_TEST_TOKEN = "remote-test-token";
+
+  const remoteArtifactPath =
+    "researcher/literature-discovery/remote/disc-completed/PAPERNEXUS_LITERATURE_DISCOVERY.json";
+  await writeJson(path.join(projectRoot, remoteArtifactPath), {
+    contractVersion: "literature-discovery-v1",
+    runId: "disc-completed",
+    local_request_id: "req-completed",
+    topic: "CPU-only handwritten digits classification",
+    candidates: [
+      {
+        canonicalId: "arxiv:2404.12270",
+        title: "Source Backed Remote Candidate",
+        year: 2024,
+        identifiers: {
+          arxivId: "2404.12270",
+        },
+        providers: ["arxiv"],
+        source: {
+          sourceKind: "markdown",
+          sourcePath:
+            "/srv/papernexus/corpora/GCD/.papernexus/discovery/staging/md/2404.12270.md",
+          sourceProvider: "arxiv",
+          resolutionStatus: "fulltext_ready",
+          fullTextStatus: "markdown",
+          downloadStatus: "downloaded",
+          markdownUrl: "https://arxiv.org/html/2404.12270",
+        },
+        import: {
+          status: "completed",
+          taskId: "task-completed-1",
+        },
+      },
+    ],
+    coverage: {
+      verdict: "usable",
+      mergedPaperCount: 1,
+      resolvedFullTextCount: 1,
+      metadataOnlyCount: 0,
+      importedCount: 1,
+    },
+    importSummary: {
+      submitted: 1,
+      failed: 0,
+      results: [
+        {
+          canonicalId: "arxiv:2404.12270",
+          status: "completed",
+          taskId: "task-completed-1",
+        },
+      ],
+    },
+  });
+  await writeJson(path.join(projectRoot, "researcher", "PAPER_SOURCE_INDEX.json"), {
+    papers: [
+      {
+        canonical_id: "doi:10.1109/5.726791",
+        title: "Metadata Only Existing Project Paper",
+        source_kind: "metadata_only",
+        source_provider: "openalex",
+        retrieval_providers: ["openalex"],
+        resolution_status: "metadata_only_unresolved",
+      },
+    ],
+  });
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "source-catchup-demo",
+    current_stage: "idea",
+    owner_agent: "researcher",
+    workflow_control: {
+      stage: "idea",
+      owner: "researcher",
+      status: "waiting",
+      next_action: "/idea-catalyst",
+      blocking_reason: "idea_catalyst_packet_missing",
+    },
+    paper_ingestion: {
+      runtime_status: "waiting_graph",
+      last_batch_manifest_path: remoteArtifactPath,
+      queued_requests: [
+        {
+          request_id: "req-completed",
+          request_kind: "requisition",
+          status: "completed",
+          wrapper: "papernexus_remote_mcp",
+          validation_report_path: remoteArtifactPath,
+          trigger_kind: "idea_catalyst_requisition",
+          summary: "Completed requisition whose source index was later downgraded.",
+          created_at: "2026-05-14T01:02:00.000Z",
+          updated_at: "2026-05-14T01:04:00.000Z",
+          started_at: "2026-05-14T01:02:30.000Z",
+          finished_at: "2026-05-14T01:04:00.000Z",
+          last_run_id: "disc-completed",
+          last_session_key: "papernexus:remote_mcp:literature_discovery",
+          validation_status: "valid",
+          attempt_count: 1,
+          queue_progress: {
+            total: 1,
+            completed: 1,
+            failed: 0,
+            remaining: 0,
+            overall_percent: 100,
+          },
+        },
+      ],
+    },
+  });
+
+  const result = await advanceLiteratureDiscoveryRequisition({
+    projectRoot,
+    projectId: "source-catchup-demo",
+    workflowPolicy: {
+      papernexusAccessMode: "remote_mcp",
+      papernexusSharedCorpus: "GCD",
+      papernexusMcpUrl: server.url,
+      papernexusApiTokenSource: "env",
+      papernexusApiTokenEnv: "PAPERNEXUS_TEST_TOKEN",
+    },
+    now: "2026-05-14T01:05:00.000Z",
+  });
+
+  assert.equal(result.advanced, true);
+  assert.equal(result.reason, "materialized");
+  assert.equal(result.requestId, "req-completed");
+  assert.equal(result.materializedPaperCount, 1);
+  assert.equal(
+    server.requests.filter((entry) => entry.body.params.name === "literature_discovery").length,
+    0
+  );
+  assert.equal(
+    server.requests.filter((entry) => entry.body.params.name === "import_workflow").length,
+    1
+  );
+
+  const sourceIndex = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "researcher", "PAPER_SOURCE_INDEX.json"), "utf8")
+  );
+  assert.deepEqual(
+    sourceIndex.papers.map((entry) => entry.canonical_id),
+    ["arxiv:2404.12270", "doi:10.1109/5.726791"]
+  );
+  const repaired = sourceIndex.papers.find(
+    (entry) => entry.canonical_id === "arxiv:2404.12270"
+  );
+  assert.equal(repaired.source_kind, "markdown");
+  assert.match(repaired.source_path, /2404\.12270\.md$/);
+  assert.equal(repaired.import_status, "completed");
+
+  const manifest = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "PROJECT_MANIFEST.json"), "utf8")
+  );
+  assert.equal(manifest.paper_ingestion.queued_requests[0].status, "completed");
+  assert.equal(manifest.paper_ingestion.queued_requests[0].queue_progress.sequence, 9);
+  assert.equal(
+    manifest.paper_ingestion.queued_requests[0].validation_report_path,
+    remoteArtifactPath
   );
 });
 

@@ -480,6 +480,10 @@ const REMOTE_DISCOVERY_PRESERVED_SOURCE_INDEX_KEYS = [
   "downloadStatus",
   "metadata_graph_status",
   "metadataGraphStatus",
+  "import_status",
+  "importStatus",
+  "import_task_id",
+  "importTaskId",
   "supplementation",
   "candidate_markdown_url",
   "candidateMarkdownUrl",
@@ -2176,6 +2180,48 @@ async function readRemoteLiteratureDiscoveryArtifact(params: {
     };
   }
   return null;
+}
+
+export async function needsRemoteLiteratureDiscoverySourceIndexRefresh(params: {
+  projectRoot: string;
+  manifest: Record<string, unknown>;
+  request: NormalizedPaperIngestionQueuedRequest;
+}): Promise<boolean> {
+  const artifact = await readRemoteLiteratureDiscoveryArtifact({
+    projectRoot: params.projectRoot,
+    manifest: params.manifest,
+    request: params.request,
+  });
+  if (!artifact) {
+    return false;
+  }
+  const sourceEntries = buildSourceIndexEntriesFromRemoteDiscovery({
+    run: artifact.run,
+    now: "1970-01-01T00:00:00.000Z",
+  });
+  const expectedSourceBackedIds = new Set(
+    sourceEntries
+      .filter(isRemoteSourceEntrySourceBacked)
+      .map((entry) => pickString(entry, ["canonical_id", "canonicalId"]))
+      .filter((entry): entry is string => Boolean(entry))
+  );
+  if (expectedSourceBackedIds.size === 0) {
+    return false;
+  }
+  const sourceIndexRaw = await readJsonIfExists<unknown>(
+    resolvePaperSourceIndexPath(params.projectRoot)
+  );
+  const currentByCanonicalId = new Map<string, SourceIndexRawEntry>();
+  for (const entry of collectSourceIndexEntries(sourceIndexRaw)) {
+    currentByCanonicalId.set(entry.paper.canonicalId, entry);
+  }
+  for (const canonicalId of expectedSourceBackedIds) {
+    const current = currentByCanonicalId.get(canonicalId);
+    if (!current || !hasImportableSourceIndexEvidence(current)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function collectDiscoveryQueryTexts(packet: Record<string, unknown> | null): string[] {
