@@ -73,6 +73,11 @@ type FetchLike = (
 ) => Promise<FetchResponseLike>;
 
 type PaperSourceKind = "markdown" | "pdf";
+const REMOTE_LITERATURE_DISCOVERY_PACKET_PATH = path.join(
+  "researcher",
+  "literature-discovery",
+  "LITERATURE_DISCOVERY_PACKET.json"
+);
 
 type SourceIndexRawEntry = {
   key: string | null;
@@ -1773,6 +1778,105 @@ function isRemoteSourceEntrySourceBacked(entry: Record<string, unknown>): boolea
   );
 }
 
+function buildRemoteDiscoveryPacketPaper(entry: Record<string, unknown>): Record<string, unknown> {
+  return {
+    canonical_id: pickString(entry, ["canonical_id", "canonicalId"]),
+    title: pickString(entry, ["title"]),
+    arxiv_id: pickString(entry, ["arxiv_id", "arxivId"]),
+    doi: pickString(entry, ["doi"]),
+    year: pickNumberValue(entry, ["year"]),
+    venue: pickString(entry, ["venue"]),
+    source_kind: pickString(entry, ["source_kind", "sourceKind"]),
+    source_path: pickString(entry, ["source_path", "sourcePath"]),
+    source_provider: pickString(entry, ["source_provider", "sourceProvider"]),
+    resolution_status: pickString(entry, ["resolution_status", "resolutionStatus"]),
+    import_status: pickString(entry, ["import_status", "importStatus"]),
+    import_task_id: pickString(entry, ["import_task_id", "importTaskId"]),
+    discovery_run_id: pickString(entry, ["discovery_run_id", "discoveryRunId"]),
+    retrieval_providers: asStringArray(entry.retrieval_providers ?? entry.retrievalProviders),
+    source_backed: isRemoteSourceEntrySourceBacked(entry),
+    evidence_source: "papernexus_literature_discovery",
+  };
+}
+
+async function writeRemoteLiteratureDiscoveryPacket(params: {
+  projectRoot: string;
+  requestId: string | null;
+  triggerKind: string | null;
+  run: Record<string, unknown>;
+  sourceEntries: Record<string, unknown>[];
+  artifactRelativePath: string;
+  requestStatus: "running" | "completed" | "needs_repair";
+  queueProgressPayload: Record<string, unknown> | null;
+  now: string;
+}): Promise<void> {
+  const evidencePapers = params.sourceEntries
+    .filter(isRemoteSourceEntrySourceBacked)
+    .map(buildRemoteDiscoveryPacketPaper);
+  const runId = pickString(params.run, ["runId", "run_id"]);
+  await writeJsonAtomicEnsured(
+    path.join(params.projectRoot, REMOTE_LITERATURE_DISCOVERY_PACKET_PATH),
+    {
+      schema_version: 1,
+      discovery_id: params.requestId
+        ? `${params.requestId}-papernexus-remote`
+        : "papernexus-remote-literature-discovery",
+      discovery_reason: "papernexus_remote_literature_discovery",
+      trigger_kind: params.triggerKind ?? "papernexus_remote_literature_discovery",
+      status:
+        params.requestStatus === "completed"
+          ? "completed"
+          : params.requestStatus === "running"
+            ? "running"
+            : "needs_repair",
+      target_question_ids: params.requestId ? [params.requestId] : [],
+      target_domains: [],
+      candidate_queries: [],
+      candidate_papers: evidencePapers,
+      selected_papers: evidencePapers,
+      rejected_papers: [],
+      remote_candidate_count: asRecordArray(params.run.candidates).length,
+      source_backed_candidate_count: evidencePapers.length,
+      metadata_only_candidate_count: Math.max(
+        0,
+        params.sourceEntries.length - evidencePapers.length
+      ),
+      evidence_gap_closed:
+        params.requestStatus === "completed" && evidencePapers.length > 0,
+      selection_rationale:
+        evidencePapers.length > 0
+          ? "PaperNexus literature_discovery returned request-specific source/import-backed candidates."
+          : "PaperNexus literature_discovery did not return request-specific source/import-backed candidates.",
+      next_action_suggestion:
+        params.requestStatus === "running"
+          ? "Wait for PaperNexus import_workflow queue_progress before crediting the requisition as terminal."
+          : params.requestStatus === "completed"
+            ? "Rerun graph_build/frontier/idea with the request-specific PaperNexus evidence."
+            : "Repair PaperNexus literature discovery before downstream stages consume this requisition.",
+      required_stage_reentry: ["graph_build", "frontier_mapping", "idea"],
+      remote_literature_discovery: {
+        request_id: params.requestId,
+        run_id: runId,
+        artifact_path: params.artifactRelativePath,
+        queue_progress: params.queueProgressPayload,
+      },
+      source_contracts: {
+        papernexus_remote_discovery: {
+          artifact_path: params.artifactRelativePath,
+          source_index_path: "researcher/PAPER_SOURCE_INDEX.json",
+          selected_candidate_policy: "source_or_import_backed_only",
+        },
+      },
+      trigger: "graph_build_source_catchup",
+      last_updated_at: params.now,
+      packet_id: `${sanitizeIdFragment(runId ?? params.requestId ?? "papernexus-remote")}-${createHash("sha256")
+        .update(JSON.stringify(evidencePapers.map((paper) => paper.canonical_id)))
+        .digest("hex")
+        .slice(0, 12)}`,
+    }
+  );
+}
+
 async function writeRemoteDiscoveryGraphBuildReceipt(params: {
   projectRoot: string;
   requestId: string | null;
@@ -2724,6 +2828,17 @@ async function refreshExistingRemoteLiteratureDiscovery(params: {
     local_request_id: params.request.requestId,
     last_polled_at: params.now,
   });
+  await writeRemoteLiteratureDiscoveryPacket({
+    projectRoot: params.projectRoot,
+    requestId: params.request.requestId,
+    triggerKind: params.request.triggerKind,
+    run: params.run,
+    sourceEntries,
+    artifactRelativePath: params.artifactRelativePath,
+    requestStatus,
+    queueProgressPayload: queueProgressPayload.payload,
+    now: params.now,
+  });
   await writeRemoteDiscoveryGraphBuildReceipt({
     projectRoot: params.projectRoot,
     requestId: params.request.requestId,
@@ -3125,6 +3240,17 @@ async function maybeRunRemoteLiteratureDiscovery(params: {
     remote_task_ids: taskIds,
     remote_queue_progress: queueProgressPayload,
     remote_queue_progress_error: queueProgressError,
+  });
+  await writeRemoteLiteratureDiscoveryPacket({
+    projectRoot: params.projectRoot,
+    requestId,
+    triggerKind: activeRequest?.triggerKind ?? "graph_build_remote_literature_discovery",
+    run,
+    sourceEntries,
+    artifactRelativePath,
+    requestStatus,
+    queueProgressPayload,
+    now: params.now,
   });
   const reportRelativePath = path.join(
     "researcher",

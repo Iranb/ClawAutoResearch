@@ -240,6 +240,29 @@ function isActiveGraphReentryRequest(request: Record<string, unknown>): boolean 
   );
 }
 
+function isFailedGraphReentryRequest(request: Record<string, unknown>): boolean {
+  return (
+    isGraphReentryTrigger(requestTrigger(request)) &&
+    ["failed", "invalid", "dead_lettered", "deadlettered"].includes(
+      requestStatus(request) ?? ""
+    )
+  );
+}
+
+function graphReentryRequestFailureSignal(request: Record<string, unknown>): string {
+  return (
+    pickString(request, [
+      "validation_summary",
+      "validationSummary",
+      "last_error",
+      "lastError",
+      "dead_letter_reason",
+      "deadLetterReason",
+      "detail",
+    ]) ?? "workflow-owned graph enrichment requisition failed"
+  );
+}
+
 function normalizeStagePath(value: unknown): string[] {
   if (!Array.isArray(value)) {
     return [];
@@ -989,6 +1012,21 @@ async function graphReentryCompletionForStage(params: {
       contractSource: `${params.stage}_completion`,
     });
   }
+  const failedGraphReentryRequest =
+    paperIngestionRequests(params.manifest).find(isFailedGraphReentryRequest) ?? null;
+  if (failedGraphReentryRequest) {
+    return completion({
+      stage: "graph_build",
+      completionStatus: "blocked",
+      owner: "researcher",
+      nextAction: "/graph-build",
+      blockingReason: "literature_requisition_failed",
+      missingSignals: [
+        graphReentryRequestFailureSignal(failedGraphReentryRequest),
+      ],
+      contractSource: `${params.stage}_completion`,
+    });
+  }
 
   const graphPresence =
     (await readJsonIfExists<Record<string, unknown>>(
@@ -1240,6 +1278,21 @@ export async function resolveGraphCompletion(projectRoot: string): Promise<Stage
       blockingReason: "graph_reentry_request_active",
       missingSignals: [
         "workflow-owned graph enrichment requisition is still active",
+      ],
+      contractSource: "graph_completion",
+    });
+  }
+  const failedGraphReentryRequest =
+    paperIngestionRequests(manifest).find(isFailedGraphReentryRequest) ?? null;
+  if (failedGraphReentryRequest) {
+    return completion({
+      stage: "graph_build",
+      completionStatus: "blocked",
+      owner: "researcher",
+      nextAction: "/graph-build",
+      blockingReason: "literature_requisition_failed",
+      missingSignals: [
+        graphReentryRequestFailureSignal(failedGraphReentryRequest),
       ],
       contractSource: "graph_completion",
     });

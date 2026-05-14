@@ -203,6 +203,59 @@ test("graph completion waits on active workflow-owned literature requisitions", 
   );
 });
 
+test("graph completion blocks terminal failed workflow-owned literature requisitions", async (t) => {
+  const projectRoot = await makeProject(t, "openclaw-wf-stage-graph-failed-");
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "graph-failed-requisition",
+    current_stage: "graph_build",
+    owner_agent: "researcher",
+    paper_ingestion: {
+      graph_presence_status: "ready",
+      runtime_status: "blocked",
+      queued_requests: [
+        {
+          request_id: "idea-gap",
+          request_kind: "requisition",
+          trigger_kind: "idea_catalyst_requisition",
+          status: "failed",
+          validation_status: "invalid",
+          validation_summary:
+            "Current graph readiness cannot satisfy this literature requisition without request-specific source-backed coverage evidence.",
+          attempt_count: 3,
+        },
+      ],
+    },
+  });
+  await writeJson(path.join(projectRoot, "graph", "GRAPH_PRESENCE_CHECK.json"), {
+    status: "ready",
+    expected_paper_count: 37,
+    present_paper_count: 37,
+  });
+  await writeJson(path.join(projectRoot, "graph", "PAPERNEXUS_SYNC_STATE.json"), {
+    workflow_projection: {
+      can_continue: true,
+      runtime_status: "ready",
+    },
+  });
+
+  const completion = await resolveGraphCompletion(projectRoot);
+  assert.equal(completion.completionStatus, "blocked");
+  assert.equal(completion.blockingReason, "literature_requisition_failed");
+  assert.equal(completion.nextAction, "/graph-build");
+  assert.match(
+    completion.missingSignals.join("\n"),
+    /request-specific source-backed coverage evidence/i
+  );
+
+  const downstreamCompletion = await resolveWorkflowStageCompletion({
+    projectRoot,
+    stage: "frontier_mapping",
+  });
+  assert.equal(downstreamCompletion.stage, "graph_build");
+  assert.equal(downstreamCompletion.completionStatus, "blocked");
+  assert.equal(downstreamCompletion.blockingReason, "literature_requisition_failed");
+});
+
 test("graph completion rejects degraded literature reports without coverage evidence", async (t) => {
   const projectRoot = await makeProject(t, "openclaw-wf-stage-graph-invalid-report-");
   const reportPath =

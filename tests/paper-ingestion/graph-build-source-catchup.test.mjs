@@ -594,6 +594,27 @@ test("graph-build source catch-up delegates missing research and import to remot
   assert.equal(discoveryArtifact.metadataGraph.partialPaperCount, 1);
   assert.equal(discoveryArtifact.local_metadata_graph_summary.partialPaperCount, 1);
 
+  const discoveryPacket = JSON.parse(
+    await fs.readFile(
+      path.join(
+        projectRoot,
+        "researcher",
+        "literature-discovery",
+        "LITERATURE_DISCOVERY_PACKET.json"
+      ),
+      "utf8"
+    )
+  );
+  assert.equal(discoveryPacket.status, "running");
+  assert.equal(discoveryPacket.remote_candidate_count, 2);
+  assert.equal(discoveryPacket.source_backed_candidate_count, 1);
+  assert.equal(discoveryPacket.metadata_only_candidate_count, 1);
+  assert.equal(discoveryPacket.candidate_papers.length, 1);
+  assert.equal(discoveryPacket.selected_papers.length, 1);
+  assert.equal(discoveryPacket.selected_papers[0].canonical_id, "arxiv:2501.00001");
+  assert.equal(discoveryPacket.selected_papers[0].source_backed, true);
+  assert.equal(discoveryPacket.evidence_gap_closed, false);
+
   const catchupReport = JSON.parse(
     await fs.readFile(path.join(projectRoot, "graph", "GRAPH_BUILD_SOURCE_CATCHUP.json"), "utf8")
   );
@@ -1183,6 +1204,26 @@ test("graph-build source catch-up refreshes remote artifacts linked from active 
   );
   assert.equal(artifact.last_polled_at, "2026-04-24T10:05:00.000Z");
   assert.equal(artifact.remote_queue_progress.summary.completed, 1);
+
+  const discoveryPacket = JSON.parse(
+    await fs.readFile(
+      path.join(
+        projectRoot,
+        "researcher",
+        "literature-discovery",
+        "LITERATURE_DISCOVERY_PACKET.json"
+      ),
+      "utf8"
+    )
+  );
+  assert.equal(discoveryPacket.status, "completed");
+  assert.equal(discoveryPacket.evidence_gap_closed, true);
+  assert.equal(discoveryPacket.candidate_papers.length, 1);
+  assert.equal(discoveryPacket.selected_papers[0].canonical_id, "arxiv:2601.00001");
+  assert.equal(
+    discoveryPacket.source_contracts.papernexus_remote_discovery.selected_candidate_policy,
+    "source_or_import_backed_only"
+  );
 });
 
 test("graph-build source catch-up materializes planned arXiv markdown and queues PaperNexus import", async (t) => {
