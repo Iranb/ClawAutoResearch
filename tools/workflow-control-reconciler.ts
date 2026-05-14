@@ -93,6 +93,23 @@ function controlStatusFor(params: {
   return "ready";
 }
 
+function isExperimentDecisionBlocker(value: string | null | undefined): boolean {
+  const blocker = normalizeStage(value);
+  return Boolean(
+    blocker &&
+      [
+        "experiment_repair_implementation",
+        "launch_pending",
+        "continue_tuning",
+        "require_multi_seed",
+        "reconcile_runtime",
+        "rollback_to_plan",
+        "rollback_to_idea",
+        "experiment_search_stop_or_analysis_decision_pending",
+      ].includes(blocker)
+  );
+}
+
 function repairProjection(params: {
   manifest: Record<string, unknown>;
   completion: StageCompletion;
@@ -232,7 +249,8 @@ export async function reconcileWorkflowControl(params: {
     : resolvedStageCompletion;
   const canonicalCompletionOverride =
     stageCompletion.stage !== stage ||
-    stageCompletion.blockingReason === "experiment_repair_implementation" ||
+    (stageCompletion.stage === "experiment" &&
+      isExperimentDecisionBlocker(stageCompletion.blockingReason)) ||
     stageCompletion.completionStatus === "complete";
   const effectiveStageCompletion: StageCompletion = {
     ...stageCompletion,

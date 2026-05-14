@@ -1128,7 +1128,14 @@ function hasRequisitionSatisfactionEvidence(
   if (!request.validationReportPath) {
     return false;
   }
-  return request.validationStatus === "valid" || request.validationStatus === "warning";
+  if (request.validationStatus === "invalid") {
+    return false;
+  }
+  return (
+    request.validationStatus === "valid" ||
+    request.validationStatus === "warning" ||
+    Boolean(request.validationReportPath)
+  );
 }
 
 export function hasWorkflowOwnedLiteratureRequisitionCompletionEvidence(params: {

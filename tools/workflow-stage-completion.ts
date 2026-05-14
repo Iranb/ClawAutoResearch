@@ -25,6 +25,7 @@ import { normalizeSurveyReviewState } from "./workflow-guard-state/survey-review
 import { normalizeBrainstormCycleState } from "./workflow-guard-state/research-loop-state";
 import {
   normalizeFigureQcState,
+  normalizeReviewIssueTrackerState,
   normalizeWritePackageState,
 } from "./workflow-guard-state/execution-state";
 import { normalizeWritingContractState } from "./workflow-guard-state/writing-contract";
@@ -172,6 +173,16 @@ function readyLike(value: unknown): boolean {
   return normalized ? READY_VALUES.has(normalized) : false;
 }
 
+function experimentEvidenceReadyLike(value: unknown): boolean {
+  const normalized = normalizeStage(value);
+  return Boolean(
+    normalized &&
+      (READY_VALUES.has(normalized) ||
+        /^complete(?:_|$)/.test(normalized) ||
+        /^completed(?:_|$)/.test(normalized))
+  );
+}
+
 function failureLike(value: unknown): boolean {
   const normalized = normalizeStage(value);
   return normalized ? FAILURE_VALUES.has(normalized) : false;
@@ -202,6 +213,19 @@ function recordList(value: unknown): Record<string, unknown>[] {
 function hasRecordFields(value: unknown): boolean {
   const record = asRecord(value);
   return Boolean(record && Object.keys(record).length > 0);
+}
+
+async function readExperimentSearchAuthority(
+  projectRoot: string,
+  manifest: Record<string, unknown>
+): Promise<Record<string, unknown>> {
+  const fileState = await readJsonIfExists<Record<string, unknown>>(
+    path.join(projectRoot, "researcher", "EXPERIMENT_SEARCH.json")
+  );
+  return {
+    ...(asRecord(manifest.experiment_search ?? manifest.experimentSearch) ?? {}),
+    ...(asRecord(fileState) ?? {}),
+  };
 }
 
 function paperIngestionRequests(
@@ -473,6 +497,31 @@ function figureQcBlocks(manifest: Record<string, unknown>): string | null {
     }
   }
   return null;
+}
+
+function reviewIssueTrackerBlocksWrite(manifest: Record<string, unknown>): string | null {
+  const tracker = normalizeReviewIssueTrackerState(
+    manifest.review_issue_tracker ?? manifest.reviewIssueTracker
+  );
+  if (tracker.openCounts.critical > 0 || tracker.openCounts.high > 0) {
+    return "review_issue_tracker_blocking_issues";
+  }
+  const hasBlockingOpenIssue = tracker.issues.some((issue) => {
+    const severity = normalizeStage(issue.severity);
+    if (severity !== "critical" && severity !== "high") {
+      return false;
+    }
+    const status = normalizeStage(issue.status) ?? "open";
+    return ![
+      "closed",
+      "resolved",
+      "done",
+      "complete",
+      "completed",
+      "waived",
+    ].includes(status);
+  });
+  return hasBlockingOpenIssue ? "review_issue_tracker_blocking_issues" : null;
 }
 
 function paperStoryBlocksWrite(manifest: Record<string, unknown>): string | null {
@@ -1338,14 +1387,7 @@ export async function resolveExperimentCompletion(
     (await readJsonIfExists<Record<string, unknown>>(
       path.join(projectRoot, "PROJECT_MANIFEST.json")
     )) ?? {};
-  const fileState =
-    (await readJsonIfExists<Record<string, unknown>>(
-      path.join(projectRoot, "researcher", "EXPERIMENT_SEARCH.json")
-    )) ?? {};
-  const experimentSearch = {
-    ...(asRecord(manifest.experiment_search) ?? {}),
-    ...fileState,
-  };
+  const experimentSearch = await readExperimentSearchAuthority(projectRoot, manifest);
   const searchSpecPath =
     pickString(experimentSearch, ["search_spec_path", "searchSpecPath"]) ??
     "planner/EXPERIMENT_SEARCH_SPEC.json";
@@ -1374,17 +1416,55 @@ export async function resolveExperimentCompletion(
   });
   const status = normalizeStage(experimentSearch.status) ?? "not_started";
   const experimentSearchStarted = !["missing", "not_started", "pending"].includes(status);
+  const lastDecision = normalizeStage(
+    experimentSearch.last_decision ?? experimentSearch.lastDecision
+  );
+  const multiSeedStatus =
+    normalizeStage(
+      experimentSearch.multi_seed_status ?? experimentSearch.multiSeedStatus
+    ) ?? "pending";
+  const multiSeedReady = experimentEvidenceReadyLike(multiSeedStatus);
+  const plotPackStatus = normalizeStage(
+    experimentSearch.plot_pack_status ?? experimentSearch.plotPackStatus
+  );
+  const plotPackPath = pickString(experimentSearch, [
+    "plot_pack_path",
+    "plotPackPath",
+  ]);
+  const plotPackReady =
+    readyLike(plotPackStatus) ||
+    Boolean(plotPackPath && (await artifactExists(projectRoot, plotPackPath)));
+  const executionProof = await collectExecutionProofReceipts({
+    projectRoot,
+    experimentLedger,
+    manifest,
+  });
+
+  if (decisionSummary.decision === "launch_pending" && !experimentSearchStarted) {
+    return completion({
+      stage: "experiment",
+      completionStatus: "incomplete",
+      owner: "researcher",
+      nextAction:
+        "Run /experiment-phase to orchestrate the first baseline-faithful launch group before handing bounded execution to Coder.",
+      blockingReason: "launch_pending",
+      contractSource: "experiment_completion",
+    });
+  }
+
   if (
     decisionSummary.decision === "repair_implementation" &&
     experimentSearchStarted &&
     status !== "ready_for_analysis"
   ) {
+    const reviewBlockerRepair = decisionSummary.validationStage === "review_blockers";
     return completion({
       stage: "experiment",
       completionStatus: "incomplete",
-      owner: "coder",
-      nextAction:
-        "Wake Coder to repair the bounded runtime / implementation issue, refresh the experiment bundle proof, and rerun the comparable candidate before analysis.",
+      owner: reviewBlockerRepair ? "researcher" : "coder",
+      nextAction: reviewBlockerRepair
+        ? "Resolve the outstanding experiment review blockers before widening the search or treating current evidence as trustworthy."
+        : "Wake Coder to repair the bounded runtime / implementation issue, refresh the experiment bundle proof, and rerun the comparable candidate before analysis.",
       blockingReason: "experiment_repair_implementation",
       contractSource: "experiment_completion",
     });
@@ -1404,28 +1484,6 @@ export async function resolveExperimentCompletion(
       contractSource: "experiment_completion",
     });
   }
-  const lastDecision = normalizeStage(
-    experimentSearch.last_decision ?? experimentSearch.lastDecision
-  );
-  const multiSeedStatus =
-    normalizeStage(
-      experimentSearch.multi_seed_status ?? experimentSearch.multiSeedStatus
-    ) ?? "pending";
-  const plotPackStatus = normalizeStage(
-    experimentSearch.plot_pack_status ?? experimentSearch.plotPackStatus
-  );
-  const plotPackPath = pickString(experimentSearch, [
-    "plot_pack_path",
-    "plotPackPath",
-  ]);
-  const plotPackReady =
-    readyLike(plotPackStatus) ||
-    Boolean(plotPackPath && (await artifactExists(projectRoot, plotPackPath)));
-  const executionProof = await collectExecutionProofReceipts({
-    projectRoot,
-    experimentLedger,
-    manifest,
-  });
 
   if (failureLike(status)) {
     return completion({
@@ -1438,7 +1496,22 @@ export async function resolveExperimentCompletion(
     });
   }
 
-  if (status === "ready_for_analysis" && readyLike(multiSeedStatus) && plotPackReady) {
+  if (
+    decisionSummary.decision === "reconcile_runtime" &&
+    experimentSearchStarted &&
+    status !== "ready_for_analysis"
+  ) {
+    return completion({
+      stage: "experiment",
+      completionStatus: "incomplete",
+      owner: "researcher",
+      nextAction: "/monitor-experiment",
+      blockingReason: "reconcile_runtime",
+      contractSource: "experiment_completion",
+    });
+  }
+
+  if (status === "ready_for_analysis" && multiSeedReady && plotPackReady) {
     if (!executionProof.ready) {
       return completion({
         stage: "experiment",
@@ -1473,13 +1546,50 @@ export async function resolveExperimentCompletion(
     });
   }
 
+  if (
+    decisionSummary.decision === "continue_tuning" &&
+    experimentSearchStarted &&
+    status !== "ready_for_analysis" &&
+    !multiSeedReady
+  ) {
+    return completion({
+      stage: "experiment",
+      completionStatus: "incomplete",
+      owner: "coder",
+      nextAction:
+        "Run /search-experiment and continue the approved bounded search loop from the current incumbent without widening the envelope.",
+      blockingReason: "continue_tuning",
+      contractSource: "experiment_completion",
+    });
+  }
+
+  if (
+    decisionSummary.decision === "require_multi_seed" &&
+    experimentSearchStarted &&
+    status !== "ready_for_analysis" &&
+    !multiSeedReady
+  ) {
+    return completion({
+      stage: "experiment",
+      completionStatus: "incomplete",
+      owner: "coder",
+      nextAction:
+        "Run /search-experiment for the required multi-seed validation before analysis.",
+      blockingReason: "require_multi_seed",
+      contractSource: "experiment_completion",
+    });
+  }
+
   const needsMultiSeed =
-    multiSeedStatus === "pending" ||
-    multiSeedStatus === "running" ||
-    lastDecision === "require_multi_seed" ||
-    lastDecision === "continue_tuning";
+    !multiSeedReady &&
+    (multiSeedStatus === "pending" ||
+      multiSeedStatus === "running" ||
+      lastDecision === "require_multi_seed" ||
+      lastDecision === "continue_tuning");
   const needsPlotPack =
-    status === "ready_for_analysis" && readyLike(multiSeedStatus) && !plotPackReady;
+    status === "ready_for_analysis" && multiSeedReady && !plotPackReady;
+  const needsStopOrAnalysisDecision =
+    multiSeedReady && status !== "ready_for_analysis" && !needsPlotPack;
 
   return completion({
     stage: "experiment",
@@ -1490,6 +1600,8 @@ export async function resolveExperimentCompletion(
       ? "multi_seed_validation_pending"
       : needsPlotPack
         ? "plot_pack_aggregation_pending"
+      : needsStopOrAnalysisDecision
+        ? "experiment_search_stop_or_analysis_decision_pending"
       : "experiment_reconciliation_pending",
     contractSource: "experiment_completion",
   });
@@ -1908,14 +2020,13 @@ export async function resolveSurveyReviewCompletion(
   });
 }
 
-function resolveExperimentPromotionGateBlocker(
+async function resolveExperimentPromotionGateBlocker(
+  projectRoot: string,
   manifest: Record<string, unknown>,
   phase: "analysis" | "writing"
-): string | null {
-  const experimentSearch = asRecord(
-    manifest.experiment_search ?? manifest.experimentSearch
-  );
-  if (!experimentSearch) {
+): Promise<string | null> {
+  const experimentSearch = await readExperimentSearchAuthority(projectRoot, manifest);
+  if (!hasRecordFields(experimentSearch)) {
     return null;
   }
   const researchProgram = asRecord(
@@ -1936,8 +2047,13 @@ function resolveExperimentPromotionGateBlocker(
   const multiSeedStatus = normalizeStage(
     experimentSearch.multi_seed_status ?? experimentSearch.multiSeedStatus
   );
-  const multiSeedReady = searchStatus === "ready_for_analysis" && readyLike(multiSeedStatus);
+  const multiSeedEvidenceReady = experimentEvidenceReadyLike(multiSeedStatus);
+  const multiSeedReady =
+    searchStatus === "ready_for_analysis" && multiSeedEvidenceReady;
   if (!multiSeedReady) {
+    if (multiSeedEvidenceReady && searchStatus !== "ready_for_analysis") {
+      return "experiment_search_stop_or_analysis_decision_pending";
+    }
     return phase === "writing"
       ? "experiment_multi_seed_validation_pending"
       : "multi_seed_validation_pending";
@@ -1956,7 +2072,9 @@ function resolveExperimentPromotionGateBlocker(
   const plotPackStatus = normalizeStage(
     experimentSearch.plot_pack_status ?? experimentSearch.plotPackStatus
   );
-  return readyLike(plotPackStatus) ? null : "experiment_plot_pack_pending";
+  return experimentEvidenceReadyLike(plotPackStatus)
+    ? null
+    : "experiment_plot_pack_pending";
 }
 
 export async function resolveAnalysisCompletion(projectRoot: string): Promise<StageCompletion> {
@@ -1983,7 +2101,8 @@ export async function resolveAnalysisCompletion(projectRoot: string): Promise<St
   );
   const resultsReady =
     gitManagedLedgerReady || resultsFileReady || executionProof.ready;
-  const promotionGateBlocker = resolveExperimentPromotionGateBlocker(
+  const promotionGateBlocker = await resolveExperimentPromotionGateBlocker(
+    projectRoot,
     manifest,
     "analysis"
   );
@@ -2075,7 +2194,8 @@ export async function resolveWritingCompletion(
     )) ?? {};
   const paperReady = await nonEmptyText("academic_writer/paper/main.tex", projectRoot);
   const qualityBlocker = paperQcBlocks(manifest);
-  const promotionGateBlocker = resolveExperimentPromotionGateBlocker(
+  const promotionGateBlocker = await resolveExperimentPromotionGateBlocker(
+    projectRoot,
     manifest,
     "writing"
   );
@@ -2097,6 +2217,8 @@ export async function resolveWritingCompletion(
     hasRecordFields(manifest.survey_review ?? manifest.surveyReview);
   const paperStoryBlocker =
     stage === "write" && !surveyWorkflow ? paperStoryBlocksWrite(manifest) : null;
+  const reviewIssueBlocker =
+    stage === "write" ? reviewIssueTrackerBlocksWrite(manifest) : null;
   const proofAppendixBlocker =
     stage === "write" && !surveyWorkflow
       ? await proofAppendixBlocksWrite(projectRoot, manifest)
@@ -2105,6 +2227,7 @@ export async function resolveWritingCompletion(
   const writeRepairBlocker =
     hookGate.blockingReason ??
     paperStoryBlocker ??
+    reviewIssueBlocker ??
     writePackageBlocker ??
     citationBlocker ??
     proofAppendixBlocker ??
@@ -2121,6 +2244,7 @@ export async function resolveWritingCompletion(
     hookGate.blockingReason ??
     effectivePromotionGateBlocker ??
     paperStoryBlocker ??
+    reviewIssueBlocker ??
     writePackageBlocker ??
     citationBlocker ??
     proofAppendixBlocker ??
@@ -2410,7 +2534,8 @@ async function resolveDoneCompletion(projectRoot: string): Promise<StageCompleti
     (await readJsonIfExists<Record<string, unknown>>(
       path.join(projectRoot, "PROJECT_MANIFEST.json")
     )) ?? {};
-  const promotionGateBlocker = resolveExperimentPromotionGateBlocker(
+  const promotionGateBlocker = await resolveExperimentPromotionGateBlocker(
+    projectRoot,
     manifest,
     "analysis"
   );

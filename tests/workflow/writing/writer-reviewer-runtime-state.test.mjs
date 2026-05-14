@@ -269,6 +269,32 @@ async function seedProjectReadyForWrite(projectRoot) {
       body_safe: true,
     }
   );
+  for (const fileName of [
+    "baseline_summary.json",
+    "research_summary.json",
+    "ablation_summary.json",
+    "evaluation_summary.json",
+  ]) {
+    await writeJson(path.join(projectRoot, "researcher", fileName), {
+      status: "ready",
+      track_id: trackId,
+    });
+  }
+  await writeJson(path.join(projectRoot, "academic_writer", "FIGURE_PACK.json"), {
+    status: "ready",
+    figures: [{ figure_id: "fig-1", evidence_pointer: "graph/ANCHOR_INDEX.md#method-anchor" }],
+  });
+  await writeJson(path.join(projectRoot, "academic_writer", "TABLE_PACK.json"), {
+    status: "ready",
+    tables: [{ table_id: "tab-1", evidence_pointer: "graph/ANCHOR_INDEX.md#results-anchor" }],
+  });
+  await writeJson(
+    path.join(projectRoot, "academic_writer", "CITATION_CANDIDATES.json"),
+    {
+      status: "ready",
+      candidates: [{ citation_id: "demo2026", source: "refs.bib" }],
+    }
+  );
 
   await writeText(path.join(projectRoot, "reviewer", "REVIEW_REPORT.md"));
   await writeJson(path.join(projectRoot, "reviewer", "SURFACE_REVIEW.json"), {
@@ -477,6 +503,8 @@ async function seedProjectReadyForWrite(projectRoot) {
       table_pack_path: "academic_writer/TABLE_PACK.json",
       proof_packet_dir: "analyzer/proof-packets",
       citation_candidates_path: "academic_writer/CITATION_CANDIDATES.json",
+      source_artifact_count: 8,
+      derived_artifact_count: 4,
     },
     paper_story_state: {
       status: "ready",
@@ -1206,7 +1234,7 @@ test("ordinary paper line write-stage gate blocks only on hard review/QC failure
     queueMailbox: false,
   });
 
-  assert.equal(ready.stageAfter, "write");
+  assert.equal(ready.stageAfter, "submit");
   assert.deepEqual(ready.missingStageSignals, []);
   assert.ok(
     !ready.missingStageSignals.some((signal) =>

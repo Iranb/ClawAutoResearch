@@ -77,6 +77,7 @@ test("completed survey_review advances to survey-mode write without code or expe
       topic: "GCD survey",
       status: "completed",
       gate_ready: true,
+      graph_grounded_brief_ready: true,
       coverage_status: "ready",
       taxonomy_stability_status: "stable",
       representative_methods_status: "ready",

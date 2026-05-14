@@ -26,6 +26,8 @@ type ManifestLike = Record<string, unknown>;
 
 const CODE_EXPERIMENT_ARTIFACTS = {
   index: "coder/EXPERIMENT_INDEX.md",
+  orchestratorDispatch: "orchestrator/EXPERIMENT_DISPATCH.json",
+  coderDispatch: "coder/EXPERIMENT_DISPATCH.json",
   implementationEvidence: "coder/IMPLEMENTATION_EVIDENCE_PACKET.json",
   baselineAlignment: "coder/BASELINE_ALIGNMENT_PACKET.json",
   hyperparameterSourceMap: "coder/HYPERPARAMETER_SOURCE_MAP.json",
@@ -2367,6 +2369,67 @@ function buildExperimentIndex(params: {
 `;
 }
 
+function buildExperimentDispatchContract(params: {
+  projectRoot: string;
+  manifest: ManifestLike;
+  track: ResearchProgramTrack;
+  experimentManifest: Record<string, unknown>;
+  experimentId: string;
+  bundleRelativeDir: string;
+  command: string;
+  profile: CodeExperimentProfile;
+  trigger?: string | null;
+  agentId?: string | null;
+  now: string;
+}): Record<string, unknown> {
+  const projectId =
+    pickString(params.manifest, ["project_id", "projectId", "id"]) ??
+    path.basename(params.projectRoot) ??
+    "local-autoresearch-project";
+  const manifestPath = `${params.bundleRelativeDir}/${CODE_EXPERIMENT_ARTIFACTS.manifest}`;
+  return {
+    schema_version: 1,
+    authority: "experiment_dispatch",
+    status: "dispatched",
+    project_id: projectId,
+    track_id: params.track.trackId,
+    experiment_id: params.experimentId,
+    dispatched_to: "coder",
+    dispatched_by: params.agentId ?? "workflow_guard",
+    dispatch_trigger: params.trigger ?? null,
+    dispatch_reason: "code_experiment_bundle_ready",
+    bundle_dir: params.bundleRelativeDir,
+    experiment_manifest_path: manifestPath,
+    experiment_index_path: CODE_EXPERIMENT_ARTIFACTS.index,
+    execution_command: params.command,
+    result_artifact_path: `${params.bundleRelativeDir}/RESULT_SUMMARY.json`,
+    innovation_packet_path: "orchestrator/INNOVATION_PACKET.json",
+    upstream_contract_paths: [
+      "researcher/idea-catalyst/IDEA_CATALYST_CONTRACT.json",
+      "graph/GRAPH_BUILD_DECISION.json",
+      "orchestrator/INNOVATION_PACKET.json",
+    ],
+    runnable_artifact_paths: [
+      `${params.bundleRelativeDir}/${CODE_EXPERIMENT_ARTIFACTS.train}`,
+      `${params.bundleRelativeDir}/${params.profile.protocol}`,
+      `${params.bundleRelativeDir}/${params.profile.dataset}`,
+      manifestPath,
+      CODE_EXPERIMENT_ARTIFACTS.index,
+    ],
+    dispatch_artifact_paths: [
+      CODE_EXPERIMENT_ARTIFACTS.orchestratorDispatch,
+      CODE_EXPERIMENT_ARTIFACTS.coderDispatch,
+    ],
+    implementation_type:
+      pickString(params.experimentManifest, [
+        "implementation_type",
+        "implementationType",
+      ]) ?? params.profile.implementationType,
+    created_at: params.now,
+    updated_at: params.now,
+  };
+}
+
 async function repairExistingCodeBundleForTrack(params: {
   projectRoot: string;
   manifest: ManifestLike;
@@ -2835,10 +2898,34 @@ export async function materializeCodeExperimentBundleImpl(params: {
   );
   generatedFiles.push(CODE_EXPERIMENT_ARTIFACTS.index);
 
+  const now = new Date().toISOString();
+  const dispatchContract = buildExperimentDispatchContract({
+    projectRoot,
+    manifest,
+    track,
+    experimentManifest,
+    experimentId: resolvedExperimentId,
+    bundleRelativeDir,
+    command: executionCommand,
+    profile,
+    trigger: params.trigger,
+    agentId: params.agentId,
+    now,
+  });
+  await writeJsonEnsured(
+    path.join(projectRoot, CODE_EXPERIMENT_ARTIFACTS.orchestratorDispatch),
+    dispatchContract
+  );
+  await writeJsonEnsured(
+    path.join(projectRoot, CODE_EXPERIMENT_ARTIFACTS.coderDispatch),
+    dispatchContract
+  );
+  generatedFiles.push(CODE_EXPERIMENT_ARTIFACTS.orchestratorDispatch);
+  generatedFiles.push(CODE_EXPERIMENT_ARTIFACTS.coderDispatch);
+
   const currentStage = normalizeStage(manifest.current_stage);
   const isCodeStage = currentStage === "code";
   const orchestration = normalizeOrchestrationState(manifest.orchestration_state);
-  const now = new Date().toISOString();
   manifest.orchestration_state = serializeOrchestrationState({
     ...orchestration,
     status: ["running", "waiting", "ready"].includes(

@@ -411,6 +411,16 @@ function buildCanonicalStageSignals(params: {
   if (params.missingSignals && params.missingSignals.length > 0) {
     return params.missingSignals;
   }
+  if (
+    params.stage === "experiment" &&
+    canonicalExperimentDecisionFromBlocker({
+      stageBefore: "experiment",
+      stageAfter: params.stage,
+      blockingReason: params.blockingReason,
+    })
+  ) {
+    return [];
+  }
   if (params.blockingReason) {
     return [params.blockingReason];
   }
@@ -529,6 +539,37 @@ function canDispatchOwnerStageWithMissingSignals(params: {
     return false;
   }
   return SELF_DRIVEN_RESEARCHER_STAGES.has(params.stage);
+}
+
+function canonicalExperimentDecisionFromBlocker(params: {
+  stageBefore: string | null;
+  stageAfter: string | null;
+  blockingReason: unknown;
+}): string | null {
+  if (params.stageBefore !== "experiment") {
+    return null;
+  }
+  const blocker = normalizeStage(params.blockingReason);
+  if (blocker === "experiment_repair_implementation") {
+    return "repair_implementation";
+  }
+  if (
+    blocker === "launch_pending" ||
+    blocker === "continue_tuning" ||
+    blocker === "require_multi_seed" ||
+    blocker === "reconcile_runtime" ||
+    blocker === "rollback_to_plan" ||
+    blocker === "rollback_to_idea"
+  ) {
+    return blocker;
+  }
+  if (params.stageAfter === "plan") {
+    return "rollback_to_plan";
+  }
+  if (params.stageAfter === "idea") {
+    return "rollback_to_idea";
+  }
+  return null;
 }
 
 type AutoIteratorDeps = {
@@ -1557,22 +1598,22 @@ export async function runWorkflowAutoIteratorImpl(
     }) &&
     normalizeStage(experimentSearchStateBeforeAdvance?.status) !==
       "ready_for_analysis";
-  const canonicalExperimentDecision =
-    stageBefore === "experiment" && canonicalControl.blocking_reason === "experiment_repair_implementation"
-      ? "repair_implementation"
-      : stageBefore === "experiment" &&
-          (canonicalControl.blocking_reason === "rollback_to_plan" ||
-            canonicalControl.blocking_reason === "rollback_to_idea")
-        ? canonicalControl.blocking_reason
-        : stageBefore === "experiment" && stageAfter === "plan"
-          ? "rollback_to_plan"
-          : stageBefore === "experiment" && stageAfter === "idea"
-            ? "rollback_to_idea"
-        : null;
+  const canonicalExperimentDecision = canonicalExperimentDecisionFromBlocker({
+    stageBefore,
+    stageAfter,
+    blockingReason: canonicalControl.blocking_reason,
+  });
   const experimentDecision: string | null = canonicalExperimentDecision;
   const experimentDecisionRationale: string | null =
     canonicalExperimentDecision === "repair_implementation"
       ? "Canonical experiment completion routed bounded implementation repair to Coder."
+      : canonicalExperimentDecision === "launch_pending"
+        ? "Canonical experiment completion routed first launch orchestration to Researcher."
+      : canonicalExperimentDecision === "continue_tuning" ||
+          canonicalExperimentDecision === "require_multi_seed"
+        ? "Canonical experiment completion routed bounded experiment search work to Coder."
+      : canonicalExperimentDecision === "reconcile_runtime"
+        ? "Canonical experiment completion routed runtime reconciliation to Researcher."
       : canonicalExperimentDecision === "rollback_to_plan" ||
           canonicalExperimentDecision === "rollback_to_idea"
         ? "Canonical experiment completion selected a rollback target."

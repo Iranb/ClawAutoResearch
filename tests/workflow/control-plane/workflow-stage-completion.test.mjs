@@ -600,6 +600,60 @@ test("experiment completion remains waiting while multi seed validation is pendi
   assert.equal(ready.nextAction, "/analyze-results");
 });
 
+test("experiment completion trusts durable search authority before stale manifest projection", async (t) => {
+  const projectRoot = await makeProject(t, "openclaw-wf-stage-experiment-authority-");
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "experiment-authority",
+    current_stage: "experiment",
+    owner_agent: "researcher",
+    experiment_search: {
+      status: "ready_for_analysis",
+      last_decision: "continue_tuning",
+      multi_seed_status: "pending",
+      plot_pack_status: "pending",
+    },
+  });
+  await writeJson(path.join(projectRoot, "researcher", "EXPERIMENT_SEARCH.json"), {
+    status: "searching",
+    last_decision: "continue_tuning",
+    multi_seed_status: "completed_3_seeds",
+    baseline_fairness_status: "clean",
+    implementation_confidence: "trusted",
+    ablation_status: "complete",
+    innovation_status: "supported",
+    evidence_cleanliness_status: "clean",
+    plot_pack_status: "complete",
+    incumbent_experiment_id: "exp-2",
+    one_change_signature: "add consistency filtering",
+    one_change_validation_status: "ready",
+    completed_experiment_ids: ["exp-1", "exp-2"],
+    completed_ablations: [
+      "minus_class_balance_debiasing",
+      "minus_consistency_filtering",
+    ],
+    recommended_next_action:
+      "Proceed to analysis phase or run additional ablations.",
+  });
+
+  const completion = await resolveExperimentCompletion(projectRoot);
+  assert.equal(completion.completionStatus, "incomplete");
+  assert.equal(
+    completion.blockingReason,
+    "experiment_search_stop_or_analysis_decision_pending"
+  );
+
+  const reconciled = await reconcileWorkflowControl({
+    projectRoot,
+    now: "2026-05-14T08:24:00.000Z",
+  });
+  assert.equal(reconciled.contract.stage, "experiment");
+  assert.equal(reconciled.contract.status, "waiting");
+  assert.equal(
+    reconciled.contract.blocking_reason,
+    "experiment_search_stop_or_analysis_decision_pending"
+  );
+});
+
 test("topic search and literature review require discovery packet evidence", async (t) => {
   const projectRoot = await makeProject(t, "openclaw-wf-stage-literature-");
   await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
@@ -989,6 +1043,52 @@ test("analysis completion blocks promoted trials until multi-seed gate is ready"
 
   const ready = await resolveAnalysisCompletion(projectRoot);
   assert.equal(ready.completionStatus, "complete");
+});
+
+test("analysis promotion gate uses durable experiment search authority before stale projection", async (t) => {
+  const projectRoot = await makeProject(t, "openclaw-wf-stage-analysis-authority-");
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "analysis-authority",
+    current_stage: "analysis",
+    owner_agent: "analyzer",
+    experiment_search: {
+      status: "ready_for_analysis",
+      multi_seed_status: "pending",
+    },
+    research_program: {
+      global_constraints: {
+        must_run_multi_seed_before_analysis: true,
+      },
+    },
+  });
+  await writeJson(path.join(projectRoot, "researcher", "EXPERIMENT_SEARCH.json"), {
+    status: "ready_for_analysis",
+    multi_seed_status: "completed_3_seeds",
+    plot_pack_status: "complete",
+  });
+  await writeText(path.join(projectRoot, "analyzer", "ANALYSIS_REPORT.md"), "# Analysis\n");
+  await writeJson(path.join(projectRoot, "researcher", "EXPERIMENT_LEDGER.json"), {
+    experiments: [
+      {
+        experiment_id: "exp-authority",
+        status: "completed",
+        key_metric: { name: "h_score", value: 0.64 },
+        metadata: {
+          trial_contract: {
+            worktree_path: "/tmp/exp-authority",
+            commit_hash: "abc1234",
+            fixed_budget_minutes: 5,
+            seed: 42,
+            decision: "advance",
+          },
+        },
+      },
+    ],
+  });
+
+  const completion = await resolveAnalysisCompletion(projectRoot);
+  assert.equal(completion.completionStatus, "complete");
+  assert.equal(completion.blockingReason, null);
 });
 
 test("survey review completion requires the canonical survey gate and brief evidence", async (t) => {

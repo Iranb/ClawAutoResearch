@@ -1661,6 +1661,43 @@ function isUnlaunchedLiteratureDiscoveryRequisition(
   );
 }
 
+function hasValidLiteratureRequisitionSatisfactionReport(
+  report: Record<string, unknown> | null
+): boolean {
+  if (!report) {
+    return false;
+  }
+  const status = readManifestStatus(report, ["status"]);
+  const decision = readManifestStatus(report, ["decision"]);
+  const evidenceGapClosed =
+    readBoolean(report.evidence_gap_closed) ??
+    readBoolean(report.evidenceGapClosed);
+  const sourceBackedCount =
+    readManifestNumber(report, ["source_backed_count", "sourceBackedCount"]) ?? 0;
+  return (
+    (status === "valid" || status === "warning") &&
+    (evidenceGapClosed === true ||
+      decision === "satisfied_remote_import_evidence" ||
+      sourceBackedCount > 0)
+  );
+}
+
+async function readValidLiteratureRequisitionSatisfactionReport(params: {
+  projectRoot: string;
+  request: ReturnType<typeof normalizePaperIngestionState>["queuedRequests"][number];
+}): Promise<{ path: string; report: Record<string, unknown> } | null> {
+  const reportPath = deriveLiteratureDiscoverySatisfactionReportPath(params.request);
+  const resolvedReportPath = resolveProjectArtifactPath(params.projectRoot, reportPath);
+  if (!resolvedReportPath) {
+    return null;
+  }
+  const report = await readJsonIfExists<Record<string, unknown>>(resolvedReportPath);
+  if (!report || !hasValidLiteratureRequisitionSatisfactionReport(report)) {
+    return null;
+  }
+  return { path: reportPath, report };
+}
+
 async function reconcileStaleLiteratureDiscoveryRequisition(params: {
   projectRoot: string;
   manifest: ManifestLike;
@@ -1828,6 +1865,23 @@ async function reconcileUnverifiedCompletedLiteratureDiscoveryRequisition(params
   if (invalidRequests.length === 0) {
     return { manifest: params.manifest, updated: false };
   }
+  const now = new Date().toISOString();
+  const validReportsByRequestId = new Map<
+    string,
+    { path: string; report: Record<string, unknown> }
+  >();
+  const requestsMissingEvidence = [];
+  for (const request of invalidRequests) {
+    const validReport = await readValidLiteratureRequisitionSatisfactionReport({
+      projectRoot: params.projectRoot,
+      request,
+    });
+    if (validReport) {
+      validReportsByRequestId.set(request.requestId, validReport);
+    } else {
+      requestsMissingEvidence.push(request);
+    }
+  }
 
   const packetPath = resolveProjectArtifactPath(
     params.projectRoot,
@@ -1846,12 +1900,11 @@ async function reconcileUnverifiedCompletedLiteratureDiscoveryRequisition(params
       "graph_presence_report_path",
       "graphPresenceReportPath",
     ]) ?? "graph/GRAPH_PRESENCE_CHECK.json";
-  const now = new Date().toISOString();
   const updatedRequestIds = new Set(
-    invalidRequests.map((request) => request.requestId)
+    requestsMissingEvidence.map((request) => request.requestId)
   );
 
-  for (const request of invalidRequests) {
+  for (const request of requestsMissingEvidence) {
     const reportPath = deriveLiteratureDiscoverySatisfactionReportPath(request);
     const resolvedReportPath = resolveProjectArtifactPath(params.projectRoot, reportPath);
     if (!resolvedReportPath) {
@@ -1888,6 +1941,24 @@ async function reconcileUnverifiedCompletedLiteratureDiscoveryRequisition(params
   }
 
   const queuedRequests = state.queuedRequests.map((request) => {
+    const validReport = validReportsByRequestId.get(request.requestId);
+    if (validReport) {
+      return {
+        ...request,
+        status: "completed" as const,
+        updatedAt: now,
+        finishedAt: request.finishedAt ?? now,
+        lastError: null,
+        validationStatus: "valid" as const,
+        validationSummary:
+          readManifestString(validReport.report, ["reason"]) ??
+          "Existing request-scoped literature requisition satisfaction report is valid.",
+        validationReportPath: validReport.path,
+        nextRetryAt: null,
+        deadLetterAt: null,
+        deadLetterReason: null,
+      };
+    }
     if (!updatedRequestIds.has(request.requestId)) {
       return request;
     }
@@ -1923,9 +1994,12 @@ async function reconcileUnverifiedCompletedLiteratureDiscoveryRequisition(params
         ...paperIngestionRecord,
         ...serializePaperIngestionState({
           ...state,
-          runtimeStatus: "blocked",
+          runtimeStatus:
+            requestsMissingEvidence.length > 0 ? "blocked" : state.runtimeStatus,
           waitingReason:
-            "Completed literature requisition is missing request-scoped source/import-backed satisfaction evidence.",
+            requestsMissingEvidence.length > 0
+              ? "Completed literature requisition is missing request-scoped source/import-backed satisfaction evidence."
+              : state.waitingReason,
           queuedRequests,
           lastUpdatedAt: now,
         }),

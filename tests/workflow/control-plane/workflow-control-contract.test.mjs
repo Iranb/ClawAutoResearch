@@ -57,6 +57,10 @@ test("workflow snapshot reads workflow_control before stale manifest projection 
     owner_agent: "orchestrator",
     next_action: "/plan-phase",
     blocking_reason: "stale graph discovery warning",
+    experiment_search: {
+      status: "ready_for_analysis",
+      multi_seed_status: "pending",
+    },
     workflow_control: contract,
   });
   process.env.OPENCLAW_PROJECT = projectRoot;

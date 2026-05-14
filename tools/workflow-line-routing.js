@@ -167,6 +167,13 @@ export function ensureSurveyWorkflowIdentity(manifest) {
       ? record.writing_contract
       : {};
   const currentWritingContract = normalizeWritingContractState(currentWritingContractRecord);
+  const currentStage = normalizeStage(record.current_stage);
+  const resolvedStage = resolveStageForWorkflowLine({
+    stage: currentStage,
+    manifest: record,
+  });
+  const recoveredStage =
+    resolvedStage && resolvedStage !== currentStage ? resolvedStage : null;
   const topic = currentSurveyReview.topic ?? inferSurveyTopic(record);
   const nextSurveyReview = {
     ...(record.survey_review && typeof record.survey_review === "object"
@@ -192,10 +199,19 @@ export function ensureSurveyWorkflowIdentity(manifest) {
     paper_type: "survey",
     survey_review: nextSurveyReview,
     writing_contract: nextWritingContract,
+    ...(recoveredStage
+      ? {
+          current_stage: recoveredStage,
+          owner_agent:
+            STAGE_REQUIREMENTS[recoveredStage]?.owner ?? record.owner_agent,
+        }
+      : {}),
   };
   const updated =
     record.workflow_line !== next.workflow_line ||
     record.paper_type !== next.paper_type ||
+    record.current_stage !== next.current_stage ||
+    record.owner_agent !== next.owner_agent ||
     record.survey_review !== next.survey_review ||
     record.writing_contract !== next.writing_contract;
   return {
