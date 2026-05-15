@@ -371,6 +371,185 @@ test("experiment decision downgrades broad innovation drift only after a candida
   assert.equal(result.persistedPatch.innovation_deviation_status, "broad_drift");
 });
 
+test("experiment analysis gate auto-promotes only after Karpathy metric improvement passes auxiliary review", () => {
+  const result = evaluateExperimentSearchDecision({
+    experimentSearch: {
+      status: "searching",
+      baseline_fairness_status: "ready",
+      implementation_confidence: "trusted",
+      multi_seed_status: "completed_3_seeds",
+      ablation_status: "ready",
+      innovation_status: "supported",
+      search_exhaustion_status: "active",
+      evidence_cleanliness_status: "clean",
+      one_change_signature: "consistency filtering",
+      one_change_validation_status: "ready",
+      comparable_trial_budget_status: "within_budget",
+      last_trial_outcome: "keep",
+      incumbent_experiment_id: "exp-2",
+      evaluation_summary_path: "researcher/evaluation_summary.json",
+      plot_pack_status: "complete",
+      plot_pack_path: "researcher/plot_pack.json",
+    },
+    experimentSearchSpec: {},
+    experimentLedger: {
+      experiments: [
+        {
+          experiment_id: "exp-2",
+          status: "completed",
+          decision: "advance",
+          metrics: {
+            h_score: 0.7055,
+            baseline_h_score: 0.575,
+            delta_h_score: 0.1305,
+          },
+        },
+      ],
+    },
+    gpuMonitor: { recommendation: "none", likelyFinishedRunCount: 0 },
+  });
+
+  assert.equal(result.decision, "innovation_supported");
+  assert.equal(result.validationStage, "analysis_gate");
+  assert.equal(result.persistedPatch.status, "ready_for_analysis");
+  assert.equal(result.persistedPatch.analysis_gate.decision, "ready_for_analysis");
+  assert.equal(result.persistedPatch.analysis_gate.votes[0].agent, "execution_reviewer");
+  assert.equal(result.persistedPatch.analysis_gate.votes[0].vote, "approve");
+});
+
+test("experiment analysis gate treats lower-is-better primary metrics as positive gains", () => {
+  const result = evaluateExperimentSearchDecision({
+    experimentSearch: {
+      status: "searching",
+      baseline_fairness_status: "ready",
+      implementation_confidence: "trusted",
+      multi_seed_status: "ready",
+      ablation_status: "ready",
+      innovation_status: "supported",
+      search_exhaustion_status: "active",
+      evidence_cleanliness_status: "clean",
+      one_change_signature: "positive-pair scoring",
+      one_change_validation_status: "ready",
+      comparable_trial_budget_status: "within_budget",
+      last_trial_outcome: "keep",
+      incumbent_experiment_id: "exp-2",
+      evaluation_summary_path: "researcher/evaluation_summary.json",
+      plot_pack_status: "ready",
+    },
+    experimentSearchSpec: {},
+    experimentLedger: {
+      experiments: [
+        {
+          experiment_id: "exp-2",
+          status: "completed",
+          decision: "keep",
+          key_metric: {
+            name: "eer",
+            value: 0.03,
+            baseline: 0.037,
+          },
+        },
+      ],
+    },
+    gpuMonitor: { recommendation: "none", likelyFinishedRunCount: 0 },
+  });
+
+  assert.equal(result.decision, "innovation_supported");
+  assert.equal(result.persistedPatch.analysis_gate.decision, "ready_for_analysis");
+  assert.equal(result.persistedPatch.analysis_gate.votes[0].basis[0], "positive_primary_metric_delta");
+});
+
+test("experiment analysis gate keeps Karpathy search running when no positive metric gain exists", () => {
+  const result = evaluateExperimentSearchDecision({
+    experimentSearch: {
+      status: "searching",
+      baseline_fairness_status: "ready",
+      implementation_confidence: "trusted",
+      multi_seed_status: "completed_3_seeds",
+      ablation_status: "ready",
+      innovation_status: "supported",
+      search_exhaustion_status: "active",
+      evidence_cleanliness_status: "clean",
+      one_change_signature: "consistency filtering",
+      one_change_validation_status: "ready",
+      comparable_trial_budget_status: "within_budget",
+      last_trial_outcome: "keep",
+      incumbent_experiment_id: "exp-2",
+      evaluation_summary_path: "researcher/evaluation_summary.json",
+      plot_pack_status: "complete",
+      plot_pack_path: "researcher/plot_pack.json",
+    },
+    experimentSearchSpec: {},
+    experimentLedger: {
+      experiments: [
+        {
+          experiment_id: "exp-2",
+          status: "completed",
+          decision: "keep",
+          metrics: {
+            h_score: 0.575,
+            baseline_h_score: 0.575,
+            delta_h_score: 0,
+          },
+        },
+      ],
+    },
+    gpuMonitor: { recommendation: "none", likelyFinishedRunCount: 0 },
+  });
+
+  assert.equal(result.decision, "continue_tuning");
+  assert.equal(result.validationStage, "analysis_gate_continue_search");
+  assert.equal(result.persistedPatch.status, "searching");
+  assert.equal(result.persistedPatch.analysis_gate.decision, "continue_search");
+  assert.deepEqual(result.persistedPatch.analysis_gate.votes[0].blockers, [
+    "no_positive_primary_metric_delta",
+  ]);
+});
+
+test("experiment analysis gate rejects positive metric deltas from discarded trials", () => {
+  const result = evaluateExperimentSearchDecision({
+    experimentSearch: {
+      status: "searching",
+      baseline_fairness_status: "ready",
+      implementation_confidence: "trusted",
+      multi_seed_status: "ready",
+      ablation_status: "ready",
+      innovation_status: "supported",
+      search_exhaustion_status: "active",
+      evidence_cleanliness_status: "clean",
+      one_change_signature: "unretained scoring tweak",
+      one_change_validation_status: "ready",
+      comparable_trial_budget_status: "within_budget",
+      last_trial_outcome: "discard",
+      incumbent_experiment_id: "exp-2",
+      evaluation_summary_path: "researcher/evaluation_summary.json",
+      plot_pack_status: "ready",
+    },
+    experimentSearchSpec: {},
+    experimentLedger: {
+      experiments: [
+        {
+          experiment_id: "exp-2",
+          status: "completed",
+          decision: "discard",
+          metrics: {
+            h_score: 0.7,
+            baseline_h_score: 0.6,
+            delta_h_score: 0.1,
+          },
+        },
+      ],
+    },
+    gpuMonitor: { recommendation: "none", likelyFinishedRunCount: 0 },
+  });
+
+  assert.equal(result.decision, "continue_tuning");
+  assert.equal(result.persistedPatch.analysis_gate.decision, "continue_search");
+  assert.deepEqual(result.persistedPatch.analysis_gate.votes[0].blockers, [
+    "trial_not_promoted_or_kept",
+  ]);
+});
+
 test("failure clustering groups repeated signatures by failure class", () => {
   const clusters = summarizeExperimentFailureClusters({
     project_id: "demo",

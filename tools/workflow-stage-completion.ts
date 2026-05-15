@@ -1414,6 +1414,11 @@ export async function resolveExperimentCompletion(
     experimentMemory: manifest.experiment_memory,
     manifest,
   });
+  const analysisGate = decisionSummary.persistedPatch.analysis_gate;
+  const analysisGateDecision =
+    analysisGate && typeof analysisGate === "object" && !Array.isArray(analysisGate)
+      ? normalizeStage((analysisGate as Record<string, unknown>).decision)
+      : null;
   const status = normalizeStage(experimentSearch.status) ?? "not_started";
   const experimentSearchStarted = !["missing", "not_started", "pending"].includes(status);
   const lastDecision = normalizeStage(
@@ -1550,7 +1555,7 @@ export async function resolveExperimentCompletion(
     decisionSummary.decision === "continue_tuning" &&
     experimentSearchStarted &&
     status !== "ready_for_analysis" &&
-    !multiSeedReady
+    (!multiSeedReady || analysisGateDecision === "continue_search")
   ) {
     return completion({
       stage: "experiment",

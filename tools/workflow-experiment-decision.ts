@@ -64,8 +64,72 @@ export type ExperimentSearchDecisionSummary = {
   persistedPatch: Record<string, unknown>;
 };
 
+type ExperimentAnalysisGateVote = {
+  agent: "execution_reviewer" | "novelty_reviewer" | "paper_readiness_reviewer";
+  vote: "approve" | "continue_search" | "repair_required";
+  basis: string[];
+  blockers: string[];
+};
+
+type ExperimentAnalysisGate = {
+  schema_version: 1;
+  decision: "ready_for_analysis" | "continue_search" | "repair_required";
+  rule: "karpathy_improvement_required_then_2_of_3";
+  primary_gate: "execution_reviewer";
+  hard_blockers: string[];
+  votes: ExperimentAnalysisGateVote[];
+};
+
 function readString(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function readRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function readNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function pickNumber(record: Record<string, unknown> | null, keys: string[]): number | null {
+  if (!record) return null;
+  for (const key of keys) {
+    const value = readNumber(record[key]);
+    if (value !== null) return value;
+  }
+  return null;
+}
+
+function compactReasons(values: string[]): string[] {
+  return values.filter(Boolean).slice(0, 3);
+}
+
+function inferMetricDirection(record: Record<string, unknown>): "higher_is_better" | "lower_is_better" {
+  const explicitDirection = normalizeStageLike(
+    record.direction ?? record.optimization_direction ?? record.optimizationDirection
+  );
+  if (explicitDirection === "lower_is_better" || explicitDirection === "minimize") {
+    return "lower_is_better";
+  }
+  if (explicitDirection === "higher_is_better" || explicitDirection === "maximize") {
+    return "higher_is_better";
+  }
+  const metricName = normalizeStageLike(
+    record.name ?? record.metric_name ?? record.metricName ?? record.primary_metric ?? record.primaryMetric
+  );
+  if (/(^|_)(eer|cer|wer|error|loss|mae|mse|rmse|latency|cost|perplexity)($|_)/.test(metricName)) {
+    return "lower_is_better";
+  }
+  return "higher_is_better";
+}
+
+function isRetainedTrialDecision(value: unknown): boolean {
+  return ["keep", "kept", "advance", "advanced", "promote", "promoted"].includes(
+    normalizeStageLike(value)
+  );
 }
 
 function countSpecificTextTokens(values: string[]): number {
@@ -83,8 +147,11 @@ function normalizeStageLike(value: unknown): string {
 }
 
 function isReadyLike(value: unknown): boolean {
-  return ["ready", "pass", "covered", "complete", "completed", "clean", "trusted"].includes(
-    normalizeStageLike(value)
+  const normalized = normalizeStageLike(value);
+  return (
+    ["ready", "pass", "covered", "complete", "completed", "clean", "trusted", "supported"].includes(
+      normalized
+    ) || normalized.startsWith("completed_")
   );
 }
 
@@ -92,6 +159,196 @@ function isFailureLike(value: unknown): boolean {
   return ["fail", "failed", "blocked", "invalid", "invalidated", "untrusted", "broken"].includes(
     normalizeStageLike(value)
   );
+}
+
+function readMetricDeltaFromEntry(entry: Record<string, unknown>): {
+  delta: number | null;
+  source: string | null;
+} {
+  const keyMetric = readRecord(entry.key_metric) ?? readRecord(entry.keyMetric);
+  const metrics = readRecord(entry.metrics);
+  const primaryResult = readRecord(entry.primary_result) ?? readRecord(entry.primaryResult);
+  const metadata = readRecord(entry.metadata);
+  const trialContract = readRecord(metadata?.trial_contract) ?? readRecord(metadata?.trialContract);
+  const contractMetric =
+    readRecord(trialContract?.primary_metric) ?? readRecord(trialContract?.primaryMetric);
+  const karpathyLoop =
+    readRecord(metadata?.karpathy_inner_loop) ?? readRecord(metadata?.karpathyInnerLoop);
+  const karpathyMetric =
+    readRecord(karpathyLoop?.primary_metric) ?? readRecord(karpathyLoop?.primaryMetric);
+  const sources = [
+    { label: "key_metric", record: keyMetric },
+    { label: "metrics", record: metrics },
+    { label: "primary_result", record: primaryResult },
+    { label: "trial_contract.primary_metric", record: contractMetric },
+    { label: "karpathy_inner_loop.primary_metric", record: karpathyMetric },
+  ];
+  for (const source of sources) {
+    const delta = pickNumber(source.record, [
+      "delta",
+      "delta_h_score",
+      "deltaHScore",
+      "metric_delta",
+      "metricDelta",
+    ]);
+    if (delta !== null) {
+      return { delta, source: source.label };
+    }
+  }
+  for (const source of sources) {
+    if (!source.record) continue;
+    const value = pickNumber(source.record, ["value", "candidate", "h_score", "hScore"]);
+    const baseline = pickNumber(source.record, ["baseline", "baseline_h_score", "baselineHScore"]);
+    if (value !== null && baseline !== null) {
+      const direction = inferMetricDirection(source.record);
+      return {
+        delta: direction === "lower_is_better" ? baseline - value : value - baseline,
+        source: source.label,
+      };
+    }
+  }
+  return { delta: null, source: null };
+}
+
+function selectKarpathyMetricEvidence(params: {
+  ledgerExperiments: Record<string, unknown>[];
+  preferredExperimentIds: string[];
+}): {
+  experimentId: string | null;
+  delta: number | null;
+  source: string | null;
+  retained: boolean;
+} {
+  const candidates = params.ledgerExperiments.filter((entry) => {
+    const experimentId =
+      readString(entry.experiment_id) ?? readString(entry.experimentId);
+    return (
+      params.preferredExperimentIds.length === 0 ||
+      (experimentId != null && params.preferredExperimentIds.includes(experimentId))
+    );
+  });
+  for (const entry of candidates.slice().reverse()) {
+    const metric = readMetricDeltaFromEntry(entry);
+    if (metric.delta !== null) {
+      return {
+        experimentId:
+          readString(entry.experiment_id) ?? readString(entry.experimentId),
+        retained:
+          isRetainedTrialDecision(entry.decision) ||
+          isRetainedTrialDecision(entry.last_decision) ||
+          isRetainedTrialDecision(entry.lastDecision),
+        ...metric,
+      };
+    }
+  }
+  return { experimentId: null, delta: null, source: null, retained: false };
+}
+
+function buildExperimentAnalysisGate(params: {
+  search: ReturnType<typeof normalizeExperimentSearchState>;
+  hasRecordedRunEvidence: boolean;
+  metricEvidence: {
+    experimentId: string | null;
+    delta: number | null;
+    source: string | null;
+    retained: boolean;
+  };
+  multiSeedReady: boolean;
+  ablationReady: boolean;
+  plotPackReady: boolean;
+  cleanEvidence: boolean;
+  baselineDatasetCoverageStatus: string;
+  innovationDeviationStatus: string;
+  innovationStatus: string;
+  comparableTrialBudgetStatus: string;
+  oneChangeValidationStatus: string;
+  reviewBlockerCount: number;
+}): ExperimentAnalysisGate {
+  const hardBlockers = compactReasons([
+    params.hasRecordedRunEvidence ? "" : "execution_evidence_missing",
+    params.reviewBlockerCount > 0 ? "review_blockers_open" : "",
+  ]);
+  const positiveDelta =
+    params.metricEvidence.delta !== null && params.metricEvidence.delta > 0;
+  const executionBlockers = compactReasons([
+    positiveDelta ? "" : "no_positive_primary_metric_delta",
+    params.metricEvidence.retained ? "" : "trial_not_promoted_or_kept",
+    params.multiSeedReady ? "" : "multi_seed_not_ready",
+    params.ablationReady ? "" : "ablation_not_ready",
+    params.comparableTrialBudgetStatus === "over_budget" ? "trial_over_budget" : "",
+    params.oneChangeValidationStatus === "missing" ? "one_change_signature_missing" : "",
+  ]);
+  const noveltyBlockers = compactReasons([
+    isReadyLike(params.innovationStatus) || params.innovationStatus === "supported"
+      ? ""
+      : "innovation_not_supported",
+    params.innovationDeviationStatus === "broad_drift" ? "innovation_broad_drift" : "",
+  ]);
+  const paperBlockers = compactReasons([
+    params.plotPackReady ? "" : "plot_pack_missing",
+    params.cleanEvidence ? "" : "evidence_not_clean",
+    params.baselineDatasetCoverageStatus === "missing" ||
+    params.baselineDatasetCoverageStatus === "partial"
+      ? "baseline_dataset_coverage_incomplete"
+      : "",
+  ]);
+  const votes: ExperimentAnalysisGateVote[] = [
+    {
+      agent: "execution_reviewer",
+      vote: hardBlockers.length > 0
+        ? "repair_required"
+        : executionBlockers.length === 0
+          ? "approve"
+          : "continue_search",
+      basis: compactReasons([
+        positiveDelta ? "positive_primary_metric_delta" : "",
+        params.metricEvidence.retained ? "promoted_or_kept_trial" : "",
+        params.multiSeedReady ? "multi_seed_ready" : "",
+        params.ablationReady ? "ablation_ready" : "",
+        params.metricEvidence.source ? `metric_source:${params.metricEvidence.source}` : "",
+      ]),
+      blockers: executionBlockers,
+    },
+    {
+      agent: "novelty_reviewer",
+      vote: noveltyBlockers.length === 0 ? "approve" : "continue_search",
+      basis: compactReasons([
+        isReadyLike(params.innovationStatus) || params.innovationStatus === "supported"
+          ? "innovation_supported"
+          : "",
+        params.innovationDeviationStatus && params.innovationDeviationStatus !== "broad_drift"
+          ? `innovation_deviation:${params.innovationDeviationStatus}`
+          : "",
+      ]),
+      blockers: noveltyBlockers,
+    },
+    {
+      agent: "paper_readiness_reviewer",
+      vote: paperBlockers.length === 0 ? "approve" : "continue_search",
+      basis: compactReasons([
+        params.plotPackReady ? "plot_pack_ready" : "",
+        params.cleanEvidence ? "clean_evidence" : "",
+        params.search.evaluationSummaryPath ? "evaluation_summary_present" : "",
+      ]),
+      blockers: paperBlockers,
+    },
+  ];
+  const approvalCount = votes.filter((vote) => vote.vote === "approve").length;
+  const executionApproved = votes[0]?.vote === "approve";
+  const decision =
+    hardBlockers.length > 0
+      ? "repair_required"
+      : executionApproved && approvalCount >= 2
+        ? "ready_for_analysis"
+        : "continue_search";
+  return {
+    schema_version: 1,
+    decision,
+    rule: "karpathy_improvement_required_then_2_of_3",
+    primary_gate: "execution_reviewer",
+    hard_blockers: hardBlockers,
+    votes,
+  };
 }
 
 function classifyFailure(params: {
@@ -394,6 +651,29 @@ export function evaluateExperimentSearchDecision(params: {
     isReadyLike(search.multiSeedStatus) &&
     isReadyLike(ablationStatus) &&
     isReadyLike(evidenceCleanlinessStatus);
+  const multiSeedReady = isReadyLike(search.multiSeedStatus);
+  const ablationReady = isReadyLike(ablationStatus);
+  const plotPackReadyForGate =
+    isReadyLike(search.plotPackStatus) || Boolean(search.plotPackPath);
+  const metricEvidence = selectKarpathyMetricEvidence({
+    ledgerExperiments,
+    preferredExperimentIds,
+  });
+  const analysisGate = buildExperimentAnalysisGate({
+    search,
+    hasRecordedRunEvidence,
+    metricEvidence,
+    multiSeedReady,
+    ablationReady,
+    plotPackReady: plotPackReadyForGate,
+    cleanEvidence,
+    baselineDatasetCoverageStatus: baselineDatasetCoverage.status,
+    innovationDeviationStatus: innovationDeviation.status,
+    innovationStatus,
+    comparableTrialBudgetStatus,
+    oneChangeValidationStatus,
+    reviewBlockerCount,
+  });
 
   if (
     searchStatus === "ready_for_analysis" &&
@@ -530,6 +810,7 @@ export function evaluateExperimentSearchDecision(params: {
   let rationale = "Search envelope is still active and no stronger terminal signal is present.";
   let decisionConfidence: "low" | "medium" | "high" = "medium";
   let recommendedNextAction = "Continue bounded tuning inside the approved search envelope.";
+  let analysisGatePatch: ExperimentAnalysisGate | null = null;
   let validationStage =
     search.validationStage ??
     spec.searchLadder[0] ??
@@ -657,6 +938,39 @@ export function evaluateExperimentSearchDecision(params: {
     recommendedNextAction =
       "Run the approved ablation set before deciding whether the innovation is genuinely responsible for the gain.";
     validationStage = "ablation_validation";
+  } else if (
+    multiSeedReady &&
+    ablationReady &&
+    searchExhaustionStatus !== "exhausted" &&
+    searchStatus !== "ready_for_analysis" &&
+    hasRecordedRunEvidence
+  ) {
+    analysisGatePatch = analysisGate;
+    if (analysisGate.decision === "ready_for_analysis") {
+      decision = "innovation_supported";
+      rationale =
+        "Karpathy-style analysis gate found a positive promoted trial and enough auxiliary novelty/readiness evidence to freeze the incumbent for analysis.";
+      decisionConfidence = "high";
+      recommendedNextAction =
+        "Freeze the current incumbent and proceed toward analysis.";
+      validationStage = "analysis_gate";
+    } else if (analysisGate.decision === "repair_required") {
+      decision = "repair_implementation";
+      rationale =
+        `Analysis gate found hard blocker(s): ${analysisGate.hard_blockers.join("; ")}.`;
+      decisionConfidence = "high";
+      recommendedNextAction =
+        "Repair the hard analysis-gate blockers before continuing search or entering analysis.";
+      validationStage = "analysis_gate_repair";
+    } else {
+      decision = "continue_tuning";
+      rationale =
+        "Karpathy-style analysis gate did not find a positive enough promoted trial with sufficient auxiliary support; continue the bounded search loop.";
+      decisionConfidence = "medium";
+      recommendedNextAction =
+        "Continue the Karpathy-style bounded search loop from the current incumbent; do not enter analysis until a positive promoted trial passes the auxiliary gate.";
+      validationStage = "analysis_gate_continue_search";
+    }
   } else if (isReadyLike(innovationStatus)) {
     decision = innovationStatus === "fragile" ? "innovation_fragile" : "innovation_supported";
     rationale =
@@ -717,6 +1031,26 @@ export function evaluateExperimentSearchDecision(params: {
   }
 
   const persistedPatch = {
+    ...(analysisGatePatch
+      ? {
+          analysis_gate: analysisGatePatch,
+          current_main_stage:
+            analysisGatePatch.decision === "ready_for_analysis"
+              ? "analysis_decision"
+              : "karpathy_inner_loop",
+          current_substage:
+            analysisGatePatch.decision === "ready_for_analysis"
+              ? "karpathy_analysis_gate_passed"
+              : analysisGatePatch.decision === "repair_required"
+                ? "analysis_gate_repair_required"
+                : "analysis_gate_continue_search",
+          ...(analysisGatePatch.decision === "ready_for_analysis"
+            ? { status: "ready_for_analysis" }
+            : analysisGatePatch.decision === "continue_search"
+              ? { status: "searching" }
+              : {}),
+        }
+      : {}),
     inner_loop_mode: innerLoop.mode,
     trial_time_budget_minutes: innerLoop.trialTimeBudgetMinutes,
     strict_comparable_budget: innerLoop.strictComparableBudget,
