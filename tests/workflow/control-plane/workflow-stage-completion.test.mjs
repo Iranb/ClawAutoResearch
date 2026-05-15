@@ -654,6 +654,68 @@ test("experiment completion trusts durable search authority before stale manifes
   );
 });
 
+test("experiment completion routes completed validation without Karpathy gain back to bounded search", async (t) => {
+  const projectRoot = await makeProject(t, "openclaw-wf-stage-experiment-karpathy-search-");
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "experiment-karpathy-search",
+    current_stage: "experiment",
+    owner_agent: "researcher",
+    experiment_search: {
+      status: "ready_for_analysis",
+      last_decision: "continue_tuning",
+      multi_seed_status: "pending",
+      plot_pack_status: "pending",
+    },
+  });
+  await writeJson(path.join(projectRoot, "researcher", "EXPERIMENT_SEARCH.json"), {
+    status: "searching",
+    last_decision: "continue_tuning",
+    multi_seed_status: "completed_3_seeds",
+    baseline_fairness_status: "clean",
+    implementation_confidence: "trusted",
+    ablation_status: "complete",
+    innovation_status: "supported",
+    evidence_cleanliness_status: "clean",
+    plot_pack_status: "complete",
+    plot_pack_path: "researcher/plot_pack.json",
+    incumbent_experiment_id: "exp-2",
+    one_change_signature: "add consistency filtering",
+    one_change_validation_status: "ready",
+    comparable_trial_budget_status: "within_budget",
+    search_exhaustion_status: "active",
+    completed_experiment_ids: ["exp-2"],
+    completed_ablations: ["minus_consistency_filtering"],
+  });
+  await writeJson(path.join(projectRoot, "researcher", "EXPERIMENT_LEDGER.json"), {
+    experiments: [
+      {
+        experiment_id: "exp-2",
+        status: "completed",
+        decision: "discard",
+        metrics: {
+          h_score: 0.575,
+          baseline_h_score: 0.575,
+          delta_h_score: 0,
+        },
+      },
+    ],
+  });
+
+  const completion = await resolveExperimentCompletion(projectRoot);
+  assert.equal(completion.completionStatus, "incomplete");
+  assert.equal(completion.owner, "coder");
+  assert.equal(completion.blockingReason, "continue_tuning");
+
+  const reconciled = await reconcileWorkflowControl({
+    projectRoot,
+    now: "2026-05-14T20:45:00.000Z",
+  });
+  assert.equal(reconciled.contract.stage, "experiment");
+  assert.equal(reconciled.contract.owner, "coder");
+  assert.equal(reconciled.contract.status, "waiting");
+  assert.equal(reconciled.contract.blocking_reason, "continue_tuning");
+});
+
 test("topic search and literature review require discovery packet evidence", async (t) => {
   const projectRoot = await makeProject(t, "openclaw-wf-stage-literature-");
   await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
