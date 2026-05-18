@@ -10,10 +10,13 @@ allowed-tools:
 
 This skill is the **only stable stage-closeout path** for cross-owner workflow handoffs.
 
+Canonical routing is `{PROJ}/PROJECT_MANIFEST.json.workflow_control`; top-level manifest stage/owner/action fields are mirrors. Use the lane materializer/setter and `auto_iterator_tick` before asking for a handoff.
+
 Do **not**:
 
 - hand-edit `PROJECT_MANIFEST.json.owner_agent`
 - hand-edit `PROJECT_MANIFEST.json.current_stage`
+- hand-edit `PROJECT_MANIFEST.json.workflow_control`
 - rely on a free-form Discord message like "handoff complete"
 - bypass the workflow control plane with an ad hoc Lobster hop
 
@@ -34,7 +37,7 @@ Examples:
 - `researcher`: `idea -> plan`
 - `orchestrator`: `plan -> code`
 - `coder`: `code -> experiment`
-- `researcher`: `experiment -> analyze`
+- `researcher`: `experiment -> analyze` only after `analysis_gate.decision = "ready_for_analysis"`
 - `analyzer`: `analyze -> review`
 - `reviewer`: `review -> write`
 - `academic_writer`: `write -> submit`
@@ -76,6 +79,8 @@ If `stageAfter` / `toRole` are omitted, the workflow will try to derive them fro
   include `PLAN.md`, `TODOS.md`, `PLAN_AUDIT.md`, and the selected track contract
 - `coder` finishing `code`:
   include experiment bundle paths, dry-run evidence, and manifest/index updates
+- `researcher` finishing `experiment`:
+  include synchronized `EXPERIMENT_SEARCH.json`, ledger/result summaries, and the Karpathy analysis gate decision
 - `analyzer` finishing `analyze`:
   include claim-evidence matrix, track verdicts, unsupported claims, and quality audit
 - `reviewer` finishing `review`:

@@ -1791,6 +1791,63 @@ test("auto-research command bootstraps topic-only onboarding and starts the back
   );
 });
 
+test("auto-research command reports queued bootstrap runs instead of claiming started", async (t) => {
+  const projectsRoot = await makeProjectsRoot();
+
+  t.after(async () => {
+    await fs.rm(projectsRoot, { recursive: true, force: true });
+  });
+
+  const api = makeApi({
+    pluginConfig: {
+      enableChannelProjectBindings: true,
+      projectsRoot,
+    },
+  });
+  const autoResearchCommand = getCommand(
+    createResearchWorkflowCommands(api, {
+      async startBackgroundWorkflowRun(params) {
+        return {
+          started: false,
+          reason: "channel_capacity_reached",
+          runId: null,
+          sessionKey: null,
+          projectRoot: params.backgroundRun.projectRoot,
+          projectId: params.backgroundRun.projectId,
+          summary:
+            "Queued background workflow because this channel already has active Researcher background subagents.",
+          reusedIdleSession: false,
+          activeResearcherSessionsInChannel: 2,
+          queued: true,
+          queueKey: "auto-research-queue-1",
+        };
+      },
+    }),
+    "auto-research"
+  );
+
+  const result = await autoResearchCommand.handler({
+    channel: "discord",
+    isAuthorizedSender: true,
+    commandBody: '/auto-research "gcd confirmation bias mitigation"',
+    args: '"gcd confirmation bias mitigation"',
+    config: {},
+    from: "discord:channel:gcd-lab",
+    to: undefined,
+    accountId: "default",
+    requestConversationBinding: async () => ({ status: "error" }),
+    detachConversationBinding: async () => ({ removed: false }),
+    getCurrentConversationBinding: async () => null,
+  });
+
+  assert.match(result.text ?? "", /^Full-auto research pipeline queued/i);
+  assert.doesNotMatch(
+    result.text ?? "",
+    /^Full-auto research pipeline started/i
+  );
+  assert.match(result.text ?? "", /queue_key=auto-research-queue-1/);
+});
+
 test("auto-review command bootstraps a survey project and starts the background survey pipeline", async (t) => {
   const projectsRoot = await makeProjectsRoot();
   let captured = null;
@@ -1887,6 +1944,59 @@ test("auto-review command bootstraps a survey project and starts the background 
     captured.backgroundParams.backgroundRun.commandText,
     /^\/survey-pipeline\b/
   );
+});
+
+test("auto-review command reports runtime launch failures instead of claiming started", async (t) => {
+  const projectsRoot = await makeProjectsRoot();
+
+  t.after(async () => {
+    await fs.rm(projectsRoot, { recursive: true, force: true });
+  });
+
+  const api = makeApi({
+    pluginConfig: {
+      enableChannelProjectBindings: true,
+      projectsRoot,
+    },
+  });
+  const autoReviewCommand = getCommand(
+    createResearchWorkflowCommands(api, {
+      async startBackgroundWorkflowRun(params) {
+        return {
+          started: false,
+          reason: "runtime_unavailable",
+          runId: null,
+          sessionKey: null,
+          projectRoot: params.backgroundRun.projectRoot,
+          projectId: params.backgroundRun.projectId,
+          summary: "Runtime unavailable before the survey pipeline could start.",
+          reusedIdleSession: false,
+          activeResearcherSessionsInChannel: null,
+          queued: false,
+          queueKey: "auto-review-queue-1",
+        };
+      },
+    }),
+    "auto-review"
+  );
+
+  const result = await autoReviewCommand.handler({
+    channel: "discord",
+    isAuthorizedSender: true,
+    commandBody: '/auto-review "graph reasoning survey"',
+    args: '"graph reasoning survey"',
+    config: {},
+    from: "discord:channel:survey-lab",
+    to: undefined,
+    accountId: "default",
+    requestConversationBinding: async () => ({ status: "error" }),
+    detachConversationBinding: async () => ({ removed: false }),
+    getCurrentConversationBinding: async () => null,
+  });
+
+  assert.match(result.text ?? "", /^Full-auto survey pipeline failed/i);
+  assert.doesNotMatch(result.text ?? "", /^Full-auto survey pipeline started/i);
+  assert.match(result.text ?? "", /reason=runtime_unavailable/);
 });
 
 test("auto-research keeps project naming clean while preserving richer request context", async (t) => {
@@ -2964,6 +3074,26 @@ test("workflow-status command returns a readable workflow summary", async () => 
           "Primary metric beat the incumbent under the approved promotion rule.",
         experimentSearchMultiSeedStatus: "running",
         experimentSearchPlotPackStatus: "pending",
+        experimentSearchNextCandidateMetricName: "H-score",
+        experimentSearchNextCandidateMetricDirection: "higher_is_better",
+        experimentSearchNextCandidateMinimumImprovement: 0.01,
+        experimentSearchNextCandidatePaperContributionMetric: "topline_h_score",
+        experimentSearchNextCandidateRequiredProperties: [
+          "one_change_signature",
+          "fixed_trial_budget",
+        ],
+        experimentSearchNextCandidateRecommendedFocus: [
+          "optimize_primary_metric:H-score",
+        ],
+        experimentSearchNextCandidateBlockerBasis: [
+          "no_positive_primary_metric_gain",
+        ],
+        experimentSearchNextCandidateInnovationAnchors: ["graph_claim:claim-7"],
+        experimentSearchNextCandidateAvoidExperimentIds: ["exp-failed-1"],
+        experimentSearchNextCandidateAvoidOneChangeSignatures: [
+          "consistency-filtering",
+        ],
+        experimentSearchNextCandidateAvoidFailureClusterIds: ["cluster-timeout"],
         paperStoryStatus: "ready",
         paperStoryTrackId: "track-idea-1",
         paperStoryStorySpinePath: "academic_writer/story/STORY_SPINE.md",
@@ -3169,6 +3299,14 @@ test("workflow-status command returns a readable workflow summary", async () => 
   assert.match(
     result.text ?? "",
     /Experiment search: status=running, .*main_stage=creative_research, substage=branch_expansion, best_node=node-7, .*multi_seed=running, plot_pack=pending/
+  );
+  assert.match(
+    result.text ?? "",
+    /Experiment next candidate guidance: metric=H-score, direction=higher_is_better, min_improvement=0\.01, paper_metric=topline_h_score, required=one_change_signature,fixed_trial_budget, focus=optimize_primary_metric:H-score/
+  );
+  assert.match(
+    result.text ?? "",
+    /Experiment next candidate avoid: experiments=exp-failed-1, one_change_signatures=consistency-filtering, failure_clusters=cluster-timeout, blockers=no_positive_primary_metric_gain, anchors=graph_claim:claim-7/
   );
   assert.match(
     result.text ?? "",

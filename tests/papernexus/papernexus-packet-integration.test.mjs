@@ -960,6 +960,88 @@ test("research_workflow materialize_papernexus_packet_contracts bridges a PaperN
   assert.equal(derivedChallengePacket.insight_clusters.length >= 1, true);
 });
 
+test("research_workflow materialize_papernexus_packet_contracts derives fixed budget from explicit CPU topic text", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.research_program.goal =
+    "CPU-only SQLite index design under a 5-minute per-run budget on macOS.";
+  manifest.research_program.problem_statement =
+    "Compare no index, single-column index, composite index, and covering index for point and range queries.";
+  manifest.research_program.success_criteria = [
+    "Optimize p95 query latency while tracking insert overhead and database size.",
+  ];
+  delete manifest.research_program.fixed_budget;
+  await writeJson(manifestPath, manifest);
+  await writeJson(
+    path.join(projectRoot, "researcher", "papernexus", "IDEA_CATALYST_PACKET_BUNDLE.json"),
+    buildIdeaCatalystPacketBundleFixture()
+  );
+  await writeAuthorityCascadeInputs(projectRoot);
+
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  const result = await materializePapernexusPacketContracts({
+    projectRoot,
+    trigger: "topic-budget-test",
+    agentId: "researcher",
+  });
+
+  assert.equal(result.state.innovationPacketReady, true);
+  const innovationPacket = JSON.parse(
+    await fs.readFile(
+      path.join(projectRoot, "orchestrator", "INNOVATION_PACKET.json"),
+      "utf8"
+    )
+  );
+  assert.equal(innovationPacket.status, "ready");
+  assert.equal(innovationPacket.fixed_budget, "5 minute per-run CPU budget");
+  assert.equal(innovationPacket.risk_flags.includes("fixed_budget_missing"), false);
+});
+
+test("research_workflow materialize_papernexus_packet_contracts keeps innovation packet incomplete without explicit budget", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.research_program.goal =
+    "CPU-only SQLite index design for small analytical workloads on macOS.";
+  manifest.research_program.problem_statement =
+    "Compare no index, single-column index, composite index, and covering index.";
+  manifest.research_program.success_criteria = [
+    "Optimize p95 query latency while tracking insert overhead and database size.",
+  ];
+  delete manifest.research_program.fixed_budget;
+  await writeJson(manifestPath, manifest);
+  await writeJson(
+    path.join(projectRoot, "researcher", "papernexus", "IDEA_CATALYST_PACKET_BUNDLE.json"),
+    buildIdeaCatalystPacketBundleFixture()
+  );
+  await writeAuthorityCascadeInputs(projectRoot);
+
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  const result = await materializePapernexusPacketContracts({
+    projectRoot,
+    trigger: "topic-budget-missing-test",
+    agentId: "researcher",
+  });
+
+  assert.equal(result.state.innovationPacketReady, false);
+  const innovationPacket = JSON.parse(
+    await fs.readFile(
+      path.join(projectRoot, "orchestrator", "INNOVATION_PACKET.json"),
+      "utf8"
+    )
+  );
+  assert.equal(innovationPacket.status, "incomplete");
+  assert.equal(innovationPacket.fixed_budget, null);
+  assert.equal(innovationPacket.risk_flags.includes("fixed_budget_missing"), true);
+});
+
 test("research_workflow materialize_papernexus_packet_contracts does not produce innovation packet from bundle alone", async (t) => {
   const projectRoot = await makeProjectRoot();
   await fs.rm(path.join(projectRoot, "orchestrator", "INNOVATION_PACKET.json"), {
@@ -995,6 +1077,57 @@ test("research_workflow materialize_papernexus_packet_contracts does not produce
   );
   assert.equal(ideaContract.status, "blocked");
   assert.equal(ideaContract.reason, "Graph build decision authority is missing.");
+});
+
+test("research_workflow materialize_papernexus_packet_contracts terminalizes stale innovation packet when contract blocks", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  await writeJson(
+    path.join(projectRoot, "researcher", "papernexus", "IDEA_CATALYST_PACKET_BUNDLE.json"),
+    buildIdeaCatalystPacketBundleFixture()
+  );
+  await writeJson(path.join(projectRoot, "orchestrator", "INNOVATION_PACKET.json"), {
+    contract_version: "innovation-packet-v1",
+    status: "ready",
+    selected_idea_fragment_id: "stale-idea",
+    baseline: "SimGCD",
+    primary_metric: "ACC",
+    fixed_budget: "5 minute CPU trial",
+    evidence_paths: [DEFAULT_IDEA_CATALYST_CONTRACT_PATH],
+  });
+
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  const result = await materializePapernexusPacketContracts({
+    projectRoot,
+    trigger: "stale-packet-test",
+    agentId: "researcher",
+  });
+
+  assert.equal(result.state.ideaCatalystPacketBundleReady, true);
+  assert.equal(result.state.ideaCatalystContractReady, false);
+  assert.equal(result.state.innovationPacketReady, false);
+  assert.ok(result.generatedFiles.includes("orchestrator/INNOVATION_PACKET.json"));
+
+  const innovationPacket = JSON.parse(
+    await fs.readFile(
+      path.join(projectRoot, "orchestrator", "INNOVATION_PACKET.json"),
+      "utf8"
+    )
+  );
+  assert.equal(innovationPacket.status, "blocked");
+  assert.equal(innovationPacket.previous_status, "ready");
+  assert.equal(innovationPacket.previous_selected_idea_fragment_id, "stale-idea");
+  assert.equal(innovationPacket.selected_idea_fragment_id, undefined);
+
+  const experimentPlanCompletion =
+    await resolveExperimentPlanCompletion(projectRoot);
+  assert.equal(experimentPlanCompletion.completionStatus, "incomplete");
+  assert.equal(
+    experimentPlanCompletion.blockingReason,
+    "innovation_packet_missing_traceable_evidence"
+  );
 });
 
 test("research_workflow materialize_papernexus_packet_contracts builds idea contract from requisition and literature packet without bundle", async (t) => {

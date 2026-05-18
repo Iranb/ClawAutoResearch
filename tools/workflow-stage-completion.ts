@@ -58,10 +58,21 @@ const LITERATURE_DISCOVERY_PACKET_PATH =
 
 const DOWNSTREAM_GRAPH_SENSITIVE_STAGES = new Set([
   "frontier_mapping",
+  "ideation",
   "idea",
+  "plan",
+  "experiment_plan",
+  "code",
+  "experiment",
+  "experiment_loop",
+  "analyze",
+  "analysis",
   "review",
   "write",
+  "writing",
+  "polish_review",
   "submit",
+  "submission_ready",
   "done",
 ]);
 
@@ -455,6 +466,44 @@ function hasExperimentLedgerEvidence(ledger: Record<string, unknown> | null): bo
         "status",
       ]);
     return Boolean(branchOrWorktree && commit && metric && budget && seed && decision);
+  });
+}
+
+const ACTIVE_EXPERIMENT_RUNTIME_STATUSES = new Set([
+  "active",
+  "launching",
+  "queued",
+  "running",
+  "started",
+  "training",
+]);
+
+function hasActiveExperimentRuntime(
+  ledger: Record<string, unknown> | null
+): boolean {
+  if (!ledger) {
+    return false;
+  }
+  const summary = asRecord(ledger.summary) ?? {};
+  if (
+    asStringArray(summary.activeExperimentIds ?? summary.active_experiment_ids)
+      .length > 0
+  ) {
+    return true;
+  }
+  const trials = [
+    ...recordList(ledger.experiments),
+    ...recordList(ledger.trial_history),
+    ...recordList(ledger.trialHistory),
+    ...recordList(ledger.trials),
+  ];
+  return trials.some((trial) => {
+    const status = normalizeStage(trial.status);
+    const stage = normalizeStage(trial.stage);
+    return Boolean(
+      (status && ACTIVE_EXPERIMENT_RUNTIME_STATUSES.has(status)) ||
+        (stage && ACTIVE_EXPERIMENT_RUNTIME_STATUSES.has(stage))
+    );
   });
 }
 
@@ -880,9 +929,6 @@ async function hasRequisitionSatisfactionEvidence(params: {
   request: Record<string, unknown>;
 }): Promise<boolean> {
   const request = params.request;
-  const validationStatus = normalizeStage(
-    request.validation_status ?? request.validationStatus
-  );
   const validationReportPath = pickString(request, [
     "validation_report_path",
     "validationReportPath",
@@ -898,7 +944,7 @@ async function hasRequisitionSatisfactionEvidence(params: {
   if (!isAcceptedRequisitionSatisfactionReport(report)) {
     return false;
   }
-  return validationStatus === "valid" || validationStatus === "warning";
+  return true;
 }
 
 async function completedGraphReentryRequestMissingTerminalEvidence(params: {
@@ -916,6 +962,29 @@ async function completedGraphReentryRequestMissingTerminalEvidence(params: {
   );
 }
 
+async function graphReentryRequestsWithoutTerminalEvidence(params: {
+  projectRoot: string;
+  requests: Record<string, unknown>[];
+  predicate: (request: Record<string, unknown>) => boolean;
+}): Promise<Record<string, unknown>[]> {
+  const blocking: Record<string, unknown>[] = [];
+  for (const request of params.requests) {
+    if (!params.predicate(request)) {
+      continue;
+    }
+    if (
+      await hasRequisitionSatisfactionEvidence({
+        projectRoot: params.projectRoot,
+        request,
+      })
+    ) {
+      continue;
+    }
+    blocking.push(request);
+  }
+  return blocking;
+}
+
 async function graphReentryCompletionForStage(params: {
   projectRoot: string;
   stage: string;
@@ -924,7 +993,47 @@ async function graphReentryCompletionForStage(params: {
   if (!DOWNSTREAM_GRAPH_SENSITIVE_STAGES.has(params.stage)) {
     return null;
   }
-  if (paperIngestionRequests(params.manifest).some(isActiveGraphReentryRequest)) {
+  const graphDecision = await readGraphBuildDecision(params.projectRoot);
+  if (graphDecision) {
+    const decision = normalizeStage(graphDecision.decision ?? graphDecision.status);
+    const sourceBacked = graphDecision.source_backed_graph_claim === true;
+    if (!(decision === "complete" && sourceBacked)) {
+      const completionStatus =
+        decision === "failed"
+          ? "failed"
+          : decision === "blocked"
+            ? "blocked"
+            : "incomplete";
+      const blockingReason =
+        decision === "failed"
+          ? "graph_build_decision_failed"
+          : decision === "blocked"
+            ? "graph_build_decision_blocked"
+            : decision === "waiting"
+              ? "graph_build_decision_waiting"
+              : "graph_build_decision_missing_source_backed_claim";
+      return completion({
+        stage: "graph_build",
+        completionStatus,
+        owner: "researcher",
+        nextAction: "/graph-build",
+        blockingReason,
+        missingSignals: [
+          asString(graphDecision.reason) ??
+            "GRAPH_BUILD_DECISION.json is not complete with a source-backed graph claim.",
+        ],
+        contractSource: `${params.stage}_completion`,
+      });
+    }
+  }
+  const requests = paperIngestionRequests(params.manifest);
+  const activeGraphReentryRequests =
+    await graphReentryRequestsWithoutTerminalEvidence({
+      projectRoot: params.projectRoot,
+      requests,
+      predicate: isActiveGraphReentryRequest,
+    });
+  if (activeGraphReentryRequests.length > 0) {
     return completion({
       stage: "graph_build",
       completionStatus: "incomplete",
@@ -937,8 +1046,13 @@ async function graphReentryCompletionForStage(params: {
       contractSource: `${params.stage}_completion`,
     });
   }
-  const failedGraphReentryRequest =
-    paperIngestionRequests(params.manifest).find(isFailedGraphReentryRequest) ?? null;
+  const failedGraphReentryRequests =
+    await graphReentryRequestsWithoutTerminalEvidence({
+      projectRoot: params.projectRoot,
+      requests,
+      predicate: isFailedGraphReentryRequest,
+    });
+  const failedGraphReentryRequest = failedGraphReentryRequests[0] ?? null;
   if (failedGraphReentryRequest) {
     return completion({
       stage: "graph_build",
@@ -1176,7 +1290,14 @@ export async function resolveGraphCompletion(projectRoot: string): Promise<Stage
       contractSource: "graph_completion",
     });
   }
-  if (paperIngestionRequests(manifest).some(isActiveGraphReentryRequest)) {
+  const graphRequests = paperIngestionRequests(manifest);
+  const activeGraphReentryRequests =
+    await graphReentryRequestsWithoutTerminalEvidence({
+      projectRoot,
+      requests: graphRequests,
+      predicate: isActiveGraphReentryRequest,
+    });
+  if (activeGraphReentryRequests.length > 0) {
     return completion({
       stage: "graph_build",
       completionStatus: "incomplete",
@@ -1189,8 +1310,13 @@ export async function resolveGraphCompletion(projectRoot: string): Promise<Stage
       contractSource: "graph_completion",
     });
   }
-  const failedGraphReentryRequest =
-    paperIngestionRequests(manifest).find(isFailedGraphReentryRequest) ?? null;
+  const failedGraphReentryRequests =
+    await graphReentryRequestsWithoutTerminalEvidence({
+      projectRoot,
+      requests: graphRequests,
+      predicate: isFailedGraphReentryRequest,
+    });
+  const failedGraphReentryRequest = failedGraphReentryRequests[0] ?? null;
   if (failedGraphReentryRequest) {
     return completion({
       stage: "graph_build",
@@ -1444,6 +1570,17 @@ export async function resolveExperimentCompletion(
     experimentLedger,
     manifest,
   });
+
+  if (hasActiveExperimentRuntime(experimentLedger)) {
+    return completion({
+      stage: "experiment",
+      completionStatus: "incomplete",
+      owner: "researcher",
+      nextAction: "/monitor-experiment",
+      blockingReason: "reconcile_runtime",
+      contractSource: "experiment_completion",
+    });
+  }
 
   if (decisionSummary.decision === "launch_pending" && !experimentSearchStarted) {
     return completion({
@@ -1880,7 +2017,13 @@ export async function resolveLegacyIdeaCompletion(
     (await readJsonIfExists<Record<string, unknown>>(
       path.join(projectRoot, "PROJECT_MANIFEST.json")
     )) ?? {};
-  if (hasActiveGraphReentryRequest(manifest)) {
+  const activeGraphReentryRequests =
+    await graphReentryRequestsWithoutTerminalEvidence({
+      projectRoot,
+      requests: paperIngestionRequests(manifest),
+      predicate: isActiveGraphReentryRequest,
+    });
+  if (activeGraphReentryRequests.length > 0) {
     return completion({
       stage: "graph_build",
       completionStatus: "blocked",
@@ -1925,8 +2068,11 @@ export async function resolveExperimentPlanCompletion(
     "primary_metric",
     "fixed_budget",
   ];
+  const packetStatus = normalizeStage(innovationPacket?.status);
+  const packetStatusAllowsCompletion = !packetStatus || packetStatus === "ready";
   if (
     innovationPacket &&
+    packetStatusAllowsCompletion &&
     required.every((key) => asString(innovationPacket[key])) &&
     ideaIds.length > 0 &&
     evidencePaths.length > 0

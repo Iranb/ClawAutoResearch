@@ -339,6 +339,121 @@ test("formatWorkflowSnapshotForPrompt tells coder when a remote run finished and
   );
 });
 
+test("formatWorkflowSnapshotForPrompt surfaces experiment next candidate guidance", () => {
+  const snapshot = {
+    ...makeBaseSnapshot(),
+    role: "researcher",
+    currentStage: "experiment",
+    currentMicroStage: "search",
+    ownerAgent: "researcher",
+    recommendedOwner: "researcher",
+    experimentSearchStatus: "running",
+    experimentSearchCurrentMainStage: "creative_research",
+    experimentSearchCurrentSubstage: "branch_expansion",
+    experimentSearchBestNodeId: "node-7",
+    experimentSearchMultiSeedStatus: "pending",
+    experimentSearchPlotPackStatus: "pending",
+    experimentSearchInnerLoopMode: "karpathy_loop",
+    experimentSearchTrialTimeBudgetMinutes: 30,
+    experimentSearchOneChangeSignature: "margin-reweighting",
+    experimentSearchOneChangeValidationStatus: "valid",
+    experimentSearchComparableTrialBudgetStatus: "pass",
+    experimentSearchLastTrialOutcome: "failed",
+    experimentSearchBaselineDatasetCoverageStatus: "ready",
+    experimentSearchInnovationDeviationStatus: "aligned",
+    experimentSearchInnovationDeviationScore: 0.82,
+    experimentSearchNextCandidateMetricName: "H-score",
+    experimentSearchNextCandidateMetricDirection: "higher_is_better",
+    experimentSearchNextCandidateMinimumImprovement: 0.01,
+    experimentSearchNextCandidatePaperContributionMetric: "topline_h_score",
+    experimentSearchNextCandidateRequiredProperties: [
+      "one_change_signature",
+      "fixed_trial_budget",
+    ],
+    experimentSearchNextCandidateRecommendedFocus: [
+      "optimize_primary_metric:H-score",
+    ],
+    experimentSearchNextCandidateBlockerBasis: [
+      "no_positive_primary_metric_gain",
+    ],
+    experimentSearchNextCandidateInnovationAnchors: ["graph_claim:claim-7"],
+    experimentSearchNextCandidateAvoidExperimentIds: ["exp-failed-1"],
+    experimentSearchNextCandidateAvoidOneChangeSignatures: [
+      "consistency-filtering",
+    ],
+    experimentSearchNextCandidateAvoidFailureClusterIds: ["cluster-timeout"],
+  };
+
+  const fullPrompt = formatWorkflowSnapshotForPrompt({ snapshot });
+  assert.match(
+    fullPrompt,
+    /Experiment next candidate guidance: metric=H-score, direction=higher_is_better, min_improvement=0\.01/
+  );
+  assert.match(
+    fullPrompt,
+    /required=one_change_signature,fixed_trial_budget/
+  );
+  assert.match(
+    fullPrompt,
+    /Experiment next candidate avoid: experiments=exp-failed-1, one_change_signatures=consistency-filtering, failure_clusters=cluster-timeout/
+  );
+  assert.match(
+    fullPrompt,
+    /Experiment next candidate rule: propose exactly one new one_change_signature; reject candidates matching the avoid lists; explain the H-score improvement mechanism/
+  );
+  assert.match(
+    fullPrompt,
+    /Experiment candidate review board: performance_reviewer checks primary metric mechanism, fixed budget, and baseline parity; innovation_reviewer checks Innovation Packet \/ idea-anchor alignment and rejects generic tuning drift; plan_reviewer checks one new one_change_signature, avoid lists, required properties, and plan\/search-spec consistency/
+  );
+  assert.match(
+    fullPrompt,
+    /aggregate: hard reject avoid-list hits or missing one_change_signature, otherwise require performance approve and 2 of 3 approve before dispatch/
+  );
+
+  const focusedPrompt = formatWorkflowSnapshotForPrompt({
+    snapshot: {
+      ...snapshot,
+      role: "coder",
+      ownerAgent: "coder",
+      recommendedOwner: "coder",
+    },
+    detailLevel: "focused",
+  });
+  assert.match(focusedPrompt, /next_candidate_guidance=metric:H-score/);
+  assert.match(
+    focusedPrompt,
+    /avoid_signatures=consistency-filtering/
+  );
+  assert.match(
+    focusedPrompt,
+    /focus=optimize_primary_metric:H-score/
+  );
+  assert.match(
+    focusedPrompt,
+    /candidate_selection_rule=propose_exactly_one_new_one_change_signature/
+  );
+  assert.match(
+    focusedPrompt,
+    /explain_H-score_improvement_mechanism/
+  );
+  assert.match(
+    focusedPrompt,
+    /candidate_review_board=performance_reviewer:metric_mechanism\+fixed_budget\+baseline_parity/
+  );
+  assert.match(
+    focusedPrompt,
+    /innovation_reviewer:innovation_anchor_alignment\+reject_generic_tuning/
+  );
+  assert.match(
+    focusedPrompt,
+    /plan_reviewer:new_one_change_signature\+avoid_lists\+plan_consistency/
+  );
+  assert.match(
+    focusedPrompt,
+    /aggregate=hard_reject_avoid_or_missing_signature,performance_approve_and_2_of_3_before_dispatch/
+  );
+});
+
 test("formatWorkflowStatusText reports derived evidence state and clears stale blocker text once readiness is satisfied", () => {
   const text = formatWorkflowStatusText({
     snapshot: {

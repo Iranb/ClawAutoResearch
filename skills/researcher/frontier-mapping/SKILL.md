@@ -149,12 +149,12 @@ These frontier outputs are not terminal prose. They are the graph-first basis pa
 - therefore frontier items should stay compact, typed, and reusable enough to survive that later synthesis step
 - prefer bullet points that name the challenge / insight / transfer / composition explicitly, because those labels are later reused to build novelty tree and challenge-insight tree contracts
 
-After writing the report, update `{PROJ}/PROJECT_MANIFEST.json` with:
+After writing the report, update the frontier evidence/projection state through workflow tools or the relevant manifest evidence fields:
 
 - `frontier_report`
-- `current_stage: "frontier_mapping"`
-- `current_micro_stage: "frontiers_packaged"`
 - `updated_at`
+
+Do not hand-edit `current_stage`, `current_micro_stage`, `owner_agent`, or `next_action`. Those are mirrors of canonical `workflow_control`; use `auto_iterator_tick` and `workflow-handoff-signal` when the frontier packet is ready.
 
 ## Stage Closeout
 

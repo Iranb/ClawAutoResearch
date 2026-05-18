@@ -25,7 +25,7 @@ Bounded background-topic research for Researcher. This is not a free-form brains
 - **Never manipulate evaluation** by cherry-picking only supportive papers for the background topic.
 - **Never fabricate citations** or metadata in the digest or follow-up notes.
 
-The authoritative state lives in `{PROJ}/PROJECT_MANIFEST.json.idle_research`, and the preferred runtime API is:
+The authoritative idle-research evidence lives in `{PROJ}/PROJECT_MANIFEST.json.idle_research`, and the preferred runtime APIs are below. This is not a stage/owner authority; canonical routing still comes from `workflow_control`.
 
 - `research_workflow.get_idle_research`
 - `research_workflow.set_idle_research`

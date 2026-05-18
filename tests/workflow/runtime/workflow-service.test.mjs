@@ -829,6 +829,122 @@ test("maybeLaunchIdleResearchForProject starts one bounded researcher background
   assert.equal(runs.length, 1);
 });
 
+test("maybeLaunchIdleResearchForProject preserves queued runtime-recovery launches", async (t) => {
+  const projectsRoot = await makeProjectsRoot();
+  const alphaRoot = await makeProject(projectsRoot, "alpha", "idea");
+  const launchedDueKeys = new Map();
+
+  t.after(async () => {
+    await fs.rm(projectsRoot, { recursive: true, force: true });
+  });
+
+  const launch = await maybeLaunchIdleResearchForProject({
+    workflowRuntime: {
+      async run() {
+        throw new Error("runtime.subagent gateway request unavailable");
+      },
+    },
+    workflowPolicy: {
+      enableChannelProjectBindings: true,
+      projectsRoot,
+      heartbeatBackgroundChecks: true,
+      agentContactCooldownSeconds: 300,
+      enableWorkflowMailbox: true,
+    },
+    projectRoot: alphaRoot,
+    projectId: "alpha",
+    autoIteratorResult: {
+      recommendedActions: [
+        {
+          kind: "background",
+          owner: "researcher",
+          command:
+            'Run /idle-research for "contrastive spectral pruning" and record the round through research_workflow.record_idle_research_run.',
+        },
+      ],
+    },
+    launchedDueKeys,
+    deps: {
+      async getIdleResearchStateSummary() {
+        return {
+          state: {
+            enabled: true,
+            topic: "contrastive spectral pruning",
+          },
+          due: true,
+          nextDueAt: null,
+        };
+      },
+      listChannelProjectBindingsForWorkflow() {
+        return {
+          enabled: true,
+          storePath: projectsRoot,
+          bindings: [
+            {
+              channelKey: "discord:group:paper-lab",
+              projectRoot: alphaRoot,
+              projectId: "alpha",
+              messageChannel: "discord",
+              sessionKeySample: "agent:researcher:discord:group:paper-lab",
+              sessionId: null,
+              boundAt: "2026-03-25T00:00:00.000Z",
+              updatedAt: "2026-03-25T00:05:00.000Z",
+              boundByAgent: "researcher",
+            },
+          ],
+        };
+      },
+    },
+  });
+
+  assert.equal(launch.launched, false);
+  assert.equal(launch.queued, true);
+  assert.equal(launch.reason, "queued");
+  assert.equal(typeof launch.queueKey, "string");
+
+  const status = deriveWorkflowCoordinatorStatusUpdate({
+    projectId: "alpha",
+    projectRoot: alphaRoot,
+    stageAfter: "idea",
+    autoGateReview: {
+      launched: false,
+      reason: "not_submit_gate",
+      projectId: "alpha",
+      projectRoot: alphaRoot,
+      gateId: null,
+      stage: "idea",
+      status: null,
+      reviewCount: 0,
+      approved: false,
+    },
+    autoModeDiscussion: {
+      launched: false,
+      reason: "stable",
+      projectId: "alpha",
+      projectRoot: alphaRoot,
+    },
+    autoMitigationDispatch: {
+      launched: false,
+      reason: "not_needed",
+      projectId: "alpha",
+      projectRoot: alphaRoot,
+    },
+    autoStageLaunch: {
+      launched: false,
+      reason: "no_drive_stage_action",
+      projectId: "alpha",
+      projectRoot: alphaRoot,
+      stage: "idea",
+      owner: null,
+    },
+    idleResearchLaunch: launch,
+  });
+
+  assert.equal(status?.status, "queued");
+  assert.match(status?.summary ?? "", /Queued idle research/i);
+  assert.match(status?.dedupeKey ?? "", /idle-research/);
+});
+
 test("maybeLaunchIdleResearchForProject keeps researcher background capacity isolated per project on the same channel", async (t) => {
   const projectsRoot = await makeProjectsRoot();
   const alphaRoot = path.join(projectsRoot, "alpha");
@@ -2517,6 +2633,64 @@ test("maybeLaunchAutoZoteroSyncForProject queues non-blocking work when gateway 
   assert.equal(launch.trigger, "auto_graph_refresh");
 });
 
+test("maybeLaunchAutoZoteroSyncForProject does not report unqueued runtime failures as queued", async (t) => {
+  const projectsRoot = await makeProjectsRoot();
+  const projectRoot = path.join(projectsRoot, "alpha");
+
+  t.after(async () => {
+    await fs.rm(projectsRoot, { recursive: true, force: true });
+  });
+
+  await fs.mkdir(projectRoot, { recursive: true });
+  await seedProjectPapers(projectRoot);
+
+  const launch = await maybeLaunchAutoZoteroSyncForProject({
+    workflowRuntime: {
+      async run() {
+        throw new Error("zotero runner crashed");
+      },
+    },
+    workflowPolicy: {
+      enableChannelProjectBindings: true,
+      projectsRoot,
+      heartbeatBackgroundChecks: true,
+      agentContactCooldownSeconds: 300,
+      enableWorkflowMailbox: true,
+      zoteroProjectRoot: "Bot",
+    },
+    projectRoot,
+    projectId: "alpha",
+    deps: {
+      listChannelProjectBindingsForWorkflow() {
+        return {
+          enabled: true,
+          storePath: projectsRoot,
+          bindings: [
+            {
+              channelKey: "discord:group:paper-lab",
+              projectRoot,
+              projectId: "alpha",
+              messageChannel: "discord",
+              sessionKeySample: "agent:researcher:discord:group:paper-lab",
+              sessionId: null,
+              boundAt: "2026-03-25T00:00:00.000Z",
+              updatedAt: "2026-03-25T00:05:00.000Z",
+              boundByAgent: "researcher",
+              notes: null,
+            },
+          ],
+        };
+      },
+    },
+  });
+
+  assert.equal(launch.launched, false);
+  assert.equal(launch.queued, false);
+  assert.equal(launch.reason, "runtime_unavailable");
+  assert.equal(launch.trigger, "auto_graph_refresh");
+  assert.match(launch.summary ?? "", /zotero runner crashed/i);
+});
+
 test("maybeLaunchPaperIngestionWorkerForProject starts queued PaperNexus uploads without a graph-build agent turn", async (t) => {
   const projectsRoot = await makeProjectsRoot();
   const projectRoot = path.join(projectsRoot, "alpha");
@@ -2648,6 +2822,203 @@ test("maybeLaunchPaperIngestionWorkerForProject starts queued PaperNexus uploads
     "coordinator_heartbeat"
   );
   assert.equal(manifest.paper_ingestion.completed_papers.length, 1);
+});
+
+test("maybeLaunchPaperIngestionWorkerForProject surfaces unqueued runtime failures as blocked coordinator status", async (t) => {
+  const projectsRoot = await makeProjectsRoot();
+  const projectRoot = path.join(projectsRoot, "alpha");
+  const previousMcpUrl = process.env.PAPERNEXUS_MCP_URL;
+  const previousApiBase = process.env.PAPERNEXUS_API_BASE_URL;
+  const batchManifestPath = path.join(
+    projectRoot,
+    "researcher",
+    "paper-staging",
+    "batch-import.json"
+  );
+  const stagedMarkdownPath = path.join(
+    projectRoot,
+    "researcher",
+    "paper-staging",
+    "demo-paper.md"
+  );
+
+  t.after(async () => {
+    if (previousMcpUrl === undefined) {
+      delete process.env.PAPERNEXUS_MCP_URL;
+    } else {
+      process.env.PAPERNEXUS_MCP_URL = previousMcpUrl;
+    }
+    if (previousApiBase === undefined) {
+      delete process.env.PAPERNEXUS_API_BASE_URL;
+    } else {
+      process.env.PAPERNEXUS_API_BASE_URL = previousApiBase;
+    }
+    await fs.rm(projectsRoot, { recursive: true, force: true });
+  });
+
+  delete process.env.PAPERNEXUS_MCP_URL;
+  delete process.env.PAPERNEXUS_API_BASE_URL;
+  await fs.mkdir(path.dirname(batchManifestPath), { recursive: true });
+  await fs.writeFile(
+    stagedMarkdownPath,
+    "# Demo Paper\n\nThis markdown fixture is long enough for staged validation. ".repeat(30),
+    "utf8"
+  );
+  await writeJson(batchManifestPath, {
+    version: 1,
+    papers: [
+      {
+        paperId: "demo-paper",
+        source: stagedMarkdownPath,
+        sourceKind: "markdown",
+      },
+    ],
+  });
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "alpha",
+    current_stage: "graph_build",
+    owner_agent: "researcher",
+    paper_ingestion: {
+      queued_requests: [
+        {
+          request_id: "req-batch-runtime-fail",
+          status: "queued",
+          wrapper: "pn_batch_import.py",
+          command_text:
+            `python3 scripts/pn_batch_import.py --manifest ${batchManifestPath} submit`,
+          manifest_path: batchManifestPath,
+          shared_corpus: "GCD",
+          paper_count: 1,
+          summary: "Queued corpus upload",
+          created_at: "2026-04-02T00:00:00.000Z",
+          updated_at: "2026-04-02T00:00:00.000Z",
+        },
+      ],
+    },
+  });
+
+  const launch = await maybeLaunchPaperIngestionWorkerForProject({
+    workflowRuntime: {
+      async run() {
+        throw new Error("PaperNexus worker runtime crashed before dispatch");
+      },
+    },
+    workflowPolicy: {
+      enableChannelProjectBindings: true,
+      projectsRoot,
+      heartbeatBackgroundChecks: true,
+      agentContactCooldownSeconds: 300,
+      enableWorkflowMailbox: true,
+    },
+    projectRoot,
+    projectId: "alpha",
+    triggerKind: "coordinator_heartbeat",
+    deps: {
+      listChannelProjectBindingsForWorkflow() {
+        return {
+          enabled: true,
+          storePath: projectsRoot,
+          bindings: [
+            {
+              channelKey: "discord:group:paper-lab",
+              projectRoot,
+              projectId: "alpha",
+              messageChannel: "discord",
+              sessionKeySample: "agent:researcher:discord:group:paper-lab",
+              sessionId: null,
+              boundAt: "2026-03-25T00:00:00.000Z",
+              updatedAt: "2026-03-25T00:05:00.000Z",
+              boundByAgent: "researcher",
+              notes: null,
+            },
+          ],
+        };
+      },
+    },
+  });
+
+  assert.equal(launch.launched, false);
+  assert.equal(launch.queued, false);
+  assert.equal(launch.reason, "runtime_unavailable");
+  assert.match(launch.summary ?? "", /PaperNexus worker runtime crashed/i);
+
+  const status = deriveWorkflowCoordinatorStatusUpdate({
+    projectId: "alpha",
+    projectRoot,
+    stageAfter: "graph_build",
+    autoGateReview: {
+      launched: false,
+      reason: "not_submit_gate",
+      projectId: "alpha",
+      projectRoot,
+      gateId: null,
+      stage: "graph_build",
+      status: null,
+      reviewCount: 0,
+      approved: false,
+    },
+    autoModeDiscussion: {
+      launched: false,
+      reason: "stable",
+      projectId: "alpha",
+      projectRoot,
+      fingerprint: null,
+      stage: "graph_build",
+      riskLevel: null,
+      status: null,
+      reviewCount: 0,
+      roundsStarted: 0,
+      recommendedOwner: null,
+      actionItems: [],
+      blockers: [],
+      summary: null,
+      roundId: null,
+      packetPath: null,
+      resolved: false,
+    },
+    autoMitigationDispatch: {
+      launched: false,
+      reason: "not_needed",
+      projectId: "alpha",
+      projectRoot,
+      fingerprint: null,
+      stage: "graph_build",
+      owner: null,
+      sessionKey: null,
+      runId: null,
+      dispatchStrategy: null,
+      error: null,
+    },
+    autoStageLaunch: {
+      launched: false,
+      reason: "no_drive_stage_action",
+      projectId: "alpha",
+      projectRoot,
+      stage: "graph_build",
+      owner: null,
+      sessionKey: null,
+      runId: null,
+      dispatchStrategy: null,
+      launchKey: null,
+      error: null,
+    },
+    idleResearchLaunch: {
+      launched: false,
+      reason: "idle_research_not_due",
+      projectId: "alpha",
+      projectRoot,
+      topic: null,
+      sessionKey: null,
+      runId: null,
+      dueKey: null,
+      summary: null,
+      reusedIdleSession: false,
+      activeResearcherSessionsInChannel: null,
+    },
+    paperIngestionWorker: launch,
+  });
+  assert.equal(status?.status, "blocked");
+  assert.match(status?.summary ?? "", /PaperNexus worker runtime crashed/i);
 });
 
 test("maybeLaunchPaperIngestionWorkerForProject lets the control-plane advance literature requisitions without a graph-build agent turn", async (t) => {
@@ -5122,6 +5493,1182 @@ test("deriveWorkflowCoordinatorStatusUpdate summarizes visible auto-mode states"
   });
   assert.equal(idleCapacity?.status, "queued");
   assert.match(idleCapacity?.summary ?? "", /already has 2 active Researcher background subagents/i);
+});
+
+test("deriveWorkflowCoordinatorStatusUpdate surfaces runtime reconciliation waits", () => {
+  const status = deriveWorkflowCoordinatorStatusUpdate({
+    projectId: "alpha",
+    projectRoot: "/tmp/projects/alpha",
+    stageAfter: "analysis",
+    autoGateReview: {
+      launched: false,
+      reason: "not_submit_gate",
+      projectId: "alpha",
+      projectRoot: "/tmp/projects/alpha",
+      gateId: null,
+      stage: "analysis",
+      status: null,
+      reviewCount: 0,
+      approved: false,
+    },
+    autoModeDiscussion: {
+      launched: false,
+      reason: "stable",
+      projectId: "alpha",
+      projectRoot: "/tmp/projects/alpha",
+      fingerprint: null,
+      stage: "analysis",
+      riskLevel: null,
+      status: null,
+      reviewCount: 0,
+      roundsStarted: 0,
+      recommendedOwner: null,
+      actionItems: [],
+      blockers: [],
+      summary: null,
+      roundId: null,
+      packetPath: null,
+      resolved: false,
+    },
+    autoMitigationDispatch: {
+      launched: false,
+      reason: "not_needed",
+      projectId: "alpha",
+      projectRoot: "/tmp/projects/alpha",
+      fingerprint: null,
+      stage: "analysis",
+      owner: null,
+      sessionKey: null,
+      runId: null,
+      dispatchStrategy: null,
+      error: null,
+    },
+    autoStageLaunch: {
+      launched: false,
+      reason: "runtime_reconciliation_waiting",
+      projectId: "alpha",
+      projectRoot: "/tmp/projects/alpha",
+      stage: "analysis",
+      owner: "analyzer",
+      sessionKey: "agent:analyzer:analysis-active",
+      runId: null,
+      dispatchStrategy: null,
+      launchKey: "analysis:analyzer:/analyze-results",
+      error:
+        "Active owner session exists without an active handoff or queue entry; waiting instead of repeating dispatch.",
+      reusedServiceSession: false,
+      activeResearcherSessionsInChannel: 1,
+    },
+    idleResearchLaunch: {
+      launched: false,
+      reason: "idle_research_not_due",
+      projectId: "alpha",
+      projectRoot: "/tmp/projects/alpha",
+      topic: null,
+      sessionKey: null,
+      runId: null,
+      dueKey: null,
+      summary: null,
+      reusedIdleSession: false,
+      activeResearcherSessionsInChannel: null,
+    },
+  });
+
+  assert.equal(status?.status, "waiting");
+  assert.match(status?.summary ?? "", /active owner session/i);
+  assert.match(status?.summary ?? "", /repeating dispatch/i);
+});
+
+test("deriveWorkflowCoordinatorStatusUpdate surfaces missing auto-stage runtime as blocked", () => {
+  const status = deriveWorkflowCoordinatorStatusUpdate({
+    projectId: "alpha",
+    projectRoot: "/tmp/projects/alpha",
+    stageAfter: "experiment",
+    autoGateReview: {
+      launched: false,
+      reason: "not_submit_gate",
+      projectId: "alpha",
+      projectRoot: "/tmp/projects/alpha",
+      gateId: null,
+      stage: "experiment",
+      status: null,
+      reviewCount: 0,
+      approved: false,
+    },
+    autoModeDiscussion: {
+      launched: false,
+      reason: "stable",
+      projectId: "alpha",
+      projectRoot: "/tmp/projects/alpha",
+      fingerprint: null,
+      stage: "experiment",
+      riskLevel: null,
+      status: null,
+      reviewCount: 0,
+      roundsStarted: 0,
+      recommendedOwner: null,
+      actionItems: [],
+      blockers: [],
+      summary: null,
+      roundId: null,
+      packetPath: null,
+      resolved: false,
+    },
+    autoMitigationDispatch: {
+      launched: false,
+      reason: "not_needed",
+      projectId: "alpha",
+      projectRoot: "/tmp/projects/alpha",
+      fingerprint: null,
+      stage: "experiment",
+      owner: null,
+      sessionKey: null,
+      runId: null,
+      dispatchStrategy: null,
+      error: null,
+    },
+    autoStageLaunch: {
+      launched: false,
+      reason: "no_runtime_subagent",
+      projectId: "alpha",
+      projectRoot: "/tmp/projects/alpha",
+      stage: "experiment",
+      owner: "coder",
+      sessionKey: null,
+      runId: null,
+      dispatchStrategy: null,
+      launchKey: null,
+      error: null,
+      reusedServiceSession: false,
+      activeResearcherSessionsInChannel: null,
+    },
+    idleResearchLaunch: {
+      launched: false,
+      reason: "idle_research_not_due",
+      projectId: "alpha",
+      projectRoot: "/tmp/projects/alpha",
+      topic: null,
+      sessionKey: null,
+      runId: null,
+      dueKey: null,
+      summary: null,
+      reusedIdleSession: false,
+      activeResearcherSessionsInChannel: null,
+    },
+  });
+
+  assert.equal(status?.status, "blocked");
+  assert.match(status?.summary ?? "", /workflow execution runtime/i);
+  assert.match(status?.summary ?? "", /unavailable/i);
+});
+
+test("deriveWorkflowCoordinatorStatusUpdate surfaces auto-mode mitigation dispatch failures", () => {
+  const buildStatus = (autoMitigationDispatch) =>
+    deriveWorkflowCoordinatorStatusUpdate({
+      projectId: "alpha",
+      projectRoot: "/tmp/projects/alpha",
+      stageAfter: "analysis",
+      autoGateReview: {
+        launched: false,
+        reason: "not_submit_gate",
+        projectId: "alpha",
+        projectRoot: "/tmp/projects/alpha",
+        gateId: null,
+        stage: "analysis",
+        status: null,
+        reviewCount: 0,
+        approved: false,
+      },
+      autoModeDiscussion: {
+        launched: false,
+        reason: "updated",
+        projectId: "alpha",
+        projectRoot: "/tmp/projects/alpha",
+        fingerprint: "risk-fp-1",
+        stage: "analysis",
+        riskLevel: "severe",
+        status: "needs_changes",
+        reviewCount: 3,
+        roundsStarted: 1,
+        recommendedOwner: "coder",
+        actionItems: ["Repair the analyzer handoff before continuing."],
+        blockers: ["Analyzer handoff lacks a durable runtime mapping."],
+        summary: "Risk discussion requires mitigation before dispatch.",
+        roundId: "risk-round-1",
+        packetPath: "reviewer/auto-mode/RISK_PACKET.json",
+        resolved: false,
+      },
+      autoMitigationDispatch,
+      autoStageLaunch: {
+        launched: false,
+        reason: "risk_discussion_pending",
+        projectId: "alpha",
+        projectRoot: "/tmp/projects/alpha",
+        stage: "analysis",
+        owner: "coder",
+        sessionKey: null,
+        runId: null,
+        dispatchStrategy: null,
+        launchKey: null,
+        error: null,
+        reusedServiceSession: false,
+        activeResearcherSessionsInChannel: null,
+      },
+      idleResearchLaunch: {
+        launched: false,
+        reason: "idle_research_not_due",
+        projectId: "alpha",
+        projectRoot: "/tmp/projects/alpha",
+        topic: null,
+        sessionKey: null,
+        runId: null,
+        dueKey: null,
+        summary: null,
+        reusedIdleSession: false,
+        activeResearcherSessionsInChannel: null,
+      },
+    });
+
+  const failed = buildStatus({
+    launched: false,
+    reason: "dispatch_failed",
+    projectId: "alpha",
+    projectRoot: "/tmp/projects/alpha",
+    fingerprint: "risk-fp-1",
+    stage: "analysis",
+    owner: "coder",
+    sessionKey: "agent:coder:analysis-mitigation",
+    runId: null,
+    dispatchStrategy: "handoff",
+    error: "Mitigation handoff failed before the coder runtime accepted it.",
+    reusedServiceSession: false,
+    activeResearcherSessionsInChannel: null,
+  });
+  assert.equal(failed?.status, "blocked");
+  assert.match(failed?.summary ?? "", /Mitigation handoff failed/i);
+
+  const noRuntime = buildStatus({
+    launched: false,
+    reason: "no_runtime_subagent",
+    projectId: "alpha",
+    projectRoot: "/tmp/projects/alpha",
+    fingerprint: "risk-fp-1",
+    stage: "analysis",
+    owner: "coder",
+    sessionKey: null,
+    runId: null,
+    dispatchStrategy: null,
+    error: null,
+    reusedServiceSession: false,
+    activeResearcherSessionsInChannel: null,
+  });
+  assert.equal(noRuntime?.status, "blocked");
+  assert.match(noRuntime?.summary ?? "", /mitigation/i);
+  assert.match(noRuntime?.summary ?? "", /workflow execution runtime/i);
+});
+
+test("deriveWorkflowCoordinatorStatusUpdate surfaces already-dispatched mitigation waits", () => {
+  const status = deriveWorkflowCoordinatorStatusUpdate(
+    buildVisibleStatusParams({
+      stageAfter: "analysis",
+      autoModeDiscussion: {
+        launched: false,
+        reason: "updated",
+        projectId: "alpha",
+        projectRoot: "/tmp/projects/alpha",
+        fingerprint: "risk-fp-1",
+        stage: "analysis",
+        riskLevel: "severe",
+        status: "needs_changes",
+        reviewCount: 3,
+        roundsStarted: 1,
+        recommendedOwner: "coder",
+        actionItems: ["Repair the analyzer handoff before continuing."],
+        blockers: ["Analyzer handoff lacks a durable runtime mapping."],
+        summary: "Risk discussion requires mitigation before dispatch.",
+        roundId: "risk-round-1",
+        packetPath: "reviewer/auto-mode/RISK_PACKET.json",
+        resolved: false,
+      },
+      autoMitigationDispatch: {
+        launched: false,
+        reason: "already_dispatched",
+        projectId: "alpha",
+        projectRoot: "/tmp/projects/alpha",
+        fingerprint: "risk-fp-1",
+        stage: "analysis",
+        owner: "coder",
+        sessionKey: null,
+        runId: null,
+        dispatchStrategy: null,
+        error: null,
+        reusedServiceSession: false,
+        activeResearcherSessionsInChannel: null,
+      },
+      autoStageLaunch: {
+        launched: false,
+        reason: "risk_discussion_pending",
+        projectId: "alpha",
+        projectRoot: "/tmp/projects/alpha",
+        stage: "analysis",
+        owner: "coder",
+        sessionKey: null,
+        runId: null,
+        dispatchStrategy: null,
+        launchKey: null,
+        error: null,
+        reusedServiceSession: false,
+        activeResearcherSessionsInChannel: null,
+      },
+    })
+  );
+
+  assert.equal(status?.status, "waiting");
+  assert.match(status?.summary ?? "", /already-dispatched auto-mode mitigation/i);
+  assert.doesNotMatch(status?.summary ?? "", /risk discussion before handing off/i);
+});
+
+test("deriveWorkflowCoordinatorStatusUpdate surfaces queued mitigation before generic risk waits", () => {
+  const status = deriveWorkflowCoordinatorStatusUpdate(
+    buildVisibleStatusParams({
+      stageAfter: "analysis",
+      autoModeDiscussion: {
+        launched: false,
+        reason: "updated",
+        projectId: "alpha",
+        projectRoot: "/tmp/projects/alpha",
+        fingerprint: "risk-fp-2",
+        stage: "analysis",
+        riskLevel: "severe",
+        status: "needs_changes",
+        reviewCount: 3,
+        roundsStarted: 1,
+        recommendedOwner: "researcher",
+        actionItems: ["Run the mitigation pass before retrying dispatch."],
+        blockers: ["Risk discussion requires a mitigation owner turn."],
+        summary: "Risk discussion requires mitigation before dispatch.",
+        roundId: "risk-round-2",
+        packetPath: "reviewer/auto-mode/RISK_PACKET.json",
+        resolved: false,
+      },
+      autoMitigationDispatch: {
+        launched: false,
+        reason: "session_pool_full",
+        projectId: "alpha",
+        projectRoot: "/tmp/projects/alpha",
+        fingerprint: "risk-fp-2",
+        stage: "analysis",
+        owner: "researcher",
+        sessionKey: null,
+        runId: null,
+        dispatchStrategy: null,
+        error: "researcher service session pool is at capacity for this channel (2 active).",
+        reusedServiceSession: false,
+        activeResearcherSessionsInChannel: 2,
+      },
+      autoStageLaunch: {
+        launched: false,
+        reason: "risk_discussion_pending",
+        projectId: "alpha",
+        projectRoot: "/tmp/projects/alpha",
+        stage: "analysis",
+        owner: "researcher",
+        sessionKey: null,
+        runId: null,
+        dispatchStrategy: null,
+        launchKey: null,
+        error: null,
+        reusedServiceSession: false,
+        activeResearcherSessionsInChannel: null,
+      },
+    })
+  );
+
+  assert.equal(status?.status, "queued");
+  assert.match(status?.summary ?? "", /Queued the mitigation pass/i);
+  assert.doesNotMatch(status?.summary ?? "", /risk discussion before handing off/i);
+});
+
+test("deriveWorkflowCoordinatorStatusUpdate surfaces active PaperNexus ingestion workers", () => {
+  const status = deriveWorkflowCoordinatorStatusUpdate(
+    buildVisibleStatusParams({
+      stageAfter: "literature_review",
+      paperIngestionWorker: {
+        launched: false,
+        queued: false,
+        reason: "already_active",
+        projectId: "alpha",
+        projectRoot: "/tmp/projects/alpha",
+        sessionKey: "agent:researcher:paper-worker",
+        runId: null,
+        summary: "PaperNexus ingestion worker is already active.",
+        queueKey: "paper-ingestion-1",
+      },
+    })
+  );
+
+  assert.equal(status?.status, "waiting");
+  assert.match(status?.summary ?? "", /PaperNexus ingestion worker is already active/i);
+});
+
+test("deriveWorkflowCoordinatorStatusUpdate surfaces code review bundle blockers", () => {
+  const status = deriveWorkflowCoordinatorStatusUpdate(
+    buildVisibleStatusParams({
+      stageAfter: "code",
+      autoCodeReview: {
+        launched: false,
+        reason: "bundle_incomplete",
+        projectId: "alpha",
+        projectRoot: "/tmp/projects/alpha",
+        gateId: "CODE-REVIEW",
+        stage: "code",
+        status: null,
+        reviewCount: 0,
+        approved: false,
+      },
+      autoStageLaunch: {
+        launched: false,
+        reason: "gate_blocked",
+        projectId: "alpha",
+        projectRoot: "/tmp/projects/alpha",
+        stage: "code",
+        owner: null,
+        sessionKey: null,
+        runId: null,
+        dispatchStrategy: null,
+        launchKey: null,
+        error: "Code gate blocked the dispatch.",
+        reusedServiceSession: false,
+        activeResearcherSessionsInChannel: null,
+      },
+    })
+  );
+
+  assert.equal(status?.status, "blocked");
+  assert.match(status?.summary ?? "", /code innovation review bundle/i);
+  assert.doesNotMatch(status?.summary ?? "", /current code gate/i);
+});
+
+test("deriveWorkflowCoordinatorStatusUpdate surfaces survey brief refinement panel states", () => {
+  const started = deriveWorkflowCoordinatorStatusUpdate(
+    buildVisibleStatusParams({
+      stageAfter: "survey_review",
+      surveyBriefRefinement: {
+        launched: true,
+        reason: "started",
+        projectId: "alpha",
+        projectRoot: "/tmp/projects/alpha",
+        discussionId: "survey-brief-refinement",
+        topic: "Generalized Category Discovery",
+        stage: "survey_review",
+        status: "reviewing",
+        reviewCount: 0,
+        roundsStarted: 1,
+        recommendedOwner: null,
+        actionItems: [],
+        blockers: [],
+        summary: null,
+        roundId: "survey-brief-round-1",
+        packetPath: "reviewer/panel-discussions/survey-brief-refinement/PACKET.md",
+        resolved: false,
+      },
+      autoStageLaunch: {
+        launched: false,
+        reason: "gate_blocked",
+        projectId: "alpha",
+        projectRoot: "/tmp/projects/alpha",
+        stage: "survey_review",
+        owner: null,
+        sessionKey: null,
+        runId: null,
+        dispatchStrategy: null,
+        launchKey: null,
+        error: "Survey gate blocked the dispatch.",
+        reusedServiceSession: false,
+        activeResearcherSessionsInChannel: null,
+      },
+    })
+  );
+  assert.equal(started?.status, "waiting");
+  assert.match(started?.summary ?? "", /survey brief refinement/i);
+  assert.doesNotMatch(started?.summary ?? "", /current survey_review gate/i);
+
+  const roundLimit = deriveWorkflowCoordinatorStatusUpdate(
+    buildVisibleStatusParams({
+      stageAfter: "survey_review",
+      surveyBriefRefinement: {
+        launched: false,
+        reason: "round_limit_reached",
+        projectId: "alpha",
+        projectRoot: "/tmp/projects/alpha",
+        discussionId: "survey-brief-refinement",
+        topic: "Generalized Category Discovery",
+        stage: "survey_review",
+        status: "blocked",
+        reviewCount: 4,
+        roundsStarted: 2,
+        recommendedOwner: "researcher",
+        actionItems: [],
+        blockers: ["Survey taxonomy still lacks method-family structure."],
+        summary: null,
+        roundId: "survey-brief-round-2",
+        packetPath: "reviewer/panel-discussions/survey-brief-refinement/PACKET.md",
+        resolved: false,
+      },
+      autoStageLaunch: {
+        launched: false,
+        reason: "gate_blocked",
+        projectId: "alpha",
+        projectRoot: "/tmp/projects/alpha",
+        stage: "survey_review",
+        owner: null,
+        sessionKey: null,
+        runId: null,
+        dispatchStrategy: null,
+        launchKey: null,
+        error: "Survey gate blocked the dispatch.",
+        reusedServiceSession: false,
+        activeResearcherSessionsInChannel: null,
+      },
+    })
+  );
+  assert.equal(roundLimit?.status, "blocked");
+  assert.match(roundLimit?.summary ?? "", /round limit/i);
+  assert.match(roundLimit?.summary ?? "", /survey brief refinement/i);
+});
+
+test("deriveWorkflowCoordinatorStatusUpdate surfaces Auto Zotero queued and non-blocking failure states", () => {
+  const alreadyQueued = deriveWorkflowCoordinatorStatusUpdate(
+    buildVisibleStatusParams({
+      autoZoteroSync: {
+        launched: false,
+        queued: true,
+        reason: "already_queued",
+        projectId: "alpha",
+        projectRoot: "/tmp/projects/alpha",
+        trigger: "auto_graph_refresh",
+        triggerReason: "graph changed",
+        sessionKey: null,
+        runId: null,
+        summary: "Zotero sync is already queued.",
+        queueKey: "zotero-sync-queue",
+        zoteroProjectPath: "Bot/alpha",
+        packetPath: "researcher/IDEA_CATALYST_CONTRACT.json",
+        markdownPath: "paper.md",
+      },
+    })
+  );
+
+  assert.equal(alreadyQueued?.status, "queued");
+  assert.match(alreadyQueued?.summary ?? "", /already queued/i);
+
+  const alreadyLaunched = deriveWorkflowCoordinatorStatusUpdate(
+    buildVisibleStatusParams({
+      autoZoteroSync: {
+        launched: false,
+        queued: false,
+        reason: "already_launched",
+        projectId: "alpha",
+        projectRoot: "/tmp/projects/alpha",
+        trigger: "auto_graph_refresh",
+        triggerReason: "graph changed",
+        sessionKey: null,
+        runId: null,
+        summary: null,
+        queueKey: "zotero-sync-queue",
+        zoteroProjectPath: "Bot/alpha",
+        packetPath: "researcher/IDEA_CATALYST_CONTRACT.json",
+        markdownPath: "paper.md",
+      },
+    })
+  );
+
+  assert.equal(alreadyLaunched?.status, "continued");
+  assert.match(alreadyLaunched?.summary ?? "", /already active/i);
+
+  const runtimeUnavailable = deriveWorkflowCoordinatorStatusUpdate(
+    buildVisibleStatusParams({
+      autoZoteroSync: {
+        launched: false,
+        queued: false,
+        reason: "runtime_unavailable",
+        projectId: "alpha",
+        projectRoot: "/tmp/projects/alpha",
+        trigger: "auto_graph_refresh",
+        triggerReason: "graph changed",
+        sessionKey: null,
+        runId: null,
+        summary: "zotero runner crashed",
+        queueKey: "zotero-sync-queue",
+        zoteroProjectPath: "Bot/alpha",
+        packetPath: "researcher/IDEA_CATALYST_CONTRACT.json",
+        markdownPath: "paper.md",
+      },
+    })
+  );
+
+  assert.equal(runtimeUnavailable?.status, "continued");
+  assert.match(runtimeUnavailable?.summary ?? "", /zotero runner crashed/i);
+});
+
+test("deriveWorkflowCoordinatorStatusUpdate surfaces workflow hook missing-runtime blockers", () => {
+  const status = deriveWorkflowCoordinatorStatusUpdate({
+    projectId: "alpha",
+    projectRoot: "/tmp/projects/alpha",
+    stageAfter: "write",
+    artifactHooks: {
+      launched: false,
+      reason: "no_runtime_subagent",
+      projectId: "alpha",
+      projectRoot: "/tmp/projects/alpha",
+      hookPoint: "artifact_materialized",
+      stage: "write",
+      status: "blocked",
+      hookCount: 1,
+      approved: false,
+      aggregateVerdict: "revise",
+      blockingReason: null,
+      aggregateRevisionPacketPath: null,
+    },
+    autoGateReview: {
+      launched: false,
+      reason: "not_submit_gate",
+      projectId: "alpha",
+      projectRoot: "/tmp/projects/alpha",
+      gateId: null,
+      stage: "write",
+      status: null,
+      reviewCount: 0,
+      approved: false,
+    },
+    autoModeDiscussion: {
+      launched: false,
+      reason: "stable",
+      projectId: "alpha",
+      projectRoot: "/tmp/projects/alpha",
+      fingerprint: null,
+      stage: "write",
+      riskLevel: null,
+      status: null,
+      reviewCount: 0,
+      roundsStarted: 0,
+      recommendedOwner: null,
+      actionItems: [],
+      blockers: [],
+      summary: null,
+      roundId: null,
+      packetPath: null,
+      resolved: false,
+    },
+    autoMitigationDispatch: {
+      launched: false,
+      reason: "not_needed",
+      projectId: "alpha",
+      projectRoot: "/tmp/projects/alpha",
+      fingerprint: null,
+      stage: "write",
+      owner: null,
+      sessionKey: null,
+      runId: null,
+      dispatchStrategy: null,
+      error: null,
+    },
+    autoStageLaunch: {
+      launched: false,
+      reason: "no_drive_stage_action",
+      projectId: "alpha",
+      projectRoot: "/tmp/projects/alpha",
+      stage: "write",
+      owner: null,
+      sessionKey: null,
+      runId: null,
+      dispatchStrategy: null,
+      launchKey: null,
+      error: null,
+      reusedServiceSession: false,
+      activeResearcherSessionsInChannel: null,
+    },
+    idleResearchLaunch: {
+      launched: false,
+      reason: "idle_research_not_due",
+      projectId: "alpha",
+      projectRoot: "/tmp/projects/alpha",
+      topic: null,
+      sessionKey: null,
+      runId: null,
+      dueKey: null,
+      summary: null,
+      reusedIdleSession: false,
+      activeResearcherSessionsInChannel: null,
+    },
+  });
+
+  assert.equal(status?.status, "blocked");
+  assert.match(status?.summary ?? "", /workflow hook/i);
+  assert.match(status?.summary ?? "", /runtime/i);
+});
+
+function buildVisibleStatusParams(overrides = {}) {
+  const projectRoot = "/tmp/projects/alpha";
+  const stage = overrides.stageAfter ?? "analysis";
+  return {
+    projectId: "alpha",
+    projectRoot,
+    stageAfter: stage,
+    autoGateReview: {
+      launched: false,
+      reason: "not_submit_gate",
+      projectId: "alpha",
+      projectRoot,
+      gateId: null,
+      stage,
+      status: null,
+      reviewCount: 0,
+      approved: false,
+    },
+    autoModeDiscussion: {
+      launched: false,
+      reason: "stable",
+      projectId: "alpha",
+      projectRoot,
+      fingerprint: null,
+      stage,
+      riskLevel: null,
+      status: null,
+      reviewCount: 0,
+      roundsStarted: 0,
+      recommendedOwner: null,
+      actionItems: [],
+      blockers: [],
+      summary: null,
+      roundId: null,
+      packetPath: null,
+      resolved: false,
+    },
+    autoMitigationDispatch: {
+      launched: false,
+      reason: "not_needed",
+      projectId: "alpha",
+      projectRoot,
+      fingerprint: null,
+      stage,
+      owner: null,
+      sessionKey: null,
+      runId: null,
+      dispatchStrategy: null,
+      error: null,
+    },
+    autoStageLaunch: {
+      launched: false,
+      reason: "no_drive_stage_action",
+      projectId: "alpha",
+      projectRoot,
+      stage,
+      owner: null,
+      sessionKey: null,
+      runId: null,
+      dispatchStrategy: null,
+      launchKey: null,
+      error: null,
+      reusedServiceSession: false,
+      activeResearcherSessionsInChannel: null,
+    },
+    idleResearchLaunch: {
+      launched: false,
+      reason: "idle_research_not_due",
+      projectId: "alpha",
+      projectRoot,
+      topic: null,
+      sessionKey: null,
+      runId: null,
+      dueKey: null,
+      summary: null,
+      reusedIdleSession: false,
+      activeResearcherSessionsInChannel: null,
+    },
+    ...overrides,
+  };
+}
+
+test("deriveWorkflowCoordinatorStatusUpdate surfaces auto-mode discussion terminal reasons before generic waits", () => {
+  const bindingMissing = deriveWorkflowCoordinatorStatusUpdate(
+    buildVisibleStatusParams({
+      autoModeDiscussion: {
+        launched: false,
+        reason: "binding_missing",
+        projectId: "alpha",
+        projectRoot: "/tmp/projects/alpha",
+        fingerprint: "risk-fp-1",
+        stage: "analysis",
+        riskLevel: "severe",
+        status: null,
+        reviewCount: 0,
+        roundsStarted: 0,
+        recommendedOwner: null,
+        actionItems: [],
+        blockers: [],
+        summary:
+          "Channel-project bindings are enabled, but this project has no active workflow binding.",
+        roundId: null,
+        packetPath: "reviewer/auto-mode/RISK_PACKET.json",
+        resolved: false,
+      },
+      autoStageLaunch: {
+        launched: false,
+        reason: "risk_discussion_pending",
+        projectId: "alpha",
+        projectRoot: "/tmp/projects/alpha",
+        stage: "analysis",
+        owner: "coder",
+        sessionKey: null,
+        runId: null,
+        dispatchStrategy: null,
+        launchKey: null,
+        error: null,
+        reusedServiceSession: false,
+        activeResearcherSessionsInChannel: null,
+      },
+    })
+  );
+  assert.equal(bindingMissing?.status, "blocked");
+  assert.match(bindingMissing?.summary ?? "", /binding/i);
+  assert.doesNotMatch(bindingMissing?.summary ?? "", /risk discussion pending/i);
+
+  const localResolved = deriveWorkflowCoordinatorStatusUpdate(
+    buildVisibleStatusParams({
+      autoModeDiscussion: {
+        launched: false,
+        reason: "local_static_discussion_no_runtime",
+        projectId: "alpha",
+        projectRoot: "/tmp/projects/alpha",
+        fingerprint: "risk-fp-2",
+        stage: "analysis",
+        riskLevel: "caution",
+        status: "resolved",
+        reviewCount: 3,
+        roundsStarted: 1,
+        recommendedOwner: null,
+        actionItems: [],
+        blockers: [],
+        summary: "Local auto-mode risk discussion allowed the current handoff to continue.",
+        roundId: "risk-round-2",
+        packetPath: "reviewer/auto-mode/RISK_PACKET.json",
+        resolved: true,
+      },
+    })
+  );
+  assert.equal(localResolved?.status, "continued");
+  assert.match(localResolved?.summary ?? "", /Local auto-mode risk discussion/i);
+
+  const roundLimit = deriveWorkflowCoordinatorStatusUpdate(
+    buildVisibleStatusParams({
+      autoModeDiscussion: {
+        launched: false,
+        reason: "round_limit_reached",
+        projectId: "alpha",
+        projectRoot: "/tmp/projects/alpha",
+        fingerprint: "risk-fp-3",
+        stage: "analysis",
+        riskLevel: "severe",
+        status: "blocked",
+        reviewCount: 3,
+        roundsStarted: 2,
+        recommendedOwner: "coder",
+        actionItems: ["Reduce dispatch risk before continuing."],
+        blockers: ["Auto-mode mitigation round limit reached."],
+        summary: null,
+        roundId: "risk-round-3",
+        packetPath: "reviewer/auto-mode/RISK_PACKET.json",
+        resolved: false,
+      },
+      autoStageLaunch: {
+        launched: false,
+        reason: "risk_discussion_pending",
+        projectId: "alpha",
+        projectRoot: "/tmp/projects/alpha",
+        stage: "analysis",
+        owner: "coder",
+        sessionKey: null,
+        runId: null,
+        dispatchStrategy: null,
+        launchKey: null,
+        error: null,
+        reusedServiceSession: false,
+        activeResearcherSessionsInChannel: null,
+      },
+    })
+  );
+  assert.equal(roundLimit?.status, "blocked");
+  assert.match(roundLimit?.summary ?? "", /round limit/i);
+});
+
+test("deriveWorkflowCoordinatorStatusUpdate surfaces review terminal reasons before generic gate blockers", () => {
+  const codeRejected = deriveWorkflowCoordinatorStatusUpdate(
+    buildVisibleStatusParams({
+      stageAfter: "code",
+      autoCodeReview: {
+        launched: false,
+        reason: "local_static_review_no_runtime",
+        projectId: "alpha",
+        projectRoot: "/tmp/projects/alpha",
+        gateId: "CODE-REVIEW",
+        stage: "code",
+        status: "rejected",
+        reviewCount: 3,
+        approved: false,
+      },
+      autoStageLaunch: {
+        launched: false,
+        reason: "gate_blocked",
+        projectId: "alpha",
+        projectRoot: "/tmp/projects/alpha",
+        stage: "code",
+        owner: null,
+        sessionKey: null,
+        runId: null,
+        dispatchStrategy: null,
+        launchKey: null,
+        error: "Code gate blocked the dispatch.",
+        reusedServiceSession: false,
+        activeResearcherSessionsInChannel: null,
+      },
+    })
+  );
+  assert.equal(codeRejected?.status, "blocked");
+  assert.match(codeRejected?.summary ?? "", /code innovation review/i);
+  assert.match(codeRejected?.summary ?? "", /local static/i);
+
+  const codeApproved = deriveWorkflowCoordinatorStatusUpdate(
+    buildVisibleStatusParams({
+      stageAfter: "code",
+      autoCodeReview: {
+        launched: false,
+        reason: "local_static_review_runtime_stale",
+        projectId: "alpha",
+        projectRoot: "/tmp/projects/alpha",
+        gateId: "CODE-REVIEW",
+        stage: "code",
+        status: "approved",
+        reviewCount: 3,
+        approved: true,
+      },
+    })
+  );
+  assert.equal(codeApproved?.status, "continued");
+  assert.match(codeApproved?.summary ?? "", /code innovation review/i);
+  assert.match(codeApproved?.summary ?? "", /approved/i);
+
+  const codeAlreadyApproved = deriveWorkflowCoordinatorStatusUpdate(
+    buildVisibleStatusParams({
+      stageAfter: "code",
+      autoCodeReview: {
+        launched: false,
+        reason: "already_approved",
+        projectId: "alpha",
+        projectRoot: "/tmp/projects/alpha",
+        gateId: "CODE-REVIEW",
+        stage: "code",
+        status: null,
+        reviewCount: 3,
+        approved: false,
+      },
+      autoStageLaunch: {
+        launched: false,
+        reason: "gate_blocked",
+        projectId: "alpha",
+        projectRoot: "/tmp/projects/alpha",
+        stage: "code",
+        owner: null,
+        sessionKey: null,
+        runId: null,
+        dispatchStrategy: null,
+        launchKey: null,
+        error: "Code gate blocked the dispatch.",
+        reusedServiceSession: false,
+        activeResearcherSessionsInChannel: null,
+      },
+    })
+  );
+  assert.equal(codeAlreadyApproved?.status, "continued");
+  assert.match(codeAlreadyApproved?.summary ?? "", /code innovation review/i);
+  assert.match(codeAlreadyApproved?.summary ?? "", /approved/i);
+
+  const gateRuntime = deriveWorkflowCoordinatorStatusUpdate(
+    buildVisibleStatusParams({
+      stageAfter: "submit",
+      autoGateReview: {
+        launched: false,
+        reason: "no_runtime_subagent",
+        projectId: "alpha",
+        projectRoot: "/tmp/projects/alpha",
+        gateId: "SUBMIT-READINESS",
+        stage: "submit",
+        status: null,
+        reviewCount: 0,
+        approved: false,
+      },
+      autoStageLaunch: {
+        launched: false,
+        reason: "gate_blocked",
+        projectId: "alpha",
+        projectRoot: "/tmp/projects/alpha",
+        stage: "submit",
+        owner: null,
+        sessionKey: null,
+        runId: null,
+        dispatchStrategy: null,
+        launchKey: null,
+        error: "Submit gate blocked the dispatch.",
+        reusedServiceSession: false,
+        activeResearcherSessionsInChannel: null,
+      },
+    })
+  );
+  assert.equal(gateRuntime?.status, "blocked");
+  assert.match(gateRuntime?.summary ?? "", /gate reviewer runtime/i);
+
+  const gateRejected = deriveWorkflowCoordinatorStatusUpdate(
+    buildVisibleStatusParams({
+      stageAfter: "submit",
+      autoGateReview: {
+        launched: false,
+        reason: "updated",
+        projectId: "alpha",
+        projectRoot: "/tmp/projects/alpha",
+        gateId: "SUBMIT-READINESS",
+        stage: "submit",
+        status: "rejected",
+        reviewCount: 3,
+        approved: false,
+      },
+      autoStageLaunch: {
+        launched: false,
+        reason: "gate_blocked",
+        projectId: "alpha",
+        projectRoot: "/tmp/projects/alpha",
+        stage: "submit",
+        owner: null,
+        sessionKey: null,
+        runId: null,
+        dispatchStrategy: null,
+        launchKey: null,
+        error: "Submit gate blocked the dispatch.",
+        reusedServiceSession: false,
+        activeResearcherSessionsInChannel: null,
+      },
+    })
+  );
+  assert.equal(gateRejected?.status, "blocked");
+  assert.match(gateRejected?.summary ?? "", /gate review rejected/i);
+});
+
+test("deriveWorkflowCoordinatorStatusUpdate surfaces auto-stage project binding failures", () => {
+  const status = deriveWorkflowCoordinatorStatusUpdate(
+    buildVisibleStatusParams({
+      stageAfter: "experiment",
+      autoStageLaunch: {
+        launched: false,
+        reason: "binding_missing",
+        projectId: "alpha",
+        projectRoot: "/tmp/projects/alpha",
+        stage: "experiment",
+        owner: "coder",
+        sessionKey: null,
+        runId: null,
+        dispatchStrategy: null,
+        launchKey: null,
+        error:
+          "Channel-project bindings are enabled, but this project has no active workflow binding.",
+        reusedServiceSession: false,
+        activeResearcherSessionsInChannel: null,
+      },
+    })
+  );
+
+  assert.equal(status?.status, "blocked");
+  assert.match(status?.summary ?? "", /active workflow binding/i);
+});
+
+test("deriveWorkflowCoordinatorStatusUpdate surfaces auto-gate approvals before generic gate blockers", () => {
+  const status = deriveWorkflowCoordinatorStatusUpdate(
+    buildVisibleStatusParams({
+      stageAfter: "submit",
+      autoGateReview: {
+        launched: false,
+        reason: "updated",
+        projectId: "alpha",
+        projectRoot: "/tmp/projects/alpha",
+        gateId: "SUBMIT-READINESS",
+        stage: "submit",
+        status: "approved",
+        reviewCount: 3,
+        approved: true,
+      },
+      autoStageLaunch: {
+        launched: false,
+        reason: "gate_blocked",
+        projectId: "alpha",
+        projectRoot: "/tmp/projects/alpha",
+        stage: "submit",
+        owner: null,
+        sessionKey: null,
+        runId: null,
+        dispatchStrategy: null,
+        launchKey: null,
+        error: "Submit gate blocked the dispatch.",
+        reusedServiceSession: false,
+        activeResearcherSessionsInChannel: null,
+      },
+    })
+  );
+
+  assert.equal(status?.status, "continued");
+  assert.match(status?.summary ?? "", /auto gate review approved/i);
+});
+
+test("deriveWorkflowCoordinatorStatusUpdate surfaces resolved auto-mode discussions before generic waits", () => {
+  const status = deriveWorkflowCoordinatorStatusUpdate(
+    buildVisibleStatusParams({
+      stageAfter: "analysis",
+      autoModeDiscussion: {
+        launched: false,
+        reason: "resolved",
+        projectId: "alpha",
+        projectRoot: "/tmp/projects/alpha",
+        fingerprint: "risk-fp-resolved",
+        stage: "analysis",
+        riskLevel: "severe",
+        status: "resolved",
+        reviewCount: 3,
+        roundsStarted: 1,
+        recommendedOwner: null,
+        actionItems: [],
+        blockers: [],
+        summary: "Risk discussion resolved; handoff may continue.",
+        roundId: "risk-round-1",
+        packetPath: "reviewer/auto-mode/RISK_PACKET.json",
+        resolved: true,
+      },
+      autoStageLaunch: {
+        launched: false,
+        reason: "risk_discussion_pending",
+        projectId: "alpha",
+        projectRoot: "/tmp/projects/alpha",
+        stage: "analysis",
+        owner: "coder",
+        sessionKey: null,
+        runId: null,
+        dispatchStrategy: null,
+        launchKey: null,
+        error: null,
+        reusedServiceSession: false,
+        activeResearcherSessionsInChannel: null,
+      },
+    })
+  );
+
+  assert.equal(status?.status, "continued");
+  assert.match(status?.summary ?? "", /resolved/i);
 });
 
 test("workflow coordinator broadcasts visible handed-off status updates to the bound session", async (t) => {

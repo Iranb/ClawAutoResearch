@@ -289,6 +289,10 @@ import {
   serializeWritePackageState,
 } from "./workflow-guard-state/execution-state";
 import {
+  DEFAULT_EXPERIMENT_SEARCH_SPEC_PATH,
+  normalizeExperimentSearchSpec,
+} from "./workflow-guard-state/experiment-search-spec";
+import {
   getExperimentSearchReviewStatePath,
   loadExperimentSearchReviewState,
 } from "./workflow-auto-experiment-search-review.js";
@@ -380,6 +384,10 @@ import { materializeIdeationContractImpl } from "./workflow-guard-materializers/
 import { materializeExperimentMemoryPacketImpl } from "./workflow-guard-materializers/experiment-memory-materializer.js";
 import { materializeExperimentReviewStateImpl } from "./workflow-guard-materializers/experiment-review-materializer";
 import { materializeLocalExperimentExecutionImpl } from "./workflow-guard-materializers/experiment-execution-materializer";
+import {
+  resolveExperimentPrimaryMetricContract,
+  serializeExperimentPrimaryMetricContract,
+} from "./workflow-experiment-metric-contract";
 import {
   applyExperimentGitOpImpl,
   getExperimentGitReviewSummaryImpl,
@@ -1174,6 +1182,24 @@ type ExternalReviewState = {
   pendingReason: string | null;
 };
 
+type ExperimentNextCandidateGuidance = {
+  authority: string | null;
+  triggerDecision: string | null;
+  sourceValidationStage: string | null;
+  target: string | null;
+  primaryMetricName: string | null;
+  primaryMetricDirection: string | null;
+  primaryMetricMinimumImprovement: number | null;
+  paperContributionMetric: string | null;
+  requiredProperties: string[];
+  avoidExperimentIds: string[];
+  avoidOneChangeSignatures: string[];
+  avoidFailureClusterIds: string[];
+  blockerBasis: string[];
+  innovationAnchorPoints: string[];
+  recommendedFocus: string[];
+};
+
 type ExperimentSearchState = {
   status: string;
   projectId: string | null;
@@ -1228,6 +1254,7 @@ type ExperimentSearchState = {
   decisionConfidence: string;
   recommendedNextAction: string | null;
   failureClusterIds: string[];
+  nextCandidateGuidance: ExperimentNextCandidateGuidance | null;
   evidenceCleanlinessStatus: string;
   baselineDatasetEnvelope: string[];
   validatedDatasetEnvelope: string[];
@@ -1250,6 +1277,30 @@ type ExperimentSearchState = {
   pendingReason: string | null;
   lastUpdatedAt: string | null;
 };
+
+async function loadExperimentPrimaryMetricContractRecord(params: {
+  projectRoot: string;
+  manifest: Record<string, unknown>;
+  searchState: ExperimentSearchState;
+  fallbackMetricName?: string | null;
+}): Promise<Record<string, unknown>> {
+  const manifestSearch = asRecord(params.manifest.experiment_search) ?? {};
+  const configuredPath =
+    params.searchState.searchSpecPath ??
+    pickString(manifestSearch, ["searchSpecPath", "search_spec_path"]) ??
+    DEFAULT_EXPERIMENT_SEARCH_SPEC_PATH;
+  const specPath = path.isAbsolute(configuredPath)
+    ? configuredPath
+    : path.join(params.projectRoot, configuredPath);
+  const rawSpec =
+    (await readJsonIfExists<Record<string, unknown>>(specPath)) ?? {};
+  const contract = resolveExperimentPrimaryMetricContract({
+    spec: normalizeExperimentSearchSpec(rawSpec),
+    manifestRecord: params.manifest,
+    fallbackMetricName: params.fallbackMetricName ?? null,
+  });
+  return serializeExperimentPrimaryMetricContract(contract);
+}
 
 type AutonomousExecutionState = {
   experimentLaunchMode: "manual" | "reviewed_auto";
@@ -2139,6 +2190,17 @@ export type WorkflowSnapshot = {
   experimentSearchDecisionConfidence: string | null;
   experimentSearchRecommendedNextAction: string | null;
   experimentSearchFailureClusterIds: string[];
+  experimentSearchNextCandidateMetricName: string | null;
+  experimentSearchNextCandidateMetricDirection: string | null;
+  experimentSearchNextCandidateMinimumImprovement: number | null;
+  experimentSearchNextCandidatePaperContributionMetric: string | null;
+  experimentSearchNextCandidateRequiredProperties: string[];
+  experimentSearchNextCandidateRecommendedFocus: string[];
+  experimentSearchNextCandidateBlockerBasis: string[];
+  experimentSearchNextCandidateInnovationAnchors: string[];
+  experimentSearchNextCandidateAvoidExperimentIds: string[];
+  experimentSearchNextCandidateAvoidOneChangeSignatures: string[];
+  experimentSearchNextCandidateAvoidFailureClusterIds: string[];
   experimentSearchEvidenceCleanlinessStatus: string | null;
   experimentSearchBaselineDatasetCoverageStatus: string | null;
   experimentSearchBaselineDatasetCoverageMissing: string[];
@@ -4762,14 +4824,12 @@ export async function assembleWritePackage(params: {
       "researcher/evaluation_summary.json",
     ],
   });
+  const theoryState = asRecord(manifest.theory_state ?? manifest.theoryState) ?? {};
   const proofPacketDir = await selectExistingNonEmptyDirectory({
     projectRoot,
     candidates: [
       current.proofPacketDir,
-      pickString(manifest.theory_state as Record<string, unknown>, [
-        "proof_packet_dir",
-        "proofPacketDir",
-      ]),
+      pickString(theoryState, ["proof_packet_dir", "proofPacketDir"]),
       "analyzer/proof-packets",
     ],
   });
@@ -4953,10 +5013,12 @@ export async function assembleWritePackage(params: {
     ],
   });
   if (!citationCandidatesPath) {
+    const citationIntegrity =
+      asRecord(manifest.citation_integrity ?? manifest.citationIntegrity) ?? {};
     const bibliographyPath = await selectExistingArtifactPath({
       projectRoot,
       candidates: [
-        pickString(manifest.citation_integrity as Record<string, unknown>, [
+        pickString(citationIntegrity, [
           "bibliography_path",
           "bibliographyPath",
         ]),
@@ -8385,6 +8447,13 @@ export async function applyExperimentGitOp(params: {
       result.gitResult.actionType === "promote_candidate" ? "advance" : "discard";
     const trialContractStatus =
       result.gitResult.actionType === "promote_candidate" ? "merged" : "completed";
+    const manifest = await readManifestEnsured(params.projectRoot);
+    const primaryMetricContractRecord =
+      await loadExperimentPrimaryMetricContractRecord({
+        projectRoot: params.projectRoot,
+        manifest,
+        searchState: result.searchState as ExperimentSearchState,
+      });
     const ledgerResult = await upsertExperimentLedgerEntry({
       projectRoot: params.projectRoot,
       agentId: params.agentId ?? undefined,
@@ -8426,6 +8495,7 @@ export async function applyExperimentGitOp(params: {
             fixed_budget_minutes: fixedBudgetMinutes,
             fixed_budget:
               fixedBudgetMinutes == null ? null : `${fixedBudgetMinutes}m`,
+            primary_metric_contract: primaryMetricContractRecord,
             review_packet_path: result.reviewState.packetPath,
             promotion_basis_signals: result.reviewState.promotionBasisSignals,
             promotion_evidence_summary:
@@ -8452,6 +8522,7 @@ export async function applyExperimentGitOp(params: {
             retained: result.gitResult.actionType === "promote_candidate",
             worktreePath: result.gitResult.candidateWorktreePath,
           },
+          primaryMetricContract: primaryMetricContractRecord,
         },
       },
     });

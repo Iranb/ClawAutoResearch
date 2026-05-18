@@ -131,6 +131,6 @@ export function registerMemoryTools(plugin: PluginRegistrationContext) {
         }
       },
     }),
-    { optional: true }
+    { name: "research_memory", optional: true }
   );
 }

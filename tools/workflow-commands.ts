@@ -1838,6 +1838,47 @@ function buildBootstrapContextPrompt(intent: AutoBootstrapIntent): string | null
   return lines.length > 0 ? lines.join("\n") : null;
 }
 
+function formatAutoBootstrapLaunchAcknowledgement(params: {
+  pipelineLabel: string;
+  projectId: string;
+  projectRoot: string;
+  launch: BackgroundRunStartResult;
+  onboardingStatus?: string | null;
+  preservedRequest?: string | null;
+}): string {
+  const launchVerb = params.launch.started
+    ? "started"
+    : params.launch.queued
+      ? "queued"
+      : params.launch.reason === "session_unavailable"
+        ? "already running"
+        : "failed";
+  const lines = [
+    `${params.pipelineLabel} ${launchVerb} for ${params.projectId}.`,
+    `project_root=${params.projectRoot}`,
+  ];
+  if (params.onboardingStatus) {
+    lines.push(`onboarding=${params.onboardingStatus}`);
+  }
+  if (params.preservedRequest) {
+    lines.push(`preserved_request=${params.preservedRequest}`);
+  }
+  if (!params.launch.started) {
+    lines.push(`launch_status=${launchVerb.replace(/\s+/g, "_")}`);
+    lines.push(`reason=${params.launch.reason}`);
+    if (params.launch.queueKey) {
+      lines.push(`queue_key=${params.launch.queueKey}`);
+    }
+    if (params.launch.activeResearcherSessionsInChannel != null) {
+      lines.push(
+        `active_researcher_sessions_in_channel=${params.launch.activeResearcherSessionsInChannel}`
+      );
+    }
+  }
+  lines.push(`summary=${params.launch.summary}`);
+  return lines.join("\n");
+}
+
 async function persistBootstrapRequest(
   projectRoot: string,
   intent: AutoBootstrapIntent
@@ -2032,14 +2073,15 @@ function createAutoResearchCommandHandler(
       });
 
       return {
-        text:
-          `Full-auto research pipeline started for ${ensuredProject.projectId}.\n` +
-          `project_root=${ensuredProject.projectRoot}\n` +
-          `onboarding=${update.onboardingStatus}\n` +
-          (intent.rawRequest !== intent.cleanTopic
-            ? `preserved_request=${intent.rawRequest}\n`
-            : "") +
-          `summary=${started.summary}`,
+        text: formatAutoBootstrapLaunchAcknowledgement({
+          pipelineLabel: "Full-auto research pipeline",
+          projectId: ensuredProject.projectId,
+          projectRoot: ensuredProject.projectRoot,
+          launch: started,
+          onboardingStatus: update.onboardingStatus,
+          preservedRequest:
+            intent.rawRequest !== intent.cleanTopic ? intent.rawRequest : null,
+        }),
       };
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown error";
@@ -2196,13 +2238,14 @@ function createAutoReviewCommandHandler(
       });
 
       return {
-        text:
-          `Full-auto survey pipeline started for ${ensuredProject.projectId}.\n` +
-          `project_root=${ensuredProject.projectRoot}\n` +
-          (intent.rawRequest !== intent.cleanTopic
-            ? `preserved_request=${intent.rawRequest}\n`
-            : "") +
-          `summary=${started.summary}`,
+        text: formatAutoBootstrapLaunchAcknowledgement({
+          pipelineLabel: "Full-auto survey pipeline",
+          projectId: ensuredProject.projectId,
+          projectRoot: ensuredProject.projectRoot,
+          launch: started,
+          preservedRequest:
+            intent.rawRequest !== intent.cleanTopic ? intent.rawRequest : null,
+        }),
       };
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown error";

@@ -43,6 +43,10 @@ import {
   normalizeExperimentSearchSpec,
 } from "../workflow-guard-state/experiment-search-spec";
 import {
+  resolveExperimentPrimaryMetricContract,
+  serializeExperimentPrimaryMetricContract,
+} from "../workflow-experiment-metric-contract";
+import {
   AUTORESEARCH_LOOP_STATE_PATH,
   recordAutoResearchAdvanceDecision,
 } from "../autoresearch-loop-state";
@@ -805,6 +809,16 @@ export async function materializeLocalExperimentExecutionImpl(params: {
     asRecord(rawSummary.keyMetric);
   const primaryMetricName = pickString(rawPrimaryMetric ?? {}, ["name"]) ?? "h_score";
   const primaryMetricValue = pickNumber(rawPrimaryMetric ?? {}, ["value"]) ?? metrics.h_score;
+  const primaryMetricContract = resolveExperimentPrimaryMetricContract({
+    spec: normalizedSpec,
+    manifestRecord: manifest,
+    fallbackMetricName: primaryMetricName,
+    fallbackDirection: "higher_is_better",
+  });
+  const primaryMetricContractRecord =
+    serializeExperimentPrimaryMetricContract(primaryMetricContract);
+  const primaryMetricDirection =
+    primaryMetricContract.direction ?? "higher_is_better";
   const candidatePromoted = metrics.delta_h_score > 0;
   const lastTrialOutcome = candidatePromoted ? "keep" : "discard";
   const terminalStatus = runResult.timedOut
@@ -914,7 +928,11 @@ export async function materializeLocalExperimentExecutionImpl(params: {
       value: primaryMetricValue,
       baseline: metrics.baseline_h_score,
       delta: metrics.delta_h_score,
-      direction: "higher_is_better",
+      direction: primaryMetricDirection,
+      direction_source: primaryMetricContract.directionSource ?? "fallback",
+      minimum_improvement: primaryMetricContract.minimumImprovement,
+      paper_contribution_metric: primaryMetricContract.paperContributionMetric,
+      primary_metric_contract: primaryMetricContractRecord,
     },
     karpathy_inner_loop: {
       mode: innerLoop.mode,
@@ -955,12 +973,14 @@ export async function materializeLocalExperimentExecutionImpl(params: {
     experiment_id: experimentId,
     run_id: enrichedSummary.run_id,
     metrics,
+    primary_metric_contract: primaryMetricContractRecord,
     experiments: [
       {
         experiment_id: experimentId,
         run_id: enrichedSummary.run_id,
         status: enrichedSummary.status,
         metrics,
+        primary_metric_contract: primaryMetricContractRecord,
         result_summary_path: toRelativeProjectPath(projectRoot, researcherResultPath),
       },
     ],
@@ -989,6 +1009,7 @@ export async function materializeLocalExperimentExecutionImpl(params: {
     track_id: trackId,
     status: "ready",
     primary_metric: "h_score",
+    primary_metric_contract: primaryMetricContractRecord,
     metrics,
     karpathy_inner_loop: {
       mode: innerLoop.mode,
@@ -1071,7 +1092,11 @@ export async function materializeLocalExperimentExecutionImpl(params: {
       baseline: metrics.baseline_h_score,
       candidate: metrics.h_score,
       delta: metrics.delta_h_score,
-      direction: "higher_is_better",
+      direction: primaryMetricDirection,
+      direction_source: primaryMetricContract.directionSource ?? "fallback",
+      minimum_improvement: primaryMetricContract.minimumImprovement,
+      paper_contribution_metric: primaryMetricContract.paperContributionMetric,
+      primary_metric_contract: primaryMetricContractRecord,
     },
     latest_attempt: attemptRecord,
     innovation_deviation: innovationDeviation,
@@ -1150,7 +1175,11 @@ export async function materializeLocalExperimentExecutionImpl(params: {
       value: primaryMetricValue,
       baseline: metrics.baseline_h_score,
       delta: metrics.delta_h_score,
-      direction: "higher_is_better",
+      direction: primaryMetricDirection,
+      direction_source: primaryMetricContract.directionSource ?? "fallback",
+      minimum_improvement: primaryMetricContract.minimumImprovement,
+      paper_contribution_metric: primaryMetricContract.paperContributionMetric,
+      primary_metric_contract: primaryMetricContractRecord,
     },
     attempt: attemptRecord,
     execution_mode:
@@ -1190,8 +1219,13 @@ export async function materializeLocalExperimentExecutionImpl(params: {
       value: primaryMetricValue,
       baseline: metrics.baseline_h_score,
       delta: metrics.delta_h_score,
-      direction: "higher_is_better",
+      direction: primaryMetricDirection,
+      direction_source: primaryMetricContract.directionSource ?? "fallback",
+      minimum_improvement: primaryMetricContract.minimumImprovement,
+      paper_contribution_metric: primaryMetricContract.paperContributionMetric,
+      primary_metric_contract: primaryMetricContractRecord,
     },
+    primary_metric_contract: primaryMetricContractRecord,
     metrics,
     result_paths: resultPaths,
     keep_discard_rule: innerLoop.keepDiscardRule,
@@ -1251,7 +1285,11 @@ export async function materializeLocalExperimentExecutionImpl(params: {
         value: primaryMetricValue,
         baseline: metrics.baseline_h_score,
         delta: metrics.delta_h_score,
-        direction: "higher_is_better",
+        direction: primaryMetricDirection,
+        direction_source: primaryMetricContract.directionSource ?? "fallback",
+        minimum_improvement: primaryMetricContract.minimumImprovement,
+        paper_contribution_metric: primaryMetricContract.paperContributionMetric,
+        primary_metric_contract: primaryMetricContractRecord,
       },
       metrics,
       result_paths: resultPaths,
@@ -1272,6 +1310,7 @@ export async function materializeLocalExperimentExecutionImpl(params: {
         validation_datasets: validatedDatasetEnvelope,
         one_change_signature: oneChangeSignature,
         trial_contract: trialContract,
+        primary_metric_contract: primaryMetricContractRecord,
         karpathy_inner_loop: {
           mode: innerLoop.mode,
           trial_time_budget_minutes: innerLoop.trialTimeBudgetMinutes,

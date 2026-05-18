@@ -114,6 +114,41 @@ function formatWorkflowControlLine(snapshot: WorkflowSnapshot): string | null {
   return `Workflow control: status=${status ?? "unknown"}, completion=${completionStatus ?? "unknown"}, source=${completionSource ?? "unknown"}, runtime=${runtimeState ?? "unknown"}, contract=${contractId ?? "unknown"}`;
 }
 
+function normalizedStatusList(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
+    .filter((entry) => entry.length > 0);
+}
+
+function formatStatusList(value: unknown, maxItems = 5): string {
+  const values = normalizedStatusList(value);
+  if (values.length === 0) {
+    return "none";
+  }
+  const visible = values.slice(0, maxItems);
+  const suffix = values.length > visible.length ? `,+${values.length - visible.length}` : "";
+  return `${visible.join(",")}${suffix}`;
+}
+
+function hasExperimentNextCandidateGuidance(snapshot: WorkflowSnapshot): boolean {
+  return Boolean(
+    snapshot.experimentSearchNextCandidateMetricName ||
+      snapshot.experimentSearchNextCandidateMetricDirection ||
+      snapshot.experimentSearchNextCandidateMinimumImprovement != null ||
+      snapshot.experimentSearchNextCandidatePaperContributionMetric ||
+      normalizedStatusList(snapshot.experimentSearchNextCandidateRequiredProperties).length > 0 ||
+      normalizedStatusList(snapshot.experimentSearchNextCandidateRecommendedFocus).length > 0 ||
+      normalizedStatusList(snapshot.experimentSearchNextCandidateBlockerBasis).length > 0 ||
+      normalizedStatusList(snapshot.experimentSearchNextCandidateInnovationAnchors).length > 0 ||
+      normalizedStatusList(snapshot.experimentSearchNextCandidateAvoidExperimentIds).length > 0 ||
+      normalizedStatusList(snapshot.experimentSearchNextCandidateAvoidOneChangeSignatures).length > 0 ||
+      normalizedStatusList(snapshot.experimentSearchNextCandidateAvoidFailureClusterIds).length > 0
+  );
+}
+
 export function formatAutoModeSection(params: {
   autoIteratorResult: WorkflowAutoIteratorResult | null;
 }): string[] {
@@ -486,6 +521,14 @@ export function formatWorkflowStatusText(params: {
     if (snapshot.experimentSearchRecommendedNextAction) {
       lines.push(
         `Experiment search next action: ${snapshot.experimentSearchRecommendedNextAction}`
+      );
+    }
+    if (hasExperimentNextCandidateGuidance(snapshot)) {
+      lines.push(
+        `Experiment next candidate guidance: metric=${snapshot.experimentSearchNextCandidateMetricName ?? "unset"}, direction=${snapshot.experimentSearchNextCandidateMetricDirection ?? "unset"}, min_improvement=${snapshot.experimentSearchNextCandidateMinimumImprovement ?? "unset"}, paper_metric=${snapshot.experimentSearchNextCandidatePaperContributionMetric ?? "unset"}, required=${formatStatusList(snapshot.experimentSearchNextCandidateRequiredProperties)}, focus=${formatStatusList(snapshot.experimentSearchNextCandidateRecommendedFocus)}`
+      );
+      lines.push(
+        `Experiment next candidate avoid: experiments=${formatStatusList(snapshot.experimentSearchNextCandidateAvoidExperimentIds)}, one_change_signatures=${formatStatusList(snapshot.experimentSearchNextCandidateAvoidOneChangeSignatures)}, failure_clusters=${formatStatusList(snapshot.experimentSearchNextCandidateAvoidFailureClusterIds)}, blockers=${formatStatusList(snapshot.experimentSearchNextCandidateBlockerBasis)}, anchors=${formatStatusList(snapshot.experimentSearchNextCandidateInnovationAnchors)}`
       );
     }
     if (

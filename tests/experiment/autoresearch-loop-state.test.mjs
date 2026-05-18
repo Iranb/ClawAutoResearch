@@ -93,6 +93,57 @@ test("unified loop state blocks analyze when completed trial has zero primary-me
   assert.equal(persisted.next_action, "continue_tuning");
 });
 
+test("unified loop state treats below-threshold metric gains as continue tuning", async (t) => {
+  const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-loop-min-gain-"));
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "loop-min-gain",
+    current_stage: "experiment",
+    experiment_search: {
+      status: "searching",
+      track_id: "track-main",
+    },
+  });
+  await writeJson(path.join(projectRoot, "researcher", "EXPERIMENT_LEDGER.json"), {
+    schema_version: 1,
+    experiments: [
+      {
+        experiment_id: "exp-small-gain",
+        track_id: "track-main",
+        status: "completed",
+        decision: "advance",
+        key_metric: {
+          name: "h_score",
+          value: 0.53,
+          delta: 0.02,
+        },
+        metadata: {
+          trial_contract: {
+            primary_metric_contract: {
+              metric_name: "h_score",
+              direction: "higher_is_better",
+              minimum_improvement: 0.05,
+            },
+          },
+        },
+      },
+    ],
+  });
+
+  const state = await hydrateAutoResearchLoopState({
+    projectRoot,
+    operationId: "test-min-gain",
+    agentId: "researcher",
+  });
+
+  assert.equal(state.trial_history[0].metric_delta, 0.02);
+  assert.equal(state.trial_history[0].decision.outcome, "discard");
+  assert.equal(canAdvance(state, "analyze").allowed, false);
+});
+
 test("plan advancement requires Idea-Catalyst bridge fragments in the unified state", async (t) => {
   const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-loop-plan-"));
   t.after(async () => {

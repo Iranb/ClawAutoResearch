@@ -2455,6 +2455,129 @@ function deserializePresentPapers(value: unknown): GraphPresenceMatch[] {
     }));
 }
 
+function presentPaperMatchesExpected(
+  present: GraphPresenceMatch,
+  expected: ExpectedPaper
+): boolean {
+  const graphIndexEvidence = asRecord(present.graphIndexEvidence);
+  const identifiers = asRecord(graphIndexEvidence?.identifiers);
+  const canonicalIds = [
+    present.canonicalId,
+    present.corpusPaperId,
+    pickString(graphIndexEvidence, [
+      "canonical_id",
+      "canonicalId",
+      "paper_id",
+      "paperId",
+    ]),
+    pickString(identifiers, [
+      "canonical_id",
+      "canonicalId",
+      "paper_id",
+      "paperId",
+    ]),
+  ]
+    .map((entry) => entry?.trim().toLowerCase())
+    .filter((entry): entry is string => Boolean(entry));
+  if (canonicalIds.includes(expected.canonicalId.trim().toLowerCase())) {
+    return true;
+  }
+
+  const arxivIds = [
+    present.canonicalId,
+    present.corpusPaperId,
+    present.corpusSourceKey,
+    pickString(graphIndexEvidence, ["arxiv_id", "arxivId", "arxiv"]),
+    pickString(identifiers, ["arxiv_id", "arxivId", "arxiv"]),
+  ]
+    .map((entry) => normalizeArxivId(entry))
+    .filter((entry): entry is string => Boolean(entry));
+  if (expected.arxivId && arxivIds.includes(expected.arxivId)) {
+    return true;
+  }
+
+  const dois = [
+    present.canonicalId,
+    present.corpusPaperId,
+    present.corpusSourceKey,
+    pickString(graphIndexEvidence, ["doi", "DOI"]),
+    pickString(identifiers, ["doi", "DOI"]),
+  ]
+    .map((entry) => normalizeDoi(entry))
+    .filter((entry): entry is string => Boolean(entry));
+  if (expected.doi && dois.includes(expected.doi)) {
+    return true;
+  }
+
+  const sourceHints = [
+    present.corpusSourceKey,
+    pickString(graphIndexEvidence, [
+      "source_key",
+      "sourceKey",
+      "canonical_source_key",
+      "canonicalSourceKey",
+    ]),
+  ].filter((entry): entry is string => Boolean(entry));
+  const sourceBasenames = sourceHints.map((hint) =>
+    path.basename(hint, path.extname(hint)).toLowerCase()
+  );
+  const expectedBasenames = expected.sourceHints.map((hint) =>
+    path.basename(hint, path.extname(hint)).toLowerCase()
+  );
+  if (
+    expectedBasenames.length > 0 &&
+    expectedBasenames.some((basename) => sourceBasenames.includes(basename))
+  ) {
+    return true;
+  }
+
+  const normalizedTitle = normalizeTitle(present.title ?? present.corpusPaperTitle);
+  if (expected.normalizedTitle && normalizedTitle === expected.normalizedTitle) {
+    return true;
+  }
+  const titleSignature = buildTitleSignature(present.title ?? present.corpusPaperTitle);
+  return Boolean(expected.titleSignature && titleSignature === expected.titleSignature);
+}
+
+function selectPresentPapersForExpectedPapers(params: {
+  expectedPapers: ExpectedPaper[];
+  presentPapers: GraphPresenceMatch[];
+}): {
+  presentPapers: GraphPresenceMatch[];
+  missingPapers: GraphPresenceMissingPaper[];
+} {
+  if (params.expectedPapers.length === 0) {
+    return { presentPapers: params.presentPapers, missingPapers: [] };
+  }
+  const usedPresentIndexes = new Set<number>();
+  const presentPapers: GraphPresenceMatch[] = [];
+  const missingPapers: GraphPresenceMissingPaper[] = [];
+  for (const expected of params.expectedPapers) {
+    const presentIndex = params.presentPapers.findIndex(
+      (present, index) =>
+        !usedPresentIndexes.has(index) && presentPaperMatchesExpected(present, expected)
+    );
+    if (presentIndex < 0) {
+      missingPapers.push(toMissingPaper(expected));
+      continue;
+    }
+    usedPresentIndexes.add(presentIndex);
+    const present = params.presentPapers[presentIndex];
+    presentPapers.push({
+      ...present,
+      canonicalId: expected.canonicalId,
+      title: expected.title ?? present.title,
+      sourceKind: expected.sourceKind,
+      sourceProvider: expected.sourceProvider ?? present.sourceProvider,
+      retrievalProviders: uniqueStrings([
+        ...expected.retrievalProviders,
+        ...present.retrievalProviders,
+      ]),
+    });
+  }
+  return { presentPapers, missingPapers };
+}
+
 function toMissingPaper(expected: ExpectedPaper): GraphPresenceMissingPaper {
   return {
     canonicalId: expected.canonicalId,
@@ -3052,6 +3175,14 @@ async function checkGraphPresenceViaRemoteStatus(params: {
   const statusVerificationMode =
     pickString(statusRecord, ["verification_mode", "verificationMode"])?.trim().toLowerCase() ??
     null;
+  const expectedPresentPapers = selectPresentPapersForExpectedPapers({
+    expectedPapers: params.expected.papers,
+    presentPapers: statusPresentPapers,
+  });
+  const statusHasRequestScopedPerPaperProof =
+    params.expected.papers.length > 0 &&
+    expectedPresentPapers.missingPapers.length === 0 &&
+    expectedPresentPapers.presentPapers.length >= params.expected.papers.length;
   const remoteSummaryWithoutPerPaperProof =
     params.expected.papers.length > 0 &&
     statusVerificationMode === "remote_corpus_summary" &&
@@ -3143,18 +3274,25 @@ async function checkGraphPresenceViaRemoteStatus(params: {
     const statusRefreshReason =
       pickString(statusRecord, ["refresh_reason", "refreshReason"]) ?? null;
     if (statusExpectedCount !== expectedPaperCount) {
-      status = "missing_corpus";
-      refreshReason = paperIngestionProgress.inFlight
-        ? buildInFlightRemoteRefreshReason({
-            remoteEndpoint,
-            expectedPaperCount,
-            presentPaperCount,
-            paperIngestion: paperIngestionProgress,
-          })
-        : `Remote PaperNexus graph status is stale for ${remoteEndpoint ?? "the configured endpoint"}: ` +
-          `expected ${expectedPaperCount} paper(s) from PAPER_SOURCE_INDEX.json but the latest remote status only covers ${statusExpectedCount}. ` +
-          "Rerun /graph-build to refresh readiness metadata and brainstorm grounding before frontier mapping or ideation.";
-      presentPaperCount = Math.min(presentPaperCount, expectedPaperCount);
+      if (statusHasRequestScopedPerPaperProof) {
+        status = "ready";
+        refreshReason = null;
+        presentPaperCount = expectedPresentPapers.presentPapers.length;
+        missingPapers = [];
+      } else {
+        status = "missing_corpus";
+        refreshReason = paperIngestionProgress.inFlight
+          ? buildInFlightRemoteRefreshReason({
+              remoteEndpoint,
+              expectedPaperCount,
+              presentPaperCount,
+              paperIngestion: paperIngestionProgress,
+            })
+          : `Remote PaperNexus graph status is stale for ${remoteEndpoint ?? "the configured endpoint"}: ` +
+            `expected ${expectedPaperCount} paper(s) from PAPER_SOURCE_INDEX.json but the latest remote status only covers ${statusExpectedCount}. ` +
+            "Rerun /graph-build to refresh readiness metadata and brainstorm grounding before frontier mapping or ideation.";
+        presentPaperCount = Math.min(presentPaperCount, expectedPaperCount);
+      }
     } else if (normalizedStatus === "missing_corpus") {
       status = "missing_corpus";
       refreshReason =
@@ -3236,15 +3374,23 @@ async function checkGraphPresenceViaRemoteStatus(params: {
         refreshReason,
       })
     : null;
-  const presentPapers = statusPresentPapers;
+  const presentPapers =
+    params.expected.papers.length > 0 &&
+    expectedPresentPapers.presentPapers.length > 0
+      ? expectedPresentPapers.presentPapers
+      : statusPresentPapers;
   const paperIndexPresentCount =
-    pickCount(statusRecord, ["paper_index_present_count", "paperIndexPresentCount"]) ??
-    countGraphPresencePaperIndexEvidence(presentPapers);
+    params.expected.papers.length > 0
+      ? countGraphPresencePaperIndexEvidence(presentPapers)
+      : pickCount(statusRecord, ["paper_index_present_count", "paperIndexPresentCount"]) ??
+        countGraphPresencePaperIndexEvidence(presentPapers);
   const sourceBackedPresentCount =
-    pickCount(statusRecord, [
-      "source_backed_present_count",
-      "sourceBackedPresentCount",
-    ]) ?? countGraphPresenceSourceSpanEvidence(presentPapers);
+    params.expected.papers.length > 0
+      ? countGraphPresenceSourceSpanEvidence(presentPapers)
+      : pickCount(statusRecord, [
+          "source_backed_present_count",
+          "sourceBackedPresentCount",
+        ]) ?? countGraphPresenceSourceSpanEvidence(presentPapers);
   const verificationMode: GraphPresenceVerificationMode =
     params.expected.papers.length === 0 && expectedPaperCount > 0
       ? "remote_corpus_summary"

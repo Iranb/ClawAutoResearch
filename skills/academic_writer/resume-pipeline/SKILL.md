@@ -56,19 +56,20 @@ Key contract:
 
 ## Resume Logic
 
-1. If `PAPER_PLAN.md` is missing, resume with `/paper-plan`.
-2. If a writing template is required, confirm the template path still exists before drafting more prose.
-3. If `TEMPLATE_MAPPING.md` is missing while a template is configured, rebuild it with `/paper-plan`.
-4. If the plan exists, infer the next incomplete section in this order:
+1. Verify that `PROJECT_MANIFEST.json.workflow_control` or the current Workflow Guard snapshot routes work to Writer; if ownership is stale, report the blocker instead of taking over.
+2. If `PAPER_PLAN.md` is missing, resume with `/paper-plan`.
+3. If a writing template is required, confirm the template path still exists before drafting more prose.
+4. If `TEMPLATE_MAPPING.md` is missing while a template is configured, rebuild it with `/paper-plan`.
+5. If the plan exists, infer the next incomplete section in this order:
    - method
    - experiments
    - related work
    - introduction
    - conclusion
    - abstract
-5. If a section draft exists but lacks cross-review feedback, send that section to Cross-Reviewer before proceeding.
-6. If all sections exist, resume final polish or compile handoff.
-7. If compilation is needed but shell access is unavailable in the current writer configuration, stop with an explicit note for Researcher.
+6. If a section draft exists but lacks cross-review feedback, send that section to Cross-Reviewer before proceeding.
+7. If all sections exist, resume final polish or compile handoff.
+8. If compilation is needed but shell access is unavailable in the current writer configuration, stop with an explicit note for Researcher.
 
 ## Safety Rules
 

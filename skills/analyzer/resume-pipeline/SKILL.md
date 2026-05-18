@@ -9,6 +9,7 @@ allowed-tools:
   - Edit
   - Grep
   - Glob
+  - research_workflow
 ---
 
 # Resume Pipeline
@@ -30,12 +31,15 @@ Use when analysis stopped mid-run or when Researcher wants Analyzer to continue 
 - `{PROJ}/researcher/EXPERIMENT_REGISTRY.md`
 - `{PROJ}/researcher/artifacts/results/`
 - `{PROJ}/researcher/artifacts/logs/`
+- `{PROJ}/researcher/EXPERIMENT_LEDGER.json`
+- `{PROJ}/researcher/evaluation_summary.json`
 - existing files under `{PROJ}/analyzer/`
 
 ## Resume Logic
 
-1. Verify that experiment artifacts exist and are non-empty.
-2. Detect which analysis outputs are already present:
+1. Verify that `PROJECT_MANIFEST.json.workflow_control` or the current Workflow Guard snapshot routes work to Analyzer; if ownership is stale, report the blocker instead of taking over.
+2. Verify that experiment artifacts exist and are non-empty.
+3. Detect which analysis outputs are already present:
    - `NARRATIVE_REPORT.md`
    - `CLAIM_EVIDENCE_MATRIX.md`
    - `TRACK_VERDICTS.md`
@@ -44,8 +48,9 @@ Use when analysis stopped mid-run or when Researcher wants Analyzer to continue 
    - `THEORY_STATE.json`
    - `proof-packets/`
    - `figures/`, `tables/`
-3. Regenerate only missing or obviously stale outputs.
-4. If all outputs already exist, return `no-op` with a summary of what is ready.
+4. If `experiment_search.status` is `ready_for_analysis` and the standard analyzer packets are missing or stale, call `research_workflow.materialize_analysis_artifacts` before manual regeneration. Treat it as workflow-owned repair from synced experiment evidence; inspect its output and do not treat it as a separate completion authority.
+5. Regenerate only missing or obviously stale outputs.
+6. If all outputs already exist, return `no-op` with a summary of what is ready.
 
 ## Safety Rules
 

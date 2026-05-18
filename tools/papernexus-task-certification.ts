@@ -299,8 +299,8 @@ function normalizePresentPaperEvidence(value: unknown): PresentPaperEvidence | n
       sourceSpanEvidenceRecord?.spans,
       sourceSpanEvidenceRecord?.source_spans
     ).length;
-  const graphIndexAvailable = pickBoolean(graphIndexEvidence, [
-    "available",
+  const graphIndexAvailable = pickBoolean(graphIndexEvidence, ["available"]);
+  const graphIndexActive = pickBoolean(graphIndexEvidence, [
     "active_in_graph",
     "activeInGraph",
   ]);
@@ -310,9 +310,9 @@ function normalizePresentPaperEvidence(value: unknown): PresentPaperEvidence | n
     "sourceSpanAvailable",
   ]);
   const hasExplicitGraphIndexEvidence =
-    graphIndexAvailable === false
-      ? false
-      : graphIndexAvailable === true ||
+    graphIndexActive === true ||
+    (graphIndexAvailable !== false &&
+      (graphIndexAvailable === true ||
         Boolean(
           pickString(graphIndexEvidence, [
             "paperNodeId",
@@ -322,7 +322,7 @@ function normalizePresentPaperEvidence(value: unknown): PresentPaperEvidence | n
             "sourceKey",
             "source_key",
           ])
-        );
+        )));
   const hasExplicitSourceSpanEvidence =
     sourceSpanAvailable !== false && sourceSpanCount > 0;
   const matchedBy = pickString(record, ["matchedBy", "matched_by"]);

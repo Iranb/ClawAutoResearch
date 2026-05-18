@@ -36,7 +36,7 @@ Write reproducible, self-contained experiment code from a research plan specific
 Read in order:
 1. `{PROJ}/orchestrator/PLAN.md` — full experiment specification
 2. `{PROJ}/TRACK_REGISTRY.json` — active track ids plus the durable `hypothesis` / `novelty_basis` contract
-3. `{PROJ}/PROJECT_MANIFEST.json` — confirm CODE ownership and any mirrored research-program contract
+3. `{PROJ}/PROJECT_MANIFEST.json` — confirm `workflow_control` routes CODE ownership and read any mirrored research-program contract
 4. `{PROJ}/researcher/IDEA_REPORT.md` — method details and novelty claims
 5. `{PROJ}/researcher/ideation/RESEARCH_PROPOSAL.md` and `{PROJ}/researcher/ideation/PROBLEM_DECOMPOSITION.md` — the current rationale for why this direction exists and how it should be decomposed into executable deltas
 6. `{PROJ}/academic_writer/story/CLAIM_TO_EXPERIMENT_MAP.md` when it already exists — use it as a claim-pressure contract, not just a writing artifact

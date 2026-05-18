@@ -165,6 +165,88 @@ test("claimAndActivateWorkflowHandoffForAgent switches owner only after the targ
   assert.equal(queue.entries[0].lastError, null);
 });
 
+test("claimAndActivateWorkflowHandoffForAgent recomputes next transition after activating target stage", async (t) => {
+  const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-handoff-next-stage-"));
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await fs.writeFile(
+    path.join(projectRoot, "PROJECT_MANIFEST.json"),
+    `${JSON.stringify(
+      {
+        project_id: "demo-project",
+        current_stage: "idea",
+        owner_agent: "researcher",
+        next_action: "/plan-phase",
+        workflow_control: buildWorkflowControlContract({
+          contractId: "wfctl-idea-ready",
+          reconciledAt: "2026-05-17T00:00:00.000Z",
+          stage: "idea",
+          owner: "researcher",
+          nextAction: "/plan-phase",
+          status: "ready",
+          blockingReason: null,
+          completionStatus: "complete",
+          completionSource: "idea_completion",
+          completionReason: null,
+          runtimeState: "idle",
+        }),
+        orchestration_state: {
+          status: "waiting",
+          current_owner: "researcher",
+          next_transition_candidate: "plan",
+        },
+      },
+      null,
+      2
+    )}\n`,
+    "utf8"
+  );
+
+  const created = await createStageOwnerHandoffIntent({
+    projectRoot,
+    projectId: "demo-project",
+    workflowLine: "experiment",
+    stageBefore: "idea",
+    stageAfter: "plan",
+    ownerBefore: "researcher",
+    ownerAfter: "orchestrator",
+    executionId: "exec-plan-1",
+    nextAction: "Run /plan-research.",
+    blockingReason:
+      "Waiting for orchestrator to satisfy: orchestration_state.next_transition_candidate should be code while current_stage=plan (current: plan)",
+  });
+
+  await syncPreparedWorkflowHandoffToManifest({
+    projectRoot,
+    intent: created.intent,
+  });
+
+  const activation = await claimAndActivateWorkflowHandoffForAgent({
+    projectRoot,
+    role: "orchestrator",
+    sessionKey: "agent:orchestrator:test",
+  });
+
+  assert.equal(activation.claimed, true);
+  assert.equal(activation.activated, true);
+
+  const manifest = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "PROJECT_MANIFEST.json"), "utf8")
+  );
+  assert.equal(manifest.current_stage, "plan");
+  assert.equal(manifest.owner_agent, "orchestrator");
+  assert.equal(manifest.workflow_control.stage, "plan");
+  assert.equal(manifest.workflow_control.owner, "orchestrator");
+  assert.equal(manifest.workflow_control.status, "ready");
+  assert.equal(manifest.workflow_control.blocking_reason, null);
+  assert.equal(manifest.orchestration_state.current_owner, "orchestrator");
+  assert.equal(manifest.orchestration_state.next_transition_candidate, "code");
+  assert.equal(manifest.orchestration_state.next_owner, "coder");
+  assert.equal(manifest.orchestration_state.blocking_reason, null);
+});
+
 test("claimAndActivateWorkflowHandoffForAgent can be blocked by a before-activation hook", async (t) => {
   const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-handoff-hook-"));
   t.after(async () => {

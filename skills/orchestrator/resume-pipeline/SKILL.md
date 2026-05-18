@@ -26,6 +26,7 @@ Use when planning work was interrupted or when Researcher wakes Orchestrator aft
 ## Read First
 
 - `{PROJ}/PROJECT_MANIFEST.json`
+- `{PROJ}/.openclaw-research/WORKFLOW_FINAL_SCORECARD.json` if present
 - `{PROJ}/TRACK_REGISTRY.json`
 - `{PROJ}/researcher/IDEA_REPORT.md`
 - `{PROJ}/orchestrator/PLAN.md` if exists
@@ -33,19 +34,21 @@ Use when planning work was interrupted or when Researcher wakes Orchestrator aft
 
 ## Resume Logic
 
-1. Confirm the project is in `plan` or `code` stage, or that planning artifacts are missing.
+1. Confirm `PROJECT_MANIFEST.json.workflow_control` or the current Workflow Guard snapshot routes work to Orchestrator, or that planning artifacts are missing as an explicit repair blocker.
 2. If `PLAN.md` is missing or incomplete, regenerate it from `IDEA_REPORT.md` and `TRACK_REGISTRY.json`.
 3. If `TODOS.md` is missing, rebuild it from the current plan.
 4. If both files exist, reconcile them with the active tracks:
    - remove tasks for killed tracks
    - restore tasks for active tracks that have no completion signal
    - keep completed items intact
-5. Return a concise summary so Researcher can continue to CODE.
+5. If canonical `workflow_control.stage=done` or submit evidence is complete, call `research_workflow.materialize_workflow_final_scorecard` to refresh the derived closeout card. Treat it as diagnostic evidence only; it must not replace `workflow_control`.
+6. Return a concise summary so Researcher can continue to CODE or the workflow can close.
 
 ## Safety Rules
 
-- Never advance the project stage yourself; Researcher owns stage transitions.
+- Never advance the project stage yourself; canonical `workflow_control` and workflow handoff tools own transitions.
 - Never delete completed TODO entries written by other agents.
+- Never use `WORKFLOW_FINAL_SCORECARD.json` as a completion gate; it is a replayable closeout summary derived from canonical resolvers.
 
 ## Output
 

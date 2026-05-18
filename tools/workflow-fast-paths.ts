@@ -3701,6 +3701,8 @@ async function maybeTriggerQueuedLiteratureRequisitionRequest(params: {
   });
 
   const launchUpdatedAt = new Date().toISOString();
+  const activeDuplicateLaunch =
+    result.reason === "session_unavailable" && !result.queued;
   const launchRequest = result.started
     ? markQueuedPaperIngestionLaunchStarted({
         request: requisitionCandidate,
@@ -3716,13 +3718,18 @@ async function maybeTriggerQueuedLiteratureRequisitionRequest(params: {
       ? {
           ...requisitionCandidate,
           status:
-            requisitionCandidate.status === "running" ? "running" : "queued",
+            requisitionCandidate.status === "running" ||
+            activeDuplicateLaunch
+              ? "running"
+              : "queued",
           updatedAt: launchUpdatedAt,
           triggerKind: requisitionCandidate.triggerKind ?? params.triggerKind,
           lastError: null,
           detail:
-            result.summary ??
-            `Workflow queued literature requisition from ${params.triggerKind}; it will start when the background runtime is available.`,
+            activeDuplicateLaunch
+              ? `Workflow found an already running literature requisition from ${params.triggerKind}${result.summary ? `: ${result.summary}` : "."}`
+              : result.summary ??
+                `Workflow queued literature requisition from ${params.triggerKind}; it will start when the background runtime is available.`,
         }
       : markQueuedPaperIngestionLaunchFailure({
           request: requisitionCandidate,
@@ -3946,6 +3953,8 @@ export async function maybeTriggerQueuedPaperIngestionRequest(params: {
   });
 
   const launchUpdatedAt = new Date().toISOString();
+  const activeDuplicateLaunch =
+    result.reason === "session_unavailable" && !result.queued;
   const launchRequest = result.started
     ? markQueuedPaperIngestionLaunchStarted({
         request: validatedRequest,
@@ -3958,13 +3967,19 @@ export async function maybeTriggerQueuedPaperIngestionRequest(params: {
     : result.queued || result.reason === "session_unavailable"
       ? {
           ...validatedRequest,
-          status: validatedRequest.status === "running" ? "running" : "queued",
+          status:
+            validatedRequest.status === "running" ||
+            activeDuplicateLaunch
+              ? "running"
+              : "queued",
           updatedAt: launchUpdatedAt,
           triggerKind: params.triggerKind,
           lastError: null,
           detail:
-            result.summary ??
-            `Workflow queued upload launch from ${params.triggerKind}; it will start when the background runtime is available.`,
+            activeDuplicateLaunch
+              ? `Workflow found an already running upload launch from ${params.triggerKind}${result.summary ? `: ${result.summary}` : "."}`
+              : result.summary ??
+                `Workflow queued upload launch from ${params.triggerKind}; it will start when the background runtime is available.`,
         }
       : markQueuedPaperIngestionLaunchFailure({
           request: validatedRequest,
@@ -4345,9 +4360,8 @@ export async function startBackgroundWorkflowRun(params: {
       reason: "session_unavailable",
       runId: null,
       sessionKey: null,
-      projectRoot:
-        ensuredProject?.projectRoot ?? params.snapshot.projectRoot ?? null,
-      projectId: ensuredProject?.projectId ?? params.snapshot.projectId ?? null,
+      projectRoot: resolvedProjectRoot,
+      projectId: resolvedProjectId,
       summary:
         readString(params.backgroundRun.summary) ??
         `Background workflow is already running for ${topic ?? ensuredProject?.title ?? resolvedProjectId ?? "the current project"}.`,
@@ -4363,9 +4377,8 @@ export async function startBackgroundWorkflowRun(params: {
       reason: "session_unavailable",
       runId: null,
       sessionKey: null,
-      projectRoot:
-        ensuredProject?.projectRoot ?? params.snapshot.projectRoot ?? null,
-      projectId: ensuredProject?.projectId ?? params.snapshot.projectId ?? null,
+      projectRoot: resolvedProjectRoot,
+      projectId: resolvedProjectId,
       summary:
         readString(params.backgroundRun.summary) ??
         `Background workflow is already queued for ${topic ?? ensuredProject?.title ?? resolvedProjectId ?? "the current project"}.`,
@@ -4496,9 +4509,8 @@ export async function startBackgroundWorkflowRun(params: {
       reason: "channel_capacity_reached",
       runId: null,
       sessionKey: null,
-      projectRoot:
-        ensuredProject?.projectRoot ?? params.snapshot.projectRoot ?? null,
-      projectId: ensuredProject?.projectId ?? params.snapshot.projectId ?? null,
+      projectRoot: resolvedProjectRoot,
+      projectId: resolvedProjectId,
       summary:
         `Queued background workflow because this channel already has ` +
         `${MAX_RESEARCHER_BACKGROUND_SUBAGENTS_PER_PROJECT_SCOPE} active Researcher background subagents are already running for this project on the current channel. ` +
@@ -4597,10 +4609,8 @@ export async function startBackgroundWorkflowRun(params: {
         preferredSessionKey: backgroundSessionKey,
         family: normalizedFamily,
         kind: normalizedKind,
-        projectId:
-          ensuredProject?.projectId ?? params.snapshot.projectId ?? null,
-        projectRoot:
-          ensuredProject?.projectRoot ?? params.snapshot.projectRoot ?? null,
+        projectId: resolvedProjectId,
+        projectRoot: resolvedProjectRoot,
         summary:
           readString(params.backgroundRun.summary) ??
           `Queued background workflow for ${topic ?? ensuredProject?.title ?? resolvedProjectId ?? "the current project"}.`,
@@ -4616,9 +4626,8 @@ export async function startBackgroundWorkflowRun(params: {
       reason: "runtime_unavailable",
       runId: null,
       sessionKey: null,
-      projectRoot:
-        ensuredProject?.projectRoot ?? params.snapshot.projectRoot ?? null,
-      projectId: ensuredProject?.projectId ?? params.snapshot.projectId ?? null,
+      projectRoot: resolvedProjectRoot,
+      projectId: resolvedProjectId,
       summary:
         directLaunch.error ??
         "Background workflow transition failed before the runtime could start it.",
@@ -4660,10 +4669,8 @@ export async function startBackgroundWorkflowRun(params: {
       preferredSessionKey: backgroundSessionKey,
       family: normalizedFamily,
       kind: normalizedKind,
-      projectId:
-        ensuredProject?.projectId ?? params.snapshot.projectId ?? null,
-      projectRoot:
-        ensuredProject?.projectRoot ?? params.snapshot.projectRoot ?? null,
+      projectId: resolvedProjectId,
+      projectRoot: resolvedProjectRoot,
       summary:
         readString(params.backgroundRun.summary) ??
         `Queued background workflow for ${topic ?? ensuredProject?.title ?? resolvedProjectId ?? "the current project"}.`,
@@ -4696,9 +4703,8 @@ export async function startBackgroundWorkflowRun(params: {
     reason: "started",
     runId,
     sessionKey: directLaunch?.sessionKey ?? backgroundSessionKey,
-    projectRoot:
-      ensuredProject?.projectRoot ?? params.snapshot.projectRoot ?? null,
-    projectId: ensuredProject?.projectId ?? params.snapshot.projectId ?? null,
+    projectRoot: resolvedProjectRoot,
+    projectId: resolvedProjectId,
     summary:
       readString(params.backgroundRun.summary) ??
       (normalizedKind === "research_pipeline"

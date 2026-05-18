@@ -13,6 +13,7 @@ Skills define how tools work. This file is for local specifics, paths, and envir
 
 - In this repo template, shared workflow docs live at `../../WORKFLOW.md`, `../../WORKSPACE.md`, `../../CONFIG.md`, and `../../openclaw.json`.
 - In a live workspace, prefer the workspace-root copies of those files.
+- Treat `{PROJ}/PROJECT_MANIFEST.json.workflow_control` or the latest Workflow Guard snapshot as the canonical source for stage, owner, next action, blocker, and runtime state; manifest top-level fields are only mirrors.
 - Use dry-run output, `README.md`, `REMOTE_RUN.json`, and the Workflow Guard experiment monitor summary as the authoritative execution handoff.
 - Completion cue: if the ledger/runtime reports `active_runs=0` but `finished_unreconciled>0`, treat the run as finished-on-remote and switch attention to `/monitor-experiment`, result promotion, and ledger reconciliation instead of waiting for another human ping.
 - Treat `{PROJ}/TRACK_REGISTRY.json` plus `{PROJ}/PROJECT_MANIFEST.json.research_program` as the innovation contract source of truth; the active bundle's `EXPERIMENT_MANIFEST.json` should mirror `track_id`, `hypothesis`, and `novelty_basis`.

@@ -20,6 +20,15 @@ allowed-tools:
 
 End-to-end automated research pipeline with three levels of parallelism and state-machine control.
 
+## Current Control Plane Override
+
+When older instructions in this file mention manifest stage fields, treat them as mirrors. The canonical stage, owner, next action, blocker, completion status, and runtime state live in `{PROJ}/PROJECT_MANIFEST.json.workflow_control` after workflow reconciliation.
+
+- Use `research_workflow.auto_iterator_tick`, lane materializers/setters, and `prepare_stage_handoff` for stage movement.
+- Do not hand-edit `current_stage`, `current_micro_stage`, `owner_agent`, `next_action`, or `blocking_reason`.
+- Experiment can hand off to analysis only after `research_workflow.evaluate_experiment_search_decision` records `analysis_gate.decision = "ready_for_analysis"`.
+- The current discovery-to-experiment chain is: remote discovery -> `REQUISITION_SATISFACTION_REPORT` -> `GRAPH_BUILD_DECISION` -> `IDEA_CATALYST_CONTRACT` -> `INNOVATION_PACKET` -> experiment dispatch -> Karpathy analysis gate.
+
 ## Research Rigor Constraints
 
 - Preserve **one variable per experiment** across the whole pipeline: each promoted track, ablation, or repair should stay attributable to one intended change.
@@ -71,7 +80,7 @@ End-to-end automated research pipeline with three levels of parallelism and stat
    - Generate `project_id` from topic: lowercase, replace spaces with `-`, truncate to 40 chars
    - Ensure `{PROJ}` exists
    - Copy templates to `{PROJ}/`:
-     - `templates/PROJECT_MANIFEST.json` → update with `project_id`, `title`, `created_at`, `current_stage: "setup"`
+     - `templates/PROJECT_MANIFEST.json` -> update project identity and setup evidence; let workflow reconciliation write canonical `workflow_control`
      - `templates/TRACK_REGISTRY.json`
      - `templates/CLAIM_POLICY.md`
    - Create `{PROJ}/graph/`, `{PROJ}/memory/`, `{PROJ}/researcher/`, `{PROJ}/orchestrator/`, `{PROJ}/coder/`, `{PROJ}/analyzer/`, `{PROJ}/academic_writer/`, `{PROJ}/reviewer/`
@@ -89,11 +98,10 @@ End-to-end automated research pipeline with three levels of parallelism and stat
      - `research_program.zotero_project_path = bot/<project-id>`
 
 6. **Update state:**
-   - Set `{PROJ}/PROJECT_MANIFEST.json`:
-     - `current_stage: "setup"` until the onboarding contract is complete
-     - `current_micro_stage: "project_init"`
+   - Persist setup evidence through the workflow setup/onboarding tool or materializer:
      - `memory_scope.project_isolated: true`
      - keep `papernexus_corpus`, `paper_source_dir`, and `graph_source_dir` unset unless the project explicitly overrides the shared-global defaults
+     - expected canonical mirror after reconciliation: `workflow_control.stage = "setup"` until the onboarding contract is complete
    - Do **not** advance to `graph_build` until setup checklist is complete; `/workflow-status` should show no missing onboarding items
 
 7. **Announce and begin Stage 0.5:**
@@ -147,13 +155,12 @@ When starting a **new workflow run** for a project (i.e., when `{PROJ}/` is crea
    - If `{PROJ}/PROJECT_MANIFEST.json` does not exist, initialize it from `templates/PROJECT_MANIFEST.json`.
    - If `{PROJ}/TRACK_REGISTRY.json` does not exist, initialize it from `templates/TRACK_REGISTRY.json`.
    - If `{PROJ}/CLAIM_POLICY.md` does not exist, initialize it from `templates/CLAIM_POLICY.md`.
-   - Update `{PROJ}/PROJECT_MANIFEST.json` with:
+   - Persist setup evidence with:
      - `project_id`
      - `title`
      - `created_at`
      - `status`
-     - `current_stage: "setup"`
-     - `current_micro_stage: "state_templates_ready"`
+   - Then run the setup materializer or `auto_iterator_tick` so `workflow_control` and any manifest mirrors are reconciled.
 
 ### Stage 0.5: Graph + Brainstorm Foundation (Mandatory for new projects)
 
@@ -350,6 +357,9 @@ Experiment control rules:
 - every round must end with a track decision (`advance` / `merge` / `park` / `kill`)
 - do not enter full experiments for a weak track that failed its pilot
 - if budget is tight, prefer one strong track over two marginal ones
+- synchronize `EXPERIMENT_SEARCH.json`, the experiment ledger, and result summaries before closeout
+- call `research_workflow.evaluate_experiment_search_decision`; no analysis handoff is allowed unless `analysis_gate.decision = "ready_for_analysis"`
+- if the gate says `continue_search` / `continue_tuning`, route the bounded next step back to Coder instead of forcing Analyzer to interpret non-improving evidence
 
 ### Stage 5: Review Handoff
 
@@ -523,7 +533,7 @@ Typical overnight workflow:
 
 - Gate control is determined by `AUTO_PROCEED`
 - **Never skip Stage 0.5 (Graph Foundation)** on a new project: build PaperNexus corpus and frontier report before idea selection
-- **Always maintain the state machine**: update `{PROJ}/PROJECT_MANIFEST.json` and `{PROJ}/TRACK_REGISTRY.json` at each stage transition
+- **Always maintain the state machine through workflow control**: update durable evidence with lane tools/materializers, then let canonical `workflow_control` and manifest mirrors be reconciled
 - **Never let the track portfolio drift**: keep at most 2 active tracks unless budget explicitly allows more
 - **Never skip Stage 2 (Planning):** even when AUTO_PROCEED=true, wait for `PLAN.md`, `TODOS.md`, and a ready `PLAN_AUDIT.md` before spawning Coder. When any is missing, **proactively wake Orchestrator** (spawn with /plan-research) to produce them. See WORKFLOW.md "Stage transition preconditions" and "Wake Orchestrator on demand".
 - Once a later-stage owner is active (`orchestrator`, `coder`, `analyzer`, `academic_writer`, `reviewer`), Researcher should route and monitor rather than directly doing that owner's substantive work.

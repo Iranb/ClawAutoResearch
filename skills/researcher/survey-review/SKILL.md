@@ -22,7 +22,9 @@ Primary slash entry:
 
 ## Core Rule
 
-Treat `PROJECT_MANIFEST.json.survey_review` as the authoritative state. Do not try to advance the survey by hand-editing a pile of Markdown files and hoping the workflow notices.
+Treat `PROJECT_MANIFEST.json.survey_review` as the durable survey evidence/projection consumed by the workflow resolver. Canonical stage advancement still comes from `PROJECT_MANIFEST.json.workflow_control` after `materialize_survey_review_state` / `auto_iterator_tick`.
+
+Do not try to advance the survey by hand-editing a pile of Markdown files or mirrored manifest stage fields and hoping the workflow notices.
 
 After each major pass, update or reconcile state through:
 

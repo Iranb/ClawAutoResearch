@@ -1818,6 +1818,71 @@ function isRemoteSourceEntrySourceBacked(entry: Record<string, unknown>): boolea
   );
 }
 
+function isExistingSatisfactionReportSourceBacked(report: Record<string, unknown> | null): boolean {
+  if (!report) {
+    return false;
+  }
+  const status = normalizeStage(pickString(report, ["status"]));
+  const evidenceGapClosed =
+    report.evidence_gap_closed === true || report.evidenceGapClosed === true;
+  const sourceBackedCount =
+    pickNumberValue(report, ["source_backed_count", "sourceBackedCount"]) ?? 0;
+  return (
+    (status === "valid" || status === "warning") &&
+    evidenceGapClosed &&
+    sourceBackedCount > 0
+  );
+}
+
+function isExistingSourceIndexEntrySourceBacked(entry: SourceIndexRawEntry): boolean {
+  return Boolean(
+    isRemoteSourceEntrySourceBacked(entry.record) ||
+      entry.paper.sourcePath ||
+      entry.paper.sourceKind === "markdown" ||
+      entry.paper.sourceKind === "pdf"
+  );
+}
+
+async function readExistingSourceBackedGraphAuthorityProof(params: {
+  projectRoot: string;
+  requisitionSatisfactionReportPath?: string | null;
+}): Promise<{
+  satisfactionReportReady: boolean;
+  sourceIndexEntries: SourceIndexRawEntry[];
+  sourceBackedCount: number;
+  canonicalIds: string[];
+}> {
+  const satisfactionReportPath = params.requisitionSatisfactionReportPath
+    ? path.isAbsolute(params.requisitionSatisfactionReportPath)
+      ? params.requisitionSatisfactionReportPath
+      : path.join(params.projectRoot, params.requisitionSatisfactionReportPath)
+    : null;
+  const satisfactionReport = satisfactionReportPath
+    ? await readJsonIfExists<Record<string, unknown>>(satisfactionReportPath)
+    : null;
+  const satisfactionReportReady =
+    isExistingSatisfactionReportSourceBacked(satisfactionReport);
+  const sourceIndexRaw = await readJsonIfExists<unknown>(
+    resolvePaperSourceIndexPath(params.projectRoot)
+  );
+  const sourceIndexEntries = collectSourceIndexEntries(sourceIndexRaw).filter(
+    isExistingSourceIndexEntrySourceBacked
+  );
+  const reportSourceBackedCount =
+    satisfactionReportReady
+      ? pickNumberValue(satisfactionReport, [
+          "source_backed_count",
+          "sourceBackedCount",
+        ]) ?? 0
+      : 0;
+  return {
+    satisfactionReportReady,
+    sourceIndexEntries,
+    sourceBackedCount: Math.max(sourceIndexEntries.length, reportSourceBackedCount),
+    canonicalIds: uniqueStrings(sourceIndexEntries.map((entry) => entry.paper.canonicalId)),
+  };
+}
+
 function countRemoteSourceBackedEntries(entries: Record<string, unknown>[]): number {
   return entries.filter(isRemoteSourceEntrySourceBacked).length;
 }
@@ -1987,20 +2052,41 @@ async function writeRemoteDiscoveryGraphBuildReceipt(params: {
 }): Promise<string> {
   const sourceEntries = params.sourceEntries ?? [];
   const sourceBackedEntries = sourceEntries.filter(isRemoteSourceEntrySourceBacked);
+  const existingProof =
+    sourceEntries.length === 0
+      ? await readExistingSourceBackedGraphAuthorityProof({
+          projectRoot: params.projectRoot,
+          requisitionSatisfactionReportPath:
+            params.requisitionSatisfactionReportPath ?? null,
+        })
+      : null;
+  const existingProofReady = Boolean(
+    existingProof &&
+      (existingProof.satisfactionReportReady ||
+        existingProof.sourceIndexEntries.length > 0)
+  );
   const canonicalIds = uniqueStrings(
-    sourceEntries
-      .map((entry) => pickString(entry, ["canonical_id", "canonicalId"]))
-      .filter((entry): entry is string => Boolean(entry))
+    [
+      ...sourceEntries
+        .map((entry) => pickString(entry, ["canonical_id", "canonicalId"]))
+        .filter((entry): entry is string => Boolean(entry)),
+      ...(existingProof?.canonicalIds ?? []),
+    ]
   );
   const manifest =
     (await readJsonIfExists<Record<string, unknown>>(
       path.join(params.projectRoot, "PROJECT_MANIFEST.json")
     )) ?? null;
-  const projectGraphReady =
+  const currentEntriesGraphReady =
     params.status !== "failed" &&
     params.status !== "source_blocked" &&
     sourceBackedEntries.length > 0 &&
     hasReadySourceBackedGraphCertification(manifest);
+  const existingProofGraphReady =
+    sourceBackedEntries.length === 0 &&
+    existingProofReady &&
+    hasReadySourceBackedGraphCertification(manifest);
+  const projectGraphReady = currentEntriesGraphReady || existingProofGraphReady;
   const effectiveStatus: PapernexusGraphBuildReceiptStatus = projectGraphReady
     ? "graph_ready"
     : params.status;
@@ -2010,6 +2096,14 @@ async function writeRemoteDiscoveryGraphBuildReceipt(params: {
   const sourceBackedGraphClaim =
     projectGraphReady ||
     (effectiveStatus === "graph_ready" && effectiveGraphVisibility === "verified");
+  const sourceBackedCount = Math.max(
+    sourceBackedEntries.length,
+    existingProof?.sourceBackedCount ?? 0
+  );
+  const hasSourceIndexEvidence =
+    sourceEntries.length > 0 ||
+    Boolean(existingProof && existingProof.sourceIndexEntries.length > 0) ||
+    Boolean(existingProof?.satisfactionReportReady);
   const receiptPath = await writePapernexusGraphBuildReceipt({
     projectRoot: params.projectRoot,
     receipt: {
@@ -2024,7 +2118,7 @@ async function writeRemoteDiscoveryGraphBuildReceipt(params: {
       canonical_ids_requested: canonicalIds,
       canonical_ids_in_graph: projectGraphReady ? canonicalIds : [],
       canonical_ids_missing: projectGraphReady ? [] : canonicalIds,
-      source_backed_count: sourceBackedEntries.length,
+      source_backed_count: sourceBackedCount,
       metadata_only_count: Math.max(0, sourceEntries.length - sourceBackedEntries.length),
       source_backed_graph_claim: sourceBackedGraphClaim,
       active_in_graph_sources: [],
@@ -2034,7 +2128,7 @@ async function writeRemoteDiscoveryGraphBuildReceipt(params: {
       }),
       coverage: {
         min_required_satisfied: sourceBackedGraphClaim,
-        min_source_backed_papers: Math.max(1, sourceEntries.length > 0 ? 1 : 0),
+        min_source_backed_papers: Math.max(1, sourceBackedCount > 0 ? 1 : 0),
         notes: [
           projectGraphReady
             ? "Project graph presence certification is already source-backed; remote discovery evidence is request-specific and source-backed."
@@ -2057,7 +2151,7 @@ async function writeRemoteDiscoveryGraphBuildReceipt(params: {
     requestId: params.requestId ?? null,
     graphReceiptPath: receiptPath,
     sourceIndexPath:
-      sourceEntries.length > 0 ? "researcher/PAPER_SOURCE_INDEX.json" : null,
+      hasSourceIndexEvidence ? "researcher/PAPER_SOURCE_INDEX.json" : null,
     sourceBackedGraphClaim,
     requisitionSatisfactionReportPath:
       params.requisitionSatisfactionReportPath ?? null,

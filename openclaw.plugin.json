@@ -8,7 +8,9 @@
   "contracts": {
     "tools": [
       "research_memory",
-      "research_workflow"
+      "research_workflow",
+      "auto_research",
+      "auto_review"
     ]
   },
   "toolMetadata": {
@@ -16,6 +18,12 @@
       "optional": true
     },
     "research_workflow": {
+      "optional": true
+    },
+    "auto_research": {
+      "optional": true
+    },
+    "auto_review": {
       "optional": true
     }
   },

@@ -170,6 +170,37 @@ function readMetricValue(entry: Record<string, unknown>): number | null {
   );
 }
 
+function readMinimumImprovement(entry: Record<string, unknown>): number | null {
+  const keyMetric = asRecord(entry.key_metric ?? entry.keyMetric) ?? {};
+  const metadata = asRecord(entry.metadata) ?? {};
+  const trialContract =
+    asRecord(metadata.trial_contract ?? metadata.trialContract) ?? {};
+  const primaryMetric =
+    asRecord(trialContract.primary_metric ?? trialContract.primaryMetric) ?? {};
+  const contract =
+    asRecord(trialContract.primary_metric_contract ?? trialContract.primaryMetricContract) ??
+    asRecord(metadata.primary_metric_contract ?? metadata.primaryMetricContract) ??
+    asRecord(keyMetric.primary_metric_contract ?? keyMetric.primaryMetricContract) ??
+    {};
+  return (
+    pickNumber(primaryMetric, ["minimum_improvement", "minimumImprovement"]) ??
+    pickNumber(contract, ["minimum_improvement", "minimumImprovement"]) ??
+    null
+  );
+}
+
+function hasPromotableMetricGain(entry: Record<string, unknown>): boolean {
+  const delta = readMetricDelta(entry);
+  const minimumImprovement = readMinimumImprovement(entry);
+  return (
+    delta !== null &&
+    delta > 0 &&
+    (minimumImprovement === null ||
+      minimumImprovement <= 0 ||
+      delta >= minimumImprovement)
+  );
+}
+
 function readBoolean(value: unknown): boolean | null {
   if (typeof value === "boolean") {
     return value;
@@ -183,7 +214,7 @@ function readBoolean(value: unknown): boolean | null {
 }
 
 function deriveTrialOutcome(entry: Record<string, unknown>): AutoResearchTrialDecisionOutcome {
-  const delta = readMetricDelta(entry);
+  const promotableGain = hasPromotableMetricGain(entry);
   const decision = normalizeStage(
     entry.decision ??
       entry.last_decision ??
@@ -191,10 +222,10 @@ function deriveTrialOutcome(entry: Record<string, unknown>): AutoResearchTrialDe
       entry.outcome
   );
   if (decision === "promote" || decision === "promoted" || decision === "advance") {
-    return delta !== null && delta > 0 ? "promote" : "discard";
+    return promotableGain ? "promote" : "discard";
   }
   if (decision === "keep" || decision === "innovation_supported") {
-    return delta !== null && delta > 0 ? "promote" : "continue_tuning";
+    return promotableGain ? "promote" : "continue_tuning";
   }
   if (
     decision === "discard" ||
@@ -204,8 +235,9 @@ function deriveTrialOutcome(entry: Record<string, unknown>): AutoResearchTrialDe
   ) {
     return "discard";
   }
+  const delta = readMetricDelta(entry);
   if (delta !== null) {
-    return delta > 0 ? "promote" : "discard";
+    return promotableGain ? "promote" : "discard";
   }
   return "unknown";
 }

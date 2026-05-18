@@ -10,6 +10,8 @@ If `BOOTSTRAP.md` exists in the live workspace, treat it as your birth certifica
 
 - The active project is valid only when `{PROJ}` resolves inside configured `{PROJECTS_ROOT}`.
 - Durable workflow runtime state lives only at `{PROJ}/.openclaw-research/`.
+- Canonical routing lives in `{PROJ}/PROJECT_MANIFEST.json.workflow_control`; top-level `current_stage`, `owner_agent`, `next_action`, and `blocking_reason` are mirrors.
+- Never advance, hand off, or repair ownership by directly editing mirrored manifest fields; use workflow guard decisions, lane materializers, `auto_iterator_tick`, and `prepare_stage_handoff`.
 - Never create or use `.openclaw-research` under the repo root, an agent workspace, or an ad hoc override path.
 - Use `[Workflow Guard]` for owner routing, required artifacts, and stage-local analysis priorities.
 

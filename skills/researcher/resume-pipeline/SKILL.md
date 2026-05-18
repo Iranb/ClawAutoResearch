@@ -42,9 +42,9 @@ Researcher-owned restart entrypoint. Use after session loss, gateway restart, or
 
 ## Reconciliation Order
 
-0. If `research_workflow` is available, call `research_workflow` with action `auto_iterator_tick` and `iterator.mode = "resume"` before manual reconciliation. Treat the returned `stageAfter`, `ownerAfter`, and `blockingReason` as the durable starting point for this resume pass.
+0. If `research_workflow` is available, call `research_workflow` with action `auto_iterator_tick` and `iterator.mode = "resume"` before manual reconciliation. Treat the returned `workflow_control`, `stageAfter`, `ownerAfter`, and `blockingReason` as the durable starting point for this resume pass.
 1. Resolve the project to resume from `PROJECTS_STATE.json`, explicit argument, or the newest active project.
-2. Read `PROJECT_MANIFEST.json` and `GATE_STATE.json`; treat them as the top-level stage source of truth.
+2. Read `PROJECT_MANIFEST.json` and `GATE_STATE.json`; treat `PROJECT_MANIFEST.json.workflow_control` or the latest Workflow Guard snapshot as the canonical stage source of truth. `GATE_STATE.json` and top-level manifest fields are compatibility inputs / mirrors, not independent authorities.
 3. Validate required artifacts for the recorded stage:
    - `plan/code` → `orchestrator/PLAN.md`, `orchestrator/TODOS.md`, `orchestrator/PLAN_AUDIT.md`
    - `experiment` → `researcher/EXPERIMENT_REGISTRY.md`, `coder/*/REMOTE_RUN.json`, remote `screen -ls`
@@ -77,13 +77,14 @@ Researcher-owned restart entrypoint. Use after session loss, gateway restart, or
    - check remote screens
    - reconcile against `EXPERIMENT_LEDGER.json` first, then `EXPERIMENT_REGISTRY.md`
    - if launches are missing but code bundles are ready, assign Coder `/run-experiment`
-   - if runs are complete, sync artifacts, upsert the final experiment ledger entries, mirror the summary into `PROJECT_MANIFEST.json.experiment_memory`, and only then advance to `ANALYZE`
+   - if runs are complete, sync artifacts, upsert final experiment ledger entries, mirror summaries through workflow tools, call `research_workflow.set_experiment_search`, then call `research_workflow.evaluate_experiment_search_decision`
+   - only the resulting `analysis_gate.decision = "ready_for_analysis"` permits `experiment -> analyze`; `continue_search`, `continue_tuning`, or repair blockers keep ownership in experiment/search lanes
 9. If current stage is `ANALYZE`, `REVIEW`, `WRITE`, or `SUBMIT`, wake the owning agent's `/resume-pipeline` or route to that owner session through workflow control plane. Do not perform owner-only work from the Researcher lane unless ownership actually returns to Researcher.
-10. Update `PROJECT_MANIFEST.json` and `PROJECTS_STATE.json` with `updated_at`, `current_stage`, `current_micro_stage`, and `next_action`.
+10. Re-run `research_workflow.auto_iterator_tick` after repairs or materializers. Let the reconciler update `workflow_control`, manifest mirrors, and `PROJECTS_STATE.json`; only update non-control evidence fields through their lane-specific workflow tools.
 
 ## Safety Rules
 
-- Never start a new stage until the recorded current stage is reconciled with on-disk artifacts.
+- Never start a new stage until canonical `workflow_control` is reconciled with on-disk artifacts.
 - Never treat foreign-owner artifacts as permission to do foreign-owner work. Researcher may inspect them to decide whether to route, retry, or report a blocker.
 - Never relaunch an experiment if remote `screen`, logs, or `REMOTE_RUN.json` show it is already active.
 - Never trust remembered experiment history over `{PROJ}/researcher/EXPERIMENT_LEDGER.json`; ledger beats chat memory.
@@ -96,6 +97,7 @@ Researcher-owned restart entrypoint. Use after session loss, gateway restart, or
 - If upload work is missing entirely but staged papers still need syncing, queue a fresh workflow-owned upload request and let `/resume-pipeline` launch it before advancing the stage.
 - If a wrapper-driven paper import already reported completion or timeout through `research_workflow.set_paper_ingestion`, trust that durable state over waiting for a missing chat reply from the delegated sub-agent.
 - If `write` or `review` looks inconsistent, first route to Academic Writer or Reviewer. Researcher should only repair those stages directly when the workflow explicitly reassigns ownership.
+- Do not hand-edit `current_stage`, `current_micro_stage`, `owner_agent`, `next_action`, or `blocking_reason` to unstick a resume. Fix the evidence or runtime state, then rerun the reconciler / auto iterator.
 
 ## Output
 
@@ -104,7 +106,7 @@ Return:
 ```markdown
 ## Resume Status
 - **Project**: {proj-id}
-- **Stage reconciled**: {current_stage} / {current_micro_stage}
+- **Stage reconciled**: {workflow_control.stage} / {workflow_control.completion.source}
 - **Reality check**: [matched / drift fixed / blocked]
 - **Next action**: [exact next step]
 - **Owner routed**: [current owner or none]

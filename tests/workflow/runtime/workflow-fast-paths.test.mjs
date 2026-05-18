@@ -2288,6 +2288,352 @@ test("maybeTriggerQueuedPaperIngestionRequest launches queued literature discove
   );
 });
 
+test("maybeTriggerQueuedPaperIngestionRequest projects active duplicate launches as running", async (t) => {
+  const workspaceRoot = await makeTempWorkspace();
+  const projectsRoot = path.join(workspaceRoot, "projects");
+  const literatureProjectRoot = path.join(projectsRoot, "lit-active-duplicate");
+  const uploadProjectRoot = path.join(projectsRoot, "upload-active-duplicate");
+  const batchManifestPath =
+    "researcher/paper-staging/queued-imports/req-upload-active/batch-import.json";
+  const stagedMarkdownPath = path.join(
+    uploadProjectRoot,
+    "researcher",
+    "paper-staging",
+    "active-duplicate.md"
+  );
+  const previousScriptDir = process.env.OPENCLAW_PAPERNEXUS_SCRIPT_DIR;
+  const previousMcpUrl = process.env.PAPERNEXUS_MCP_URL;
+  const previousApiBaseUrl = process.env.PAPERNEXUS_API_BASE_URL;
+  const runCalls = [];
+
+  t.after(async () => {
+    if (previousScriptDir === undefined) {
+      delete process.env.OPENCLAW_PAPERNEXUS_SCRIPT_DIR;
+    } else {
+      process.env.OPENCLAW_PAPERNEXUS_SCRIPT_DIR = previousScriptDir;
+    }
+    if (previousMcpUrl === undefined) {
+      delete process.env.PAPERNEXUS_MCP_URL;
+    } else {
+      process.env.PAPERNEXUS_MCP_URL = previousMcpUrl;
+    }
+    if (previousApiBaseUrl === undefined) {
+      delete process.env.PAPERNEXUS_API_BASE_URL;
+    } else {
+      process.env.PAPERNEXUS_API_BASE_URL = previousApiBaseUrl;
+    }
+    await clearBackgroundWorkflowRunRegistryForTests();
+    await clearBackgroundWorkflowQueueForTests();
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  });
+
+  delete process.env.OPENCLAW_PAPERNEXUS_SCRIPT_DIR;
+  delete process.env.PAPERNEXUS_MCP_URL;
+  delete process.env.PAPERNEXUS_API_BASE_URL;
+  await clearBackgroundWorkflowRunRegistryForTests();
+  await clearBackgroundWorkflowQueueForTests();
+  await fs.mkdir(literatureProjectRoot, { recursive: true });
+  await fs.mkdir(path.dirname(stagedMarkdownPath), { recursive: true });
+  await fs.writeFile(
+    stagedMarkdownPath,
+    "# Active Duplicate\n\nThis staged markdown fixture is long enough for upload validation. ".repeat(30),
+    "utf8"
+  );
+  await writeJson(path.join(uploadProjectRoot, batchManifestPath), {
+    version: 1,
+    papers: [
+      {
+        paperId: "paper-active-duplicate",
+        source: stagedMarkdownPath,
+        sourceKind: "markdown",
+      },
+    ],
+  });
+
+  const writeLiteratureManifest = async () =>
+    writeJson(path.join(literatureProjectRoot, "PROJECT_MANIFEST.json"), {
+      project_id: "lit-active-duplicate",
+      current_stage: "graph_build",
+      owner_agent: "researcher",
+      paper_ingestion: {
+        queued_requests: [
+          {
+            request_id: "req-lit-active",
+            request_kind: "requisition",
+            status: "queued",
+            wrapper: "pn_batch_import.py",
+            command_text: "LITERATURE DISCOVERY WORKFLOW-OWNED REQUISITION EXECUTION",
+            manifest_path:
+              "researcher/literature-discovery/requisition/demo/DISCOVERY_REQUISITION.json",
+            trigger_kind: "literature_discovery",
+            summary: "Discovery requisition waiting for staged papers.",
+            created_at: "2026-04-23T03:00:00.000Z",
+            updated_at: "2026-04-23T03:00:00.000Z",
+            validation_status: "warning",
+            validation_summary:
+              "Literature discovery requisition is waiting for paper selection and staging.",
+          },
+        ],
+      },
+    });
+  const uploadCommand =
+    `python3 skills/researcher/papernexus/scripts/pn_batch_import.py --manifest ${batchManifestPath} submit`;
+  const writeUploadManifest = async () =>
+    writeJson(path.join(uploadProjectRoot, "PROJECT_MANIFEST.json"), {
+      project_id: "upload-active-duplicate",
+      current_stage: "graph_build",
+      owner_agent: "researcher",
+      paper_ingestion: {
+        queued_requests: [
+          {
+            request_id: "req-upload-active",
+            request_kind: "upload_manifest",
+            status: "queued",
+            wrapper: "pn_batch_import.py",
+            command_text: uploadCommand,
+            manifest_path: batchManifestPath,
+            shared_corpus: "demo",
+            paper_count: 1,
+            summary: "Queue active duplicate batch import.",
+            validation_status: "valid",
+          },
+        ],
+      },
+    });
+
+  await writeLiteratureManifest();
+  await writeUploadManifest();
+  const workflowRuntime = {
+    async run(params) {
+      runCalls.push(params);
+      return { runId: `active-duplicate-run-${runCalls.length}` };
+    },
+  };
+
+  const firstLiteratureLaunch = await maybeTriggerQueuedPaperIngestionRequest({
+    workflowRuntime,
+    workflowPolicy: {
+      projectsRoot,
+      enableChannelProjectBindings: true,
+    },
+    agentCtx: {
+      agentId: "researcher",
+      workspaceDir: workspaceRoot,
+      sessionKey: "agent:researcher:discord:group:graph-room",
+      messageChannel: "discord",
+    },
+    snapshot: {
+      role: "researcher",
+      projectRoot: literatureProjectRoot,
+      projectId: "lit-active-duplicate",
+      channelProjectBindingsEnabled: true,
+    },
+    triggerKind: "graph_build",
+    projectRoot: literatureProjectRoot,
+    projectId: "lit-active-duplicate",
+  });
+  assert.equal(firstLiteratureLaunch?.started, true);
+  await writeLiteratureManifest();
+  const secondLiteratureLaunch = await maybeTriggerQueuedPaperIngestionRequest({
+    workflowRuntime: {
+      async run() {
+        throw new Error("active duplicate should not relaunch literature requisition");
+      },
+    },
+    workflowPolicy: {
+      projectsRoot,
+      enableChannelProjectBindings: true,
+    },
+    agentCtx: {
+      agentId: "researcher",
+      workspaceDir: workspaceRoot,
+      sessionKey: "agent:researcher:discord:group:graph-room",
+      messageChannel: "discord",
+    },
+    snapshot: {
+      role: "researcher",
+      projectRoot: literatureProjectRoot,
+      projectId: "lit-active-duplicate",
+      channelProjectBindingsEnabled: true,
+    },
+    triggerKind: "graph_build",
+    projectRoot: literatureProjectRoot,
+    projectId: "lit-active-duplicate",
+  });
+  assert.equal(secondLiteratureLaunch?.reason, "session_unavailable");
+  assert.equal(secondLiteratureLaunch?.queued, false);
+  const literatureManifest = JSON.parse(
+    await fs.readFile(path.join(literatureProjectRoot, "PROJECT_MANIFEST.json"), "utf8")
+  );
+  assert.equal(literatureManifest.paper_ingestion.queued_requests[0].status, "running");
+  assert.match(
+    literatureManifest.paper_ingestion.queued_requests[0].detail,
+    /already running/i
+  );
+
+  const firstUploadLaunch = await maybeTriggerQueuedPaperIngestionRequest({
+    workflowRuntime,
+    workflowPolicy: {
+      projectsRoot,
+      enableChannelProjectBindings: false,
+    },
+    agentCtx: {
+      agentId: "researcher",
+      workspaceDir: workspaceRoot,
+      sessionKey: "agent:researcher:local:conversation:upload-active",
+      messageChannel: "local",
+      channelKey: "local:upload-active",
+    },
+    snapshot: {
+      role: "researcher",
+      projectRoot: uploadProjectRoot,
+      projectId: "upload-active-duplicate",
+      channelProjectBindingsEnabled: false,
+    },
+    triggerKind: "graph_build",
+    projectRoot: uploadProjectRoot,
+    projectId: "upload-active-duplicate",
+  });
+  assert.equal(firstUploadLaunch?.started, true);
+  await writeUploadManifest();
+  const secondUploadLaunch = await maybeTriggerQueuedPaperIngestionRequest({
+    workflowRuntime: {
+      async run() {
+        throw new Error("active duplicate should not relaunch batch upload");
+      },
+    },
+    workflowPolicy: {
+      projectsRoot,
+      enableChannelProjectBindings: false,
+    },
+    agentCtx: {
+      agentId: "researcher",
+      workspaceDir: workspaceRoot,
+      sessionKey: "agent:researcher:local:conversation:upload-active",
+      messageChannel: "local",
+      channelKey: "local:upload-active",
+    },
+    snapshot: {
+      role: "researcher",
+      projectRoot: uploadProjectRoot,
+      projectId: "upload-active-duplicate",
+      channelProjectBindingsEnabled: false,
+    },
+    triggerKind: "graph_build",
+    projectRoot: uploadProjectRoot,
+    projectId: "upload-active-duplicate",
+  });
+  assert.equal(secondUploadLaunch?.reason, "session_unavailable");
+  assert.equal(secondUploadLaunch?.queued, false);
+  const uploadManifest = JSON.parse(
+    await fs.readFile(path.join(uploadProjectRoot, "PROJECT_MANIFEST.json"), "utf8")
+  );
+  assert.equal(uploadManifest.paper_ingestion.queued_requests[0].status, "running");
+  assert.match(uploadManifest.paper_ingestion.queued_requests[0].detail, /already running/i);
+});
+
+test("startBackgroundWorkflowRun preserves explicit project identity for started and duplicate returns", async (t) => {
+  const workspaceRoot = await makeTempWorkspace();
+  const projectsRoot = path.join(workspaceRoot, "projects");
+  const projectRoot = path.join(projectsRoot, "explicit-duplicate-project");
+  const projectId = "explicit-duplicate-project";
+  const runCalls = [];
+
+  t.after(async () => {
+    await clearBackgroundWorkflowRunRegistryForTests();
+    await clearBackgroundWorkflowQueueForTests();
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  });
+
+  await clearBackgroundWorkflowRunRegistryForTests();
+  await clearBackgroundWorkflowQueueForTests();
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: projectId,
+    current_stage: "graph_build",
+    owner_agent: "researcher",
+  });
+
+  const baseParams = {
+    workflowPolicy: {
+      projectsRoot,
+      enableChannelProjectBindings: false,
+    },
+    agentCtx: {
+      agentId: "researcher",
+      workspaceDir: workspaceRoot,
+      sessionKey: "agent:researcher:local:conversation:explicit-duplicate",
+      messageChannel: "local",
+      channelKey: "local:explicit-duplicate",
+    },
+    snapshot: {
+      role: "researcher",
+      projectRoot: null,
+      projectId: null,
+      channelProjectBindingsEnabled: false,
+    },
+    backgroundRun: {
+      kind: "research_pipeline",
+      topic: "explicit duplicate identity",
+      projectRoot,
+      projectId,
+      ensureProjectBinding: false,
+    },
+  };
+
+  const firstActive = await startBackgroundWorkflowRun({
+    ...baseParams,
+    workflowRuntime: {
+      async run(params) {
+        runCalls.push(params);
+        return { runId: `explicit-active-run-${runCalls.length}` };
+      },
+      async waitForRun() {
+        return { status: "timeout" };
+      },
+    },
+  });
+  assert.equal(firstActive.started, true);
+  assert.equal(firstActive.projectRoot, projectRoot);
+  assert.equal(firstActive.projectId, projectId);
+
+  const activeDuplicate = await startBackgroundWorkflowRun({
+    ...baseParams,
+    workflowRuntime: {
+      async run() {
+        throw new Error("active duplicate should not relaunch");
+      },
+      async waitForRun() {
+        return { status: "timeout" };
+      },
+    },
+  });
+  assert.equal(activeDuplicate.reason, "session_unavailable");
+  assert.equal(activeDuplicate.queued, false);
+  assert.equal(activeDuplicate.projectRoot, projectRoot);
+  assert.equal(activeDuplicate.projectId, projectId);
+
+  await clearBackgroundWorkflowRunRegistryForTests();
+  await clearBackgroundWorkflowQueueForTests();
+  const queuedParams = {
+    ...baseParams,
+    backgroundRun: {
+      ...baseParams.backgroundRun,
+      topic: "explicit queued duplicate identity",
+    },
+  };
+  const firstQueued = await startBackgroundWorkflowRun(queuedParams);
+  assert.equal(firstQueued.reason, "runtime_unavailable");
+  assert.equal(firstQueued.queued, true);
+  assert.equal(firstQueued.projectRoot, projectRoot);
+  assert.equal(firstQueued.projectId, projectId);
+
+  const queuedDuplicate = await startBackgroundWorkflowRun(queuedParams);
+  assert.equal(queuedDuplicate.reason, "session_unavailable");
+  assert.equal(queuedDuplicate.queued, true);
+  assert.equal(queuedDuplicate.projectRoot, projectRoot);
+  assert.equal(queuedDuplicate.projectId, projectId);
+});
+
 test("startBackgroundWorkflowRun for resume-pipeline requeues stale running ingestion requests before triggering upload", async (t) => {
   const workspaceRoot = await makeTempWorkspace();
   const projectsRoot = path.join(workspaceRoot, "projects");

@@ -17,7 +17,7 @@ allowed-tools:
 
 Extract metrics from experiment outputs, generate figures, and summarize findings.
 
-> **File ownership**: Write ONLY to `{PROJ}/analyzer/`. Read logs from `{PROJ}/researcher/artifacts/` (read-only).
+> **File ownership**: Manually write ONLY to `{PROJ}/analyzer/`. Read logs from `{PROJ}/researcher/artifacts/` (read-only). Workflow-owned materializers may update their own durable summary, story, and appendix artifacts.
 > `{PROJ}` = `{PROJECTS_ROOT}/{proj-id}`
 
 ## Research Rigor Constraints
@@ -30,6 +30,18 @@ Extract metrics from experiment outputs, generate figures, and summarize finding
 - **Never fabricate citations** in analysis notes; if prior work is mentioned, verify it or mark it unresolved.
 
 ## Process
+
+### 0. Workflow-Owned Repair Shortcut
+
+If `PROJECT_MANIFEST.json.workflow_control` or the current Workflow Guard snapshot routes to Analyzer, `PROJECT_MANIFEST.json.experiment_search.status` is `ready_for_analysis`, and core analyzer artifacts are missing or stale, first call:
+
+```json
+{
+  "action": "materialize_analysis_artifacts"
+}
+```
+
+This action is a repair/materialization helper, not a completion authority. It rebuilds the standard analyzer packets from synced experiment evidence and may also refresh workflow-owned `researcher/` summaries, paper story state, theory state, and the writer appendix draft. After it returns, inspect the generated artifacts and continue manually only for missing figures, tables, audits, or caveats that the materializer could not infer.
 
 ### 1. Collect Results
 

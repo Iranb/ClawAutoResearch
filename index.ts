@@ -5,6 +5,7 @@ import {
 } from "./tools/plugin-registration-shared";
 import { registerMemoryTools } from "./tools/register-memory-tools";
 import { registerWorkflowTools } from "./tools/register-workflow-tools";
+import { registerAutoWorkflowTools } from "./tools/register-auto-workflow-tools";
 import { registerWorkflowHooks } from "./tools/register-workflow-hooks";
 import { registerResearchCommands } from "./tools/register-research-commands";
 import { registerWorkflowService } from "./tools/register-workflow-service";
@@ -21,6 +22,7 @@ export function registerOpenClawResearchPlugin(api: ApiLike) {
 
   registerMemoryTools(plugin);
   registerWorkflowTools(plugin);
+  registerAutoWorkflowTools(plugin);
   registerWorkflowHooks(plugin);
   registerResearchCommands(plugin);
   registerWorkflowService(plugin);
