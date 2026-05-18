@@ -151,6 +151,137 @@ test("snapshot builder preserves project context and emits derived fields", asyn
   assert.ok(snapshot.backgroundTasks.some((task) => task.includes("Continue literature survey")));
 });
 
+test("snapshot builder exposes experiment next candidate guidance", async (t) => {
+  const workspaceRoot = await makeWorkspace();
+  const projectRoot = await makeProject(workspaceRoot, "experiment-guidance");
+  const sessionKey = "agent:coder:local:group:experiment-lab";
+
+  t.after(async () => {
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  });
+
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.current_stage = "experiment";
+  manifest.owner_agent = "coder";
+  await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+  await fs.writeFile(
+    path.join(projectRoot, "researcher", "EXPERIMENT_SEARCH.json"),
+    `${JSON.stringify(
+      {
+        status: "running",
+        current_main_stage: "creative_research",
+        current_substage: "branch_expansion",
+        next_candidate_guidance: {
+          authority: "workflow-experiment-decision",
+          trigger_decision: "continue_tuning",
+          source_validation_stage: "multi_seed_check",
+          target: "creative_research",
+          primary_metric_contract: {
+            metric_name: "H-score",
+            direction: "higher_is_better",
+            minimum_improvement: 0.01,
+            paper_contribution_metric: "topline_h_score",
+          },
+          required_properties: [
+            "one_change_signature",
+            "fixed_trial_budget",
+          ],
+          avoid: {
+            experiment_ids: ["exp-failed-1"],
+            one_change_signatures: ["consistency-filtering"],
+            failure_cluster_ids: ["cluster-timeout"],
+          },
+          blocker_basis: ["no_positive_primary_metric_gain"],
+          innovation_anchor_points: ["graph_claim:claim-7"],
+          recommended_focus: ["optimize_primary_metric:H-score"],
+        },
+      },
+      null,
+      2
+    )}\n`,
+    "utf8"
+  );
+
+  await setChannelProjectBinding({
+    policy: {
+      enableChannelProjectBindings: true,
+      projectsRoot: path.join(workspaceRoot, "projects"),
+    },
+    context: {
+      workspaceDir: workspaceRoot,
+      sessionKey,
+      messageChannel: "local",
+      role: "coder",
+    },
+    projectRoot,
+    projectId: "experiment-guidance",
+    messageChannel: "local",
+    boundByAgent: "coder",
+  });
+
+  const projectState = await loadWorkflowProjectState({
+    policy: {
+      enableChannelProjectBindings: true,
+      projectsRoot: path.join(workspaceRoot, "projects"),
+    },
+    workspaceDir: workspaceRoot,
+    sessionKey,
+    messageChannel: "local",
+    role: "coder",
+  });
+
+  const snapshot = await buildWorkflowSnapshotFromProjectState(
+    {
+      policy: {
+        enableChannelProjectBindings: true,
+        maxWorkflowInboxMessages: 3,
+      },
+      agentId: "coder",
+      projectState,
+    },
+    {
+      async getMissingStageSignals() {
+        return [];
+      },
+    }
+  );
+
+  assert.equal(snapshot.experimentSearchNextCandidateMetricName, "H-score");
+  assert.equal(
+    snapshot.experimentSearchNextCandidateMetricDirection,
+    "higher_is_better"
+  );
+  assert.equal(snapshot.experimentSearchNextCandidateMinimumImprovement, 0.01);
+  assert.equal(
+    snapshot.experimentSearchNextCandidatePaperContributionMetric,
+    "topline_h_score"
+  );
+  assert.deepEqual(snapshot.experimentSearchNextCandidateRequiredProperties, [
+    "one_change_signature",
+    "fixed_trial_budget",
+  ]);
+  assert.deepEqual(snapshot.experimentSearchNextCandidateAvoidExperimentIds, [
+    "exp-failed-1",
+  ]);
+  assert.deepEqual(
+    snapshot.experimentSearchNextCandidateAvoidOneChangeSignatures,
+    ["consistency-filtering"]
+  );
+  assert.deepEqual(snapshot.experimentSearchNextCandidateAvoidFailureClusterIds, [
+    "cluster-timeout",
+  ]);
+  assert.deepEqual(snapshot.experimentSearchNextCandidateBlockerBasis, [
+    "no_positive_primary_metric_gain",
+  ]);
+  assert.deepEqual(snapshot.experimentSearchNextCandidateInnovationAnchors, [
+    "graph_claim:claim-7",
+  ]);
+  assert.deepEqual(snapshot.experimentSearchNextCandidateRecommendedFocus, [
+    "optimize_primary_metric:H-score",
+  ]);
+});
+
 test("snapshot builder surfaces revision control, auto diagnostics, and survey visual compiler summaries", async (t) => {
   const workspaceRoot = await makeWorkspace();
   const projectRoot = await makeProject(workspaceRoot, "workflow-revision-snapshot");

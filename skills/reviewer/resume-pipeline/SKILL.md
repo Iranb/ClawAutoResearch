@@ -42,19 +42,24 @@ Downstream contract:
 
 ## Read First
 
+- `{PROJ}/PROJECT_MANIFEST.json`
 - `{PROJ}/researcher/REVIEW_STATE.json`
 - `{PROJ}/analyzer/NARRATIVE_REPORT.md`
 - `{PROJ}/analyzer/CLAIM_EVIDENCE_MATRIX.md`
 - `{PROJ}/analyzer/TRACK_VERDICTS.md`
 - `{PROJ}/analyzer/UNSUPPORTED_CLAIMS.md`
+- `{PROJ}/academic_writer/SCIENTIFIC_EDIT_LEDGER.json` if PaperGuru is required
+- `{PROJ}/academic_writer/SCIENTIFIC_EDIT_REPORT.md` if PaperGuru is required
 - `{PROJ}/reviewer/AUTO_REVIEW.md` if exists
 
 ## Resume Logic
 
-1. If `REVIEW_STATE.json` is missing, start a fresh `/review-phase`.
-2. If `status = completed`, return `no-op` with the last verdict.
-3. If `status = in_progress` and timestamp is recent, continue from the next round.
-4. If `status = in_progress` but stale, restart the review loop and note that the prior state expired.
+1. Verify that `PROJECT_MANIFEST.json.workflow_control` or the current Workflow Guard snapshot routes work to Reviewer; if ownership is stale, report the blocker instead of taking over.
+2. If the project is in `review` / `submit` or the blocker is `paperguru_gate_blocked`, call `research_workflow.get_paperguru_gate` first. If it returns `blocked`, report the missing pass ids or receipt gaps and continue only the bounded PaperGuru repair/recheck; if it returns `ready`, continue normal review or submit verification.
+3. If `REVIEW_STATE.json` is missing, start a fresh `/review-phase`.
+4. If `status = completed`, return `no-op` with the last verdict.
+5. If `status = in_progress` and timestamp is recent, continue from the next round.
+6. If `status = in_progress` but stale, restart the review loop and note that the prior state expired.
 
 ## Safety Rules
 

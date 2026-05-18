@@ -1,6 +1,6 @@
 ---
 name: research-queue
-description: "Manage multiple research projects in parallel pipeline. Each project is independently staged (graph→idea→plan→experiment→review→paper) and controlled by manifest + track registry state. Use to start a new project, check status of all projects, advance a specific project, or run overnight multi-project batch."
+description: "Manage multiple research projects in parallel pipeline. Each project is independently staged through canonical workflow_control plus track/evidence state. Use to start a new project, check status of all projects, advance a specific project, or run overnight multi-project batch."
 argument-hint: "[add <topic> | status | advance <project-id> | overnight | next]"
 allowed-tools:
   - Bash(*)
@@ -17,6 +17,8 @@ allowed-tools:
 # Research Queue
 
 L3 parallelism: multiple complete research projects, each at a different pipeline stage, managed as a priority queue.
+
+Queue state is a dashboard over canonical per-project `workflow_control`; `PROJECTS_STATE.json.stage`, `next_action`, and `blocked_by` are mirrors for scheduling and display, not independent stage authorities.
 
 ## Slash Fast Path
 
@@ -156,13 +158,13 @@ Add a new project to the queue.
 1. Generate a short project ID: `proj_<6-char-hash>`
 2. Create `{PROJECTS_ROOT}/{project-id}/` directory structure
 3. Initialize `{PROJ}/PROJECT_MANIFEST.json`, `{PROJ}/TRACK_REGISTRY.json`, `{PROJ}/CLAIM_POLICY.md`, and `{PROJ}/graph/`
-4. Add entry to `{PROJECTS_ROOT}/PROJECTS_STATE.json` with stage=`graph`, priority=lowest
+4. Add entry to `{PROJECTS_ROOT}/PROJECTS_STATE.json` as a queue mirror with priority=lowest; let per-project workflow reconciliation decide the canonical stage
 5. Start graph build for this project:
    ```
    /graph-build "<topic>"
    # outputs to {PROJECTS_ROOT}/{project-id}/graph/
    ```
-6. Update `{PROJECTS_ROOT}/PROJECTS_STATE.json` stage to `graph`, next_action=`run frontier mapping then idea phase`
+6. Run `research_workflow.auto_iterator_tick` or the graph materializer so `{PROJECTS_ROOT}/PROJECTS_STATE.json` mirrors the canonical next action
 
 Output:
 ```
@@ -209,16 +211,17 @@ Estimated completion:
 
 Manually advance one project to its next action.
 
-1. Read `{PROJECTS_ROOT}/{project-id}/orchestrator/TODOS.md` if it exists — find first incomplete task
-2. Read `{PROJECTS_ROOT}/{project-id}/` state files to understand context
-3. Execute the next action using the appropriate skill:
-   - stage=`graph` → `/graph-build` then `/frontier-mapping`
-   - stage=`idea` → `/idea-phase`, `/idea-tournament`, or `/research-reflect`
-   - stage=`plan` → spawn orchestrator sub-agent → `/plan-research`
-   - stage=`experiment` → `/parallel-experiments`
-   - stage=`review` → `/review-phase`
-   - stage=`paper` → `/paper-phase`
-4. Update `{PROJECTS_ROOT}/PROJECTS_STATE.json` when done
+1. Read `{PROJECTS_ROOT}/{project-id}/PROJECT_MANIFEST.json.workflow_control` or call `research_workflow.auto_iterator_tick`.
+2. Read `{PROJECTS_ROOT}/{project-id}/orchestrator/TODOS.md` only as supporting context, not as routing authority.
+3. Execute the canonical `workflow_control.next_action` using the owning role/skill. Examples:
+   - `graph_build` -> `/graph-build` then `/frontier-mapping` only when control still routes Researcher there
+   - `idea` -> `/idea-phase`, `/idea-tournament`, or `/research-reflect`
+   - `plan` -> Orchestrator `/plan-research`
+   - `experiment` -> `/experiment-phase`, `/parallel-experiments`, `/monitor-experiment`, or Coder `/search-experiment` depending on the gate/blocker
+   - `analyze` -> Analyzer `/analyze-results`
+   - `review` -> Reviewer `/review-phase`
+   - `write` -> Academic Writer `/paper-phase`
+4. Rerun `auto_iterator_tick` when done so `{PROJECTS_ROOT}/PROJECTS_STATE.json` mirrors canonical workflow control.
 
 ---
 

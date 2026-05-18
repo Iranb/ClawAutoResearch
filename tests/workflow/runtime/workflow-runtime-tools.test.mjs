@@ -135,6 +135,456 @@ test("research_workflow canonicalizes symlinked project roots before recording r
   assert.notEqual(result.projectResolution.resolvedProjectRoot, symlinkRoot);
 });
 
+test("research_workflow materialize_analysis_artifacts exposes analyzer repair materializer", async (t) => {
+  const projectRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "openclaw-research-analysis-artifacts-tool-")
+  );
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "analysis-artifacts-tool",
+    current_stage: "analyze",
+    owner_agent: "analyzer",
+    writing_contract: {
+      paper_mode: "conference",
+      proof_appendix_required: true,
+    },
+    experiment_search: {
+      status: "ready_for_analysis",
+      evaluation_summary_path: "researcher/evaluation_summary.json",
+      plot_pack_status: "complete",
+      plot_pack_path: "researcher/plot_pack.json",
+      incumbent_experiment_id: "exp-1",
+      one_change_signature: "SQLite covering index microbenchmark probe",
+      completed_ablations: ["minus_covering_index"],
+    },
+    research_program: {
+      status: "approved",
+      goal: "Improve SQLite covering index microbenchmark analysis.",
+      primary_metric: "H-score",
+      baseline_reference: "baseline query plan",
+      datasets: ["sqlite-microbench"],
+      tracks: [
+        {
+          track_id: "track-main",
+          status: "active",
+          hypothesis:
+            "A covering-index probe improves local reference H-score under fixed query workload.",
+          novelty_basis:
+            "Use query-plan covering behavior as the one-change experimental mechanism.",
+          main_metric: "H-score",
+        },
+      ],
+      plan_selection: {
+        selected_track_id: "track-main",
+      },
+    },
+  });
+  await writeJson(path.join(projectRoot, "researcher", "evaluation_summary.json"), {
+    schema_version: 1,
+    experiment_id: "exp-1",
+    status: "ready",
+    metrics: {
+      h_score: 0.74,
+      known_accuracy: 0.82,
+      novel_accuracy: 0.68,
+      baseline_h_score: 0.66,
+      delta_h_score: 0.08,
+    },
+    baseline: {
+      h_score: 0.66,
+    },
+    proposed: {
+      h_score: 0.74,
+    },
+  });
+  await writeJson(path.join(projectRoot, "researcher", "plot_pack.json"), {
+    schema_version: 1,
+    status: "ready",
+    figures: [],
+  });
+  await writeJson(path.join(projectRoot, "researcher", "EXPERIMENT_LEDGER.json"), {
+    schema_version: 1,
+    experiments: [
+      {
+        experiment_id: "exp-1",
+        status: "completed",
+        decision: "promote",
+        result_paths: ["researcher/artifacts/results/results.json"],
+        metrics: {
+          h_score: 0.74,
+          known_accuracy: 0.82,
+          novel_accuracy: 0.68,
+          baseline_h_score: 0.66,
+          delta_h_score: 0.08,
+        },
+        metadata: {
+          one_change_signature: "SQLite covering index microbenchmark probe",
+        },
+      },
+    ],
+  });
+
+  const tool = createResearchWorkflowTool({
+    workspaceDir: projectRoot,
+    agentId: "analyzer",
+  });
+  const result = await executeWorkflowTool(tool, {
+    action: "materialize_analysis_artifacts",
+    projectRoot,
+  });
+
+  assert.equal(result.materialized, true);
+  assert.equal(result.claimCount, 3);
+  assert.ok(result.generatedFiles.includes("analyzer/CLAIM_EVIDENCE_MATRIX.md"));
+  assert.ok(result.generatedFiles.includes("analyzer/THEORY_STATE.json"));
+  assert.ok(result.generatedFiles.includes("academic_writer/THEORY_APPENDIX_PLAN.md"));
+
+  const manifest = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "PROJECT_MANIFEST.json"), "utf8")
+  );
+  assert.equal(manifest.paper_story_state.status, "ready");
+  assert.equal(manifest.paper_story_state.claim_support_status, "supported");
+  assert.equal(manifest.theory_state.status, "ready");
+  assert.equal(manifest.theory_state.body_ready, true);
+
+  const report = await fs.readFile(
+    path.join(projectRoot, "analyzer", "NARRATIVE_REPORT.md"),
+    "utf8"
+  );
+  assert.match(report, /SQLite covering index microbenchmark probe/);
+});
+
+test("research_workflow materialize_workflow_final_scorecard writes derived terminal closeout", async (t) => {
+  const projectRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "openclaw-research-final-scorecard-tool-")
+  );
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "final-scorecard-tool",
+    current_stage: "done",
+    owner_agent: "orchestrator",
+    paper_qc: {
+      status: "ready",
+      compile_status: "pass",
+      page_budget_status: "pass",
+      invalid_figure_ref_status: "pass",
+    },
+    writing_contract: {
+      scientific_editing_required: true,
+      scientific_editing_status: "ready",
+    },
+    submission_ready: {
+      status: "ready",
+    },
+  });
+  await writeText(path.join(projectRoot, "analyzer", "ANALYSIS_REPORT.md"), "# Analysis\n");
+  await writeJson(
+    path.join(projectRoot, "researcher", "artifacts", "results", "results.json"),
+    { metrics: [{ name: "score", value: 0.91 }] }
+  );
+  await writeText(
+    path.join(projectRoot, "academic_writer", "paper", "main.tex"),
+    "\\section{Ready}\n"
+  );
+  await writeText(path.join(projectRoot, "academic_writer", "paper", "main.pdf"), "%PDF-1.4\n");
+  await writeJson(path.join(projectRoot, "reviewer", "REVIEW_FINDINGS.json"), {
+    status: "ready",
+  });
+  await writeJson(path.join(projectRoot, "academic_writer", "SCIENTIFIC_EDIT_LEDGER.json"), {
+    pass_results: [
+      "pass_1_structure",
+      "pass_2_argumentation",
+      "pass_3_sentence_precision",
+      "pass_4_grammar_terminology",
+      "pass_5_typography_latex",
+      "pass_6_integrity_audit",
+    ].map((passId) => ({
+      pass_id: passId,
+      status: "completed",
+    })),
+    compile_receipts: ["academic_writer/paper/main.pdf"],
+    reference_verification_receipts: ["reviewer/citation-check.json"],
+    number_consistency_receipts: ["reviewer/number-check.json"],
+    claim_evidence_consistency_receipts: ["analyzer/CLAIM_EVIDENCE_MATRIX.md"],
+  });
+  await writeText(
+    path.join(projectRoot, "academic_writer", "SCIENTIFIC_EDIT_REPORT.md"),
+    "# PaperGuru report\n"
+  );
+
+  const tool = createResearchWorkflowTool({
+    workspaceDir: projectRoot,
+    agentId: "orchestrator",
+  });
+  const result = await executeWorkflowTool(tool, {
+    action: "materialize_workflow_final_scorecard",
+    projectRoot,
+  });
+
+  assert.equal(result.materialized, true);
+  assert.equal(result.status, "pass");
+  assert.match(result.scorecardPath, /WORKFLOW_FINAL_SCORECARD\.json$/);
+  assert.equal(result.scorecard.schema_version, "workflow-final-scorecard-v1");
+  assert.equal(result.scorecard.authority.scorecard_is_completion_authority, false);
+  assert.equal(
+    result.scorecard.authority.canonical_completion_source,
+    "PROJECT_MANIFEST.json.workflow_control"
+  );
+  assert.equal(result.scorecard.canonical.stage, "done");
+  assert.equal(result.scorecard.chain.done.completion_status, "complete");
+  assert.equal(result.scorecard.paperguru.status, "ready");
+  assert.deepEqual(result.scorecard.blockers, []);
+
+  const manifest = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "PROJECT_MANIFEST.json"), "utf8")
+  );
+  assert.equal(manifest.workflow_control.stage, "done");
+  assert.equal(manifest.workflow_control.completion.status, "complete");
+  assert.equal(manifest.workflow_control.completion.source, "done_completion");
+
+  const writtenScorecard = JSON.parse(await fs.readFile(result.scorecardPath, "utf8"));
+  assert.equal(writtenScorecard.status, "pass");
+  assert.equal(writtenScorecard.canonical.completion_source, "done_completion");
+});
+
+test("research_workflow materialize_late_stage_closure_smoke reports late-stage blocker then pass", async (t) => {
+  const projectRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "openclaw-research-late-stage-smoke-tool-")
+  );
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "late-stage-smoke-tool",
+    current_stage: "experiment",
+    owner_agent: "analyzer",
+    paper_qc: {
+      status: "ready",
+      compile_status: "pass",
+      page_budget_status: "pass",
+      invalid_figure_ref_status: "pass",
+    },
+    writing_contract: {
+      paper_mode: "conference",
+      required_sections: ["method", "results"],
+      section_order: ["method", "results"],
+      proof_appendix_required: true,
+      scientific_editing_required: true,
+      scientific_editing_status: "ready",
+    },
+    writing_session: {
+      status: "ready_for_submit",
+      section_packets: {
+        method: {
+          section: "method",
+          status: "finalized",
+          required_figure_ids: ["fig-1"],
+        },
+        results: {
+          section: "results",
+          status: "finalized",
+          required_figure_ids: ["fig-1"],
+        },
+      },
+    },
+    research_program: {
+      status: "approved",
+      goal: "Improve SQLite covering index microbenchmark analysis.",
+      primary_metric: "H-score",
+      baseline_reference: "baseline query plan",
+      datasets: ["sqlite-microbench"],
+      tracks: [
+        {
+          track_id: "track-main",
+          priority: 1,
+          status: "active",
+          hypothesis:
+            "A covering-index probe improves local reference H-score under fixed query workload.",
+          novelty_basis:
+            "Use query-plan covering behavior as the one-change experimental mechanism.",
+          main_metric: "H-score",
+          write_scope: {
+            allowed_claim_ids: ["C1"],
+            allowed_figure_ids: ["fig-1"],
+          },
+        },
+      ],
+      plan_selection: {
+        selected_track_id: "track-main",
+      },
+    },
+    experiment_search: {
+      status: "ready_for_analysis",
+      evaluation_summary_path: "researcher/evaluation_summary.json",
+      plot_pack_status: "complete",
+      plot_pack_path: "researcher/plot_pack.json",
+      incumbent_experiment_id: "exp-1",
+      one_change_signature: "SQLite covering index microbenchmark probe",
+      completed_ablations: ["minus_covering_index"],
+    },
+  });
+  await writeJson(path.join(projectRoot, "researcher", "evaluation_summary.json"), {
+    schema_version: 1,
+    experiment_id: "exp-1",
+    status: "ready",
+    metrics: {
+      h_score: 0.74,
+      known_accuracy: 0.82,
+      novel_accuracy: 0.68,
+      baseline_h_score: 0.66,
+      delta_h_score: 0.08,
+    },
+  });
+  await writeJson(path.join(projectRoot, "researcher", "plot_pack.json"), {
+    schema_version: 1,
+    status: "ready",
+    figures: [{ figure_id: "fig-1" }],
+  });
+  await writeJson(path.join(projectRoot, "researcher", "EXPERIMENT_LEDGER.json"), {
+    schema_version: 1,
+    experiments: [
+      {
+        experiment_id: "exp-1",
+        status: "completed",
+        decision: "promote",
+        metrics: {
+          h_score: 0.74,
+          known_accuracy: 0.82,
+          novel_accuracy: 0.68,
+          baseline_h_score: 0.66,
+          delta_h_score: 0.08,
+        },
+        metadata: {
+          one_change_signature: "SQLite covering index microbenchmark probe",
+        },
+      },
+    ],
+  });
+  await writeJson(
+    path.join(projectRoot, "researcher", "artifacts", "results", "results.json"),
+    { metrics: [{ name: "h_score", value: 0.74 }] }
+  );
+  const runDir = path.join(projectRoot, "coder", "experiments", "track-main", "exp-1");
+  await writeJson(path.join(runDir, "EXPERIMENT_MANIFEST.json"), {
+    experiment_id: "exp-1",
+    git: {
+      last_candidate_commit: "abc1234",
+    },
+  });
+  await writeJson(path.join(runDir, "REMOTE_RUN.json"), {
+    experiment_id: "exp-1",
+    status: "completed",
+    git_commit: "abc1234",
+  });
+  await writeJson(path.join(runDir, "RESULT_SUMMARY.json"), {
+    experiment_id: "exp-1",
+    metrics: {
+      h_score: 0.74,
+    },
+    result_paths: ["researcher/artifacts/results/results.json"],
+  });
+
+  const tool = createResearchWorkflowTool({
+    workspaceDir: projectRoot,
+    agentId: "orchestrator",
+  });
+  const blocked = await executeWorkflowTool(tool, {
+    action: "materialize_late_stage_closure_smoke",
+    projectRoot,
+  });
+
+  assert.equal(blocked.materialized, true);
+  assert.equal(blocked.status, "blocked");
+  assert.equal(blocked.firstBlockerStage, "paperguru");
+  assert.equal(blocked.report.schema_version, "late-stage-closure-smoke-v1");
+  assert.equal(blocked.report.authority.smoke_is_completion_authority, false);
+  assert.equal(blocked.report.steps.analysis_artifacts.status, "pass");
+  assert.equal(blocked.report.steps.write_package.status, "pass");
+  assert.equal(blocked.report.steps.paperguru.status, "blocked");
+  assert.ok(
+    blocked.report.blockers.some((blocker) => blocker.startsWith("paperguru:")),
+    blocked.report.blockers.join("\n")
+  );
+
+  const smokeReport = JSON.parse(await fs.readFile(blocked.smokePath, "utf8"));
+  assert.equal(smokeReport.first_blocker_stage, "paperguru");
+  assert.match(smokeReport.artifact_paths.smoke_path, /LATE_STAGE_CLOSURE_SMOKE\.json$/);
+  await fs.access(path.join(projectRoot, "academic_writer", "WRITE_PACKAGE.json"));
+  await fs.access(path.join(projectRoot, "analyzer", "CLAIM_EVIDENCE_MATRIX.md"));
+
+  const manifest = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "PROJECT_MANIFEST.json"), "utf8")
+  );
+  delete manifest.workflow_control;
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    ...manifest,
+    current_stage: "done",
+    owner_agent: "orchestrator",
+    experiment_search: {
+      ...(manifest.experiment_search ?? {}),
+      multi_seed_status: "complete",
+      plot_pack_status: "complete",
+    },
+    submission_ready: {
+      status: "ready",
+    },
+  });
+  await writeText(
+    path.join(projectRoot, "academic_writer", "paper", "main.tex"),
+    "\\section{Ready}\n"
+  );
+  await writeText(path.join(projectRoot, "academic_writer", "paper", "main.pdf"), "%PDF-1.4\n");
+  await writeJson(path.join(projectRoot, "reviewer", "REVIEW_FINDINGS.json"), {
+    status: "ready",
+  });
+  await writeJson(path.join(projectRoot, "academic_writer", "SCIENTIFIC_EDIT_LEDGER.json"), {
+    pass_results: [
+      "pass_1_structure",
+      "pass_2_argumentation",
+      "pass_3_sentence_precision",
+      "pass_4_grammar_terminology",
+      "pass_5_typography_latex",
+      "pass_6_integrity_audit",
+    ].map((passId) => ({
+      pass_id: passId,
+      status: "completed",
+    })),
+    compile_receipts: ["academic_writer/paper/main.pdf"],
+    reference_verification_receipts: ["reviewer/citation-check.json"],
+    number_consistency_receipts: ["reviewer/number-check.json"],
+    claim_evidence_consistency_receipts: ["analyzer/CLAIM_EVIDENCE_MATRIX.md"],
+  });
+  await writeText(
+    path.join(projectRoot, "academic_writer", "SCIENTIFIC_EDIT_REPORT.md"),
+    "# PaperGuru report\n"
+  );
+
+  const passed = await executeWorkflowTool(tool, {
+    action: "materialize_late_stage_closure_smoke",
+    projectRoot,
+  });
+
+  assert.equal(passed.status, "pass");
+  assert.equal(passed.firstBlockerStage, null);
+  assert.equal(passed.report.steps.paperguru.status, "pass");
+  assert.equal(passed.report.steps.final_scorecard.status, "pass");
+  assert.deepEqual(passed.report.blockers, []);
+  const finalScorecard = JSON.parse(
+    await fs.readFile(
+      path.join(projectRoot, ".openclaw-research", "WORKFLOW_FINAL_SCORECARD.json"),
+      "utf8"
+    )
+  );
+  assert.equal(finalScorecard.status, "pass");
+});
+
 test("research_workflow build_query_answer_list returns portable select presentation", async () => {
   const tool = createResearchWorkflowTool({
     agentId: "researcher",
@@ -7104,7 +7554,7 @@ test("research_workflow start_background_run broadcasts queued status when the r
           return { runId: `runtime-run-${runtimeCalls.length}` };
         },
         async waitForRun() {
-          return { status: "timeout" };
+          throw new Error("runtime monitor unavailable");
         },
       },
     },
@@ -7121,7 +7571,10 @@ test("research_workflow start_background_run broadcasts queued status when the r
 
   assert.equal(result.started, false);
   assert.equal(result.reason, "channel_capacity_reached");
-  assert.ok(["active", "queued"].includes(result.ownerRuntimeStatus.status));
+  assert.equal(result.queued, true);
+  assert.equal(result.ownerRuntimeStatus.status, "queued");
+  assert.equal(result.ownerRuntimeStatus.queueKey, result.queueKey);
+  assert.equal(result.ownerRuntimeStatus.runtimeState, "queued");
   assert.equal(result.statusBroadcast.broadcasted, true);
   assert.ok(
     runtimeCalls.some(
@@ -7131,6 +7584,181 @@ test("research_workflow start_background_run broadcasts queued status when the r
         /Status: queued/i.test(entry.message) &&
         /already has 2 active Researcher background subagents/i.test(entry.message)
     )
+  );
+});
+
+test("research_workflow start_background_run projects registry-only active duplicates as active", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  const registryPath = path.join(
+    os.tmpdir(),
+    `openclaw-research-background-runs-workflow-runtime-tools-${Date.now()}-active-duplicate.json`
+  );
+  const previousProjectRoot = process.env.OPENCLAW_PROJECT;
+  const previousRegistryPath = process.env.OPENCLAW_RESEARCH_BACKGROUND_RUN_REGISTRY_PATH;
+  const runtimeCalls = [];
+
+  t.after(async () => {
+    if (previousProjectRoot === undefined) {
+      delete process.env.OPENCLAW_PROJECT;
+    } else {
+      process.env.OPENCLAW_PROJECT = previousProjectRoot;
+    }
+    if (previousRegistryPath === undefined) {
+      delete process.env.OPENCLAW_RESEARCH_BACKGROUND_RUN_REGISTRY_PATH;
+    } else {
+      process.env.OPENCLAW_RESEARCH_BACKGROUND_RUN_REGISTRY_PATH = previousRegistryPath;
+    }
+    await clearBackgroundWorkflowRunRegistryForTests();
+    await fs.rm(projectRoot, { recursive: true, force: true });
+    await fs.rm(registryPath, { force: true });
+  });
+
+  process.env.OPENCLAW_PROJECT = projectRoot;
+  process.env.OPENCLAW_RESEARCH_BACKGROUND_RUN_REGISTRY_PATH = registryPath;
+  await clearBackgroundWorkflowRunRegistryForTests();
+  await recordDiscordNotificationTarget(projectRoot);
+
+  const tool = createResearchWorkflowTool({
+    workspaceDir: projectRoot,
+    sessionKey: "agent:researcher:discord:group:paper-lab",
+    messageChannel: "discord",
+    runtime: {
+      subagent: {
+        async run(params) {
+          runtimeCalls.push(params);
+          return { runId: `runtime-run-${runtimeCalls.length}` };
+        },
+        async waitForRun() {
+          return { status: "timeout" };
+        },
+      },
+    },
+  });
+
+  const backgroundRun = {
+    kind: "research_pipeline",
+    topic: "registry only active duplicate",
+    ensureProjectBinding: false,
+  };
+  const first = await executeWorkflowTool(tool, {
+    action: "start_background_run",
+    backgroundRun,
+  });
+  assert.equal(first.started, true);
+  assert.equal(first.queued, false);
+
+  await fs.rm(getWorkflowRuntimeQueuePath(projectRoot), { force: true });
+  await fs.rm(getWorkflowRuntimeSessionsPath(projectRoot), { force: true });
+  await recordBackgroundWorkflowRun({
+    ownerAgent: "researcher",
+    channelKey: "discord:group:paper-lab",
+    requesterSessionKey: "agent:researcher:discord:group:paper-lab",
+    backgroundSessionKey:
+      "agent:researcher:discord:group:paper-lab:registry-only-active",
+    runId: "runtime-run-registry-only-active",
+    queueKey: first.queueKey,
+    kind: "research_pipeline",
+    family: "research",
+    projectId: "demo-project",
+    projectRoot,
+  });
+  const callsAfterFirstLaunch = runtimeCalls.length;
+
+  const duplicate = await executeWorkflowTool(tool, {
+    action: "start_background_run",
+    backgroundRun,
+  });
+
+  assert.equal(duplicate.started, false);
+  assert.equal(duplicate.reason, "session_unavailable");
+  assert.equal(duplicate.queued, false);
+  assert.equal(duplicate.ownerRuntimeStatus.status, "active");
+  assert.equal(duplicate.ownerRuntimeStatus.runtimeState, "active");
+  assert.equal(duplicate.ownerRuntimeStatus.queueKey, duplicate.queueKey);
+  assert.equal(duplicate.statusBroadcast.broadcasted, true);
+  assert.equal(
+    runtimeCalls
+      .slice(callsAfterFirstLaunch)
+      .some((entry) => entry.deliver === false),
+    false
+  );
+  assert.ok(
+    runtimeCalls.some(
+      (entry) =>
+        entry.deliver === true &&
+        /\[Workflow Status\]/.test(entry.message) &&
+        /Status: continued/i.test(entry.message) &&
+        /already running|started/i.test(entry.message)
+    )
+  );
+});
+
+test("research_workflow start_background_run broadcasts blocked status for unqueued runtime failures", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  const previousProjectRoot = process.env.OPENCLAW_PROJECT;
+  const runtimeCalls = [];
+
+  t.after(async () => {
+    if (previousProjectRoot === undefined) {
+      delete process.env.OPENCLAW_PROJECT;
+    } else {
+      process.env.OPENCLAW_PROJECT = previousProjectRoot;
+    }
+    await clearBackgroundWorkflowRunRegistryForTests();
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  process.env.OPENCLAW_PROJECT = projectRoot;
+  await clearBackgroundWorkflowRunRegistryForTests();
+  await recordDiscordNotificationTarget(projectRoot);
+
+  const tool = createResearchWorkflowTool({
+    workspaceDir: projectRoot,
+    sessionKey: "agent:researcher:discord:group:paper-lab",
+    messageChannel: "discord",
+    runtime: {
+      subagent: {
+        async run(params) {
+          runtimeCalls.push(params);
+          if (params.deliver === false) {
+            throw new Error("background runner crashed before dispatch");
+          }
+          return { runId: `broadcast-run-${runtimeCalls.length}` };
+        },
+      },
+    },
+  });
+
+  const result = await executeWorkflowTool(tool, {
+    action: "start_background_run",
+    backgroundRun: {
+      kind: "research_pipeline",
+      topic: "runtime failure topic",
+      ensureProjectBinding: false,
+    },
+  });
+
+  assert.equal(result.started, false);
+  assert.equal(result.reason, "runtime_unavailable");
+  assert.equal(result.queued, false);
+  assert.equal(result.statusBroadcast.broadcasted, true);
+  assert.ok(
+    runtimeCalls.some(
+      (entry) =>
+        entry.deliver === true &&
+        /\[Workflow Status\]/.test(entry.message) &&
+        /Status: blocked/i.test(entry.message) &&
+        /background runner crashed before dispatch/i.test(entry.message)
+    )
+  );
+  assert.equal(
+    runtimeCalls.some(
+      (entry) =>
+        entry.deliver === true &&
+        /\[Workflow Status\]/.test(entry.message) &&
+        /Status: waiting/i.test(entry.message)
+    ),
+    false
   );
 });
 
@@ -7285,6 +7913,8 @@ test("research_workflow run_papernexus_wrapper starts a dedicated wrapper-first 
   assert.equal(result.wrapper, "pn_graph_query.py");
   assert.match(result.commandText, /^python3 skills\/researcher\/papernexus\/scripts\/pn_graph_query\.py\b/);
   assert.match(result.commandText, /query 'causal abstraction'/);
+  assert.ok(["active", "started"].includes(result.ownerRuntimeStatus.status));
+  assert.equal(result.ownerRuntimeStatus.sessionKey, result.sessionKey);
   assert.equal(result.statusBroadcast.broadcasted, true);
   assert.ok(
     runtimeCalls.some(
@@ -7299,6 +7929,115 @@ test("research_workflow run_papernexus_wrapper starts a dedicated wrapper-first 
       (entry) =>
         entry.deliver === true &&
         /\[Workflow Status\]/.test(entry.message) &&
+        /typed PaperNexus graph query/i.test(entry.message)
+    )
+  );
+});
+
+test("research_workflow run_papernexus_wrapper reports queued owner-runtime status when researcher pool is full", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  const registryPath = path.join(
+    os.tmpdir(),
+    `openclaw-research-background-runs-workflow-runtime-tools-${Date.now()}-wrapper-queued.json`
+  );
+  const previousProjectRoot = process.env.OPENCLAW_PROJECT;
+  const previousRegistryPath = process.env.OPENCLAW_RESEARCH_BACKGROUND_RUN_REGISTRY_PATH;
+  const runtimeCalls = [];
+
+  t.after(async () => {
+    if (previousProjectRoot === undefined) {
+      delete process.env.OPENCLAW_PROJECT;
+    } else {
+      process.env.OPENCLAW_PROJECT = previousProjectRoot;
+    }
+    if (previousRegistryPath === undefined) {
+      delete process.env.OPENCLAW_RESEARCH_BACKGROUND_RUN_REGISTRY_PATH;
+    } else {
+      process.env.OPENCLAW_RESEARCH_BACKGROUND_RUN_REGISTRY_PATH = previousRegistryPath;
+    }
+    await clearBackgroundWorkflowRunRegistryForTests();
+    await fs.rm(projectRoot, { recursive: true, force: true });
+    await fs.rm(registryPath, { force: true });
+  });
+
+  process.env.OPENCLAW_PROJECT = projectRoot;
+  process.env.OPENCLAW_RESEARCH_BACKGROUND_RUN_REGISTRY_PATH = registryPath;
+  await clearBackgroundWorkflowRunRegistryForTests();
+  await recordDiscordNotificationTarget(projectRoot);
+
+  await recordBackgroundWorkflowRun({
+    ownerAgent: "researcher",
+    channelKey: "discord:group:paper-lab",
+    requesterSessionKey: "agent:researcher:discord:group:paper-lab",
+    backgroundSessionKey: "agent:researcher:discord:group:paper-lab:bg-1",
+    runId: "run-active-wrapper-1",
+    kind: "papernexus_wrapper",
+    family: "papernexus",
+    projectId: "demo-project",
+    projectRoot,
+  });
+  await recordBackgroundWorkflowRun({
+    ownerAgent: "researcher",
+    channelKey: "discord:group:paper-lab",
+    requesterSessionKey: "agent:researcher:discord:group:paper-lab",
+    backgroundSessionKey: "agent:researcher:discord:group:paper-lab:bg-2",
+    runId: "run-active-wrapper-2",
+    kind: "papernexus_wrapper",
+    family: "papernexus",
+    projectId: "demo-project",
+    projectRoot,
+  });
+
+  const tool = createResearchWorkflowTool({
+    workspaceDir: projectRoot,
+    sessionKey: "agent:researcher:discord:group:paper-lab",
+    messageChannel: "discord",
+    runtime: {
+      subagent: {
+        async run(params) {
+          runtimeCalls.push(params);
+          return { runId: `runtime-run-${runtimeCalls.length}` };
+        },
+        async waitForRun() {
+          return { status: "timeout" };
+        },
+      },
+    },
+  });
+
+  const result = await executeWorkflowTool(tool, {
+    action: "run_papernexus_wrapper",
+    papernexusWrapper: {
+      wrapper: "pn_graph_query",
+      args: [
+        "--api-base",
+        "https://papernexus.example/api",
+        "--corpus",
+        "demo",
+        "query",
+        "causal abstraction",
+        "--limit",
+        "8",
+      ],
+      summary: "Queued a typed PaperNexus graph query in a dedicated subagent.",
+      ensureProjectBinding: false,
+    },
+  });
+
+  assert.equal(result.started, false);
+  assert.equal(result.reason, "channel_capacity_reached");
+  assert.equal(result.queued, true);
+  assert.equal(result.wrapper, "pn_graph_query.py");
+  assert.equal(result.ownerRuntimeStatus.status, "queued");
+  assert.equal(result.ownerRuntimeStatus.queueKey, result.queueKey);
+  assert.equal(result.ownerRuntimeStatus.runtimeState, "queued");
+  assert.equal(result.statusBroadcast.broadcasted, true);
+  assert.ok(
+    runtimeCalls.some(
+      (entry) =>
+        entry.deliver === true &&
+        /\[Workflow Status\]/.test(entry.message) &&
+        /Status: queued/i.test(entry.message) &&
         /typed PaperNexus graph query/i.test(entry.message)
     )
   );
@@ -8122,4 +8861,107 @@ test("research_workflow record_scientific_editing_pass_result records durable Pa
   );
   assert.match(report, /### 1\. Structure and Story Arc/);
   assert.match(report, /Files inspected: academic_writer\/paper\/sections\/intro\.tex/);
+});
+
+test("research_workflow get_paperguru_gate reports blocked and ready gate states without writes", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  const previousProjectRoot = process.env.OPENCLAW_PROJECT;
+
+  t.after(async () => {
+    if (previousProjectRoot === undefined) {
+      delete process.env.OPENCLAW_PROJECT;
+    } else {
+      process.env.OPENCLAW_PROJECT = previousProjectRoot;
+    }
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  process.env.OPENCLAW_PROJECT = projectRoot;
+  const tool = createResearchWorkflowTool({ workspaceDir: projectRoot });
+
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "demo-project",
+    current_stage: "review",
+    owner_agent: "reviewer",
+    writing_contract: {
+      paper_mode: "conference",
+      scientific_editing_required: true,
+      scientific_editing_status: "ready",
+      scientific_editing_ledger_path: "academic_writer/SCIENTIFIC_EDIT_LEDGER.json",
+      scientific_editing_report_path: "academic_writer/SCIENTIFIC_EDIT_REPORT.md",
+    },
+  });
+  await writeJson(path.join(projectRoot, "academic_writer", "SCIENTIFIC_EDIT_LEDGER.json"), {
+    pass_results: [
+      {
+        pass_id: "pass_1_structure",
+        status: "completed",
+      },
+    ],
+  });
+  await writeText(
+    path.join(projectRoot, "academic_writer", "SCIENTIFIC_EDIT_REPORT.md"),
+    "# PaperGuru report\n"
+  );
+
+  const blocked = await executeWorkflowTool(tool, {
+    action: "get_paperguru_gate",
+    projectRoot,
+  });
+
+  assert.equal(blocked.status, "blocked");
+  assert.equal(blocked.paperGuruState.status, "blocked");
+  assert.deepEqual(blocked.paperGuruState.completed_pass_ids, ["pass_1_structure"]);
+  assert.ok(blocked.paperGuruState.missing_pass_ids.includes("pass_2_argumentation"));
+  assert.ok(
+    blocked.missingSignals.some((signal) =>
+      /six-pass ledger must contain completed pass_results/i.test(signal)
+    ),
+    blocked.missingSignals.join("\n")
+  );
+  assert.ok(
+    blocked.missingSignals.some((signal) => /compile receipt/i.test(signal)),
+    blocked.missingSignals.join("\n")
+  );
+
+  const manifestAfterBlocked = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "PROJECT_MANIFEST.json"), "utf8")
+  );
+  assert.equal(manifestAfterBlocked.workflow_control, undefined);
+
+  await writeJson(path.join(projectRoot, "academic_writer", "SCIENTIFIC_EDIT_LEDGER.json"), {
+    pass_results: [
+      "pass_1_structure",
+      "pass_2_argumentation",
+      "pass_3_sentence_precision",
+      "pass_4_grammar_terminology",
+      "pass_5_typography_latex",
+      "pass_6_integrity_audit",
+    ].map((passId) => ({
+      pass_id: passId,
+      status: "completed",
+    })),
+    compile_receipts: ["academic_writer/paper/main.pdf"],
+    reference_verification_receipts: ["reviewer/citation-check.json"],
+    number_consistency_receipts: ["reviewer/number-check.json"],
+    claim_evidence_consistency_receipts: ["analyzer/CLAIM_EVIDENCE_MATRIX.md"],
+  });
+
+  const ready = await executeWorkflowTool(tool, {
+    action: "get_paperguru_gate",
+    projectRoot,
+  });
+
+  assert.equal(ready.status, "ready");
+  assert.equal(ready.paperGuruState.status, "ready");
+  assert.deepEqual(ready.missingSignals, []);
+  assert.deepEqual(ready.paperGuruState.missing_pass_ids, []);
+  assert.deepEqual(ready.paperGuruState.compile_receipts, [
+    "academic_writer/paper/main.pdf",
+  ]);
+
+  const manifestAfterReady = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "PROJECT_MANIFEST.json"), "utf8")
+  );
+  assert.equal(manifestAfterReady.workflow_control, undefined);
 });

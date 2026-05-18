@@ -296,6 +296,65 @@ test("graph completion waits on active workflow-owned literature requisitions", 
   );
 });
 
+test("graph completion ignores stale active status when requisition satisfaction evidence is valid", async (t) => {
+  const projectRoot = await makeProject(t, "openclaw-wf-stage-graph-active-valid-report-");
+  const reportPath =
+    "researcher/idea-catalyst/requisition/req-gap/REQUISITION_SATISFACTION_REPORT.json";
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "graph-active-valid-report",
+    current_stage: "graph_build",
+    owner_agent: "researcher",
+    paper_ingestion: {
+      graph_presence_status: "ready",
+      queued_requests: [
+        {
+          request_id: "idea-catalyst-req-gap",
+          request_kind: "requisition",
+          trigger_kind: "idea_catalyst_requisition",
+          status: "needs_repair",
+          validation_status: "invalid",
+          validation_report_path: reportPath,
+          last_error: "stale timeout after the satisfaction report was materialized",
+          attempt_count: 1,
+        },
+      ],
+    },
+  });
+  await writeJson(path.join(projectRoot, "graph", "GRAPH_PRESENCE_CHECK.json"), {
+    status: "ready",
+    expected_paper_count: 3,
+    present_paper_count: 3,
+  });
+  await writeJson(path.join(projectRoot, "graph", "PAPERNEXUS_SYNC_STATE.json"), {
+    workflow_projection: {
+      can_continue: true,
+      runtime_status: "ready",
+    },
+  });
+  await writeJson(path.join(projectRoot, reportPath), {
+    authority: "literature_requisition_satisfaction",
+    status: "valid",
+    decision: "satisfied_remote_import_evidence",
+    request_id: "idea-catalyst-req-gap",
+    source_backed_count: 3,
+    evidence_gap_closed: true,
+  });
+  await writeGraphDecision(projectRoot, {
+    request_id: "idea-catalyst-req-gap",
+    requisition_satisfaction_report_path: reportPath,
+  });
+
+  const completion = await resolveGraphCompletion(projectRoot);
+  assert.notEqual(completion.blockingReason, "graph_reentry_request_active");
+
+  const downstreamCompletion = await resolveWorkflowStageCompletion({
+    projectRoot,
+    stage: "frontier_mapping",
+  });
+  assert.notEqual(downstreamCompletion.stage, "graph_build");
+  assert.notEqual(downstreamCompletion.blockingReason, "graph_reentry_request_active");
+});
+
 test("graph completion blocks terminal failed workflow-owned literature requisitions", async (t) => {
   const projectRoot = await makeProject(t, "openclaw-wf-stage-graph-failed-");
   await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
@@ -600,6 +659,48 @@ test("experiment completion remains waiting while multi seed validation is pendi
   assert.equal(ready.nextAction, "/analyze-results");
 });
 
+test("experiment completion monitors active runtime before judging implementation readiness", async (t) => {
+  const projectRoot = await makeProject(t, "openclaw-wf-stage-experiment-active-runtime-");
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "experiment-active-runtime",
+    current_stage: "experiment",
+    owner_agent: "researcher",
+    experiment_search: {
+      status: "running",
+      baseline_fairness_status: "pending",
+      implementation_confidence: "unknown",
+      multi_seed_status: "running",
+      plot_pack_status: "pending",
+    },
+  });
+  await writeJson(path.join(projectRoot, "researcher", "EXPERIMENT_LEDGER.json"), {
+    summary: {
+      activeExperimentIds: ["exp-running"],
+    },
+    experiments: [
+      {
+        experimentId: "exp-running",
+        status: "running",
+        stage: "training",
+      },
+    ],
+  });
+
+  const completion = await resolveExperimentCompletion(projectRoot);
+  assert.equal(completion.completionStatus, "incomplete");
+  assert.equal(completion.owner, "researcher");
+  assert.equal(completion.nextAction, "/monitor-experiment");
+  assert.equal(completion.blockingReason, "reconcile_runtime");
+
+  const reconciled = await reconcileWorkflowControl({
+    projectRoot,
+    now: "2026-05-18T07:23:00.000Z",
+  });
+  assert.equal(reconciled.contract.owner, "researcher");
+  assert.equal(reconciled.contract.next_action, "/monitor-experiment");
+  assert.equal(reconciled.contract.blocking_reason, "reconcile_runtime");
+});
+
 test("experiment completion trusts durable search authority before stale manifest projection", async (t) => {
   const projectRoot = await makeProject(t, "openclaw-wf-stage-experiment-authority-");
   await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
@@ -887,6 +988,89 @@ test("ideation completion accepts idea catalyst contract authority", async (t) =
   assert.equal(completion.nextAction, "/plan-experiment");
 });
 
+test("legacy idea completion ignores needs-repair graph reentry diagnostics after satisfaction evidence closes", async (t) => {
+  const projectRoot = await makeProject(t, "openclaw-wf-stage-idea-reentry-closed-");
+  const satisfactionPath =
+    "researcher/idea-catalyst/requisition/req-closed/REQUISITION_SATISFACTION_REPORT.json";
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "idea-reentry-closed",
+    current_stage: "idea",
+    owner_agent: "researcher",
+    paper_ingestion: {
+      queued_requests: [
+        {
+          request_id: "req-closed",
+          status: "needs_repair",
+          trigger_kind: "idea_catalyst_requisition",
+          validation_report_path: satisfactionPath,
+          last_error: "Remote MCP request failed: fetch failed",
+        },
+      ],
+    },
+  });
+  await writeGraphDecision(projectRoot);
+  await writeJson(path.join(projectRoot, satisfactionPath), {
+    schema_version: 1,
+    authority: "literature_requisition_satisfaction",
+    status: "valid",
+    decision: "satisfied_remote_import_evidence",
+    request_id: "req-closed",
+    source_backed_count: 6,
+    evidence_gap_closed: true,
+  });
+  await writeIdeaContract(projectRoot, {
+    source_requisition_report_path: satisfactionPath,
+  });
+
+  const completion = await resolveWorkflowStageCompletion({
+    projectRoot,
+    stage: "idea",
+  });
+  assert.equal(completion.stage, "idea");
+  assert.equal(completion.completionStatus, "complete");
+  assert.equal(completion.blockingReason, null);
+
+  const reconciled = await reconcileWorkflowControl({
+    projectRoot,
+    now: "2026-05-17T15:30:00.000Z",
+  });
+  assert.equal(reconciled.contract.stage, "idea");
+  assert.equal(reconciled.contract.status, "ready");
+  assert.equal(reconciled.contract.blocking_reason, null);
+  assert.equal(reconciled.manifest.current_stage, "idea");
+});
+
+test("legacy idea completion still blocks needs-repair graph reentry without satisfaction evidence", async (t) => {
+  const projectRoot = await makeProject(t, "openclaw-wf-stage-idea-reentry-open-");
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "idea-reentry-open",
+    current_stage: "idea",
+    owner_agent: "researcher",
+    paper_ingestion: {
+      queued_requests: [
+        {
+          request_id: "req-open",
+          status: "needs_repair",
+          trigger_kind: "idea_catalyst_requisition",
+          validation_report_path:
+            "researcher/idea-catalyst/requisition/req-open/REQUISITION_SATISFACTION_REPORT.json",
+          last_error: "Remote MCP request failed: fetch failed",
+        },
+      ],
+    },
+  });
+  await writeGraphDecision(projectRoot);
+  await writeIdeaContract(projectRoot);
+
+  const completion = await resolveWorkflowStageCompletion({
+    projectRoot,
+    stage: "idea",
+  });
+  assert.equal(completion.stage, "graph_build");
+  assert.equal(completion.completionStatus, "incomplete");
+  assert.equal(completion.blockingReason, "graph_reentry_request_active");
+});
+
 test("experiment plan completion requires innovation packet evidence trace", async (t) => {
   const projectRoot = await makeProject(t, "openclaw-wf-stage-experiment-plan-");
   await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
@@ -915,6 +1099,18 @@ test("experiment plan completion requires innovation packet evidence trace", asy
   const ready = await resolveExperimentPlanCompletion(projectRoot);
   assert.equal(ready.completionStatus, "complete");
   assert.equal(ready.owner, "coder");
+
+  await writeJson(path.join(projectRoot, "orchestrator", "INNOVATION_PACKET.json"), {
+    status: "blocked",
+    selected_idea_fragment_id: "idea-1",
+    baseline: "FixMatch baseline",
+    primary_metric: "H-score",
+    fixed_budget: "5m CPU trial",
+    evidence_paths: [DEFAULT_IDEA_CATALYST_CONTRACT_PATH],
+  });
+  const blocked = await resolveExperimentPlanCompletion(projectRoot);
+  assert.equal(blocked.completionStatus, "incomplete");
+  assert.equal(blocked.owner, "orchestrator");
 });
 
 test("analysis completion requires report plus experiment ledger evidence", async (t) => {
@@ -1021,6 +1217,52 @@ test("analysis completion accepts execution proof receipts as result evidence", 
   const completion = await resolveAnalysisCompletion(projectRoot);
   assert.equal(completion.completionStatus, "complete");
   assert.equal(completion.nextAction, "/write-paper");
+});
+
+test("downstream analyze stage rolls back to graph blocker when graph decision is blocked", async (t) => {
+  const projectRoot = await makeProject(t, "openclaw-wf-stage-analyze-graph-blocked-");
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "analyze-graph-blocked",
+    current_stage: "analyze",
+    owner_agent: "analyzer",
+    next_action: "/review-paper",
+  });
+  await writeText(path.join(projectRoot, "analyzer", "ANALYSIS_REPORT.md"), "# Analysis\n");
+  await writeJson(
+    path.join(projectRoot, "researcher", "artifacts", "results", "results.json"),
+    { metrics: [{ name: "p95_query_latency_ms", value: 0.012 }] }
+  );
+  await writeGraphDecision(projectRoot, {
+    decision: "blocked",
+    status: "blocked",
+    source_backed_graph_claim: false,
+    source_index_path: null,
+    reason: "PaperNexus remote discovery/import is not graph-ready yet.",
+  });
+  await writeJson(path.join(projectRoot, "orchestrator", "INNOVATION_PACKET.json"), {
+    contract_version: "innovation-packet-v1",
+    status: "blocked",
+    graph_decision_path: DEFAULT_GRAPH_BUILD_DECISION_PATH,
+    superseded_reason: "Graph build decision is not complete with a source-backed graph claim.",
+  });
+
+  const completion = await resolveWorkflowStageCompletion({
+    projectRoot,
+    stage: "analyze",
+  });
+  assert.equal(completion.stage, "graph_build");
+  assert.equal(completion.completionStatus, "blocked");
+  assert.equal(completion.blockingReason, "graph_build_decision_blocked");
+  assert.equal(completion.contractSource, "analyze_completion");
+
+  const reconciled = await reconcileWorkflowControl({
+    projectRoot,
+    now: "2026-05-17T06:05:00.000Z",
+  });
+  assert.equal(reconciled.contract.stage, "graph_build");
+  assert.equal(reconciled.contract.completion.source, "analyze_completion");
+  assert.equal(reconciled.contract.blocking_reason, "graph_build_decision_blocked");
+  assert.equal(reconciled.manifest.current_stage, "graph_build");
 });
 
 test("analysis completion accepts nested canonical trial contract evidence", async (t) => {
@@ -1613,6 +1855,89 @@ test("runtime ownership marks stale running queue degraded when no active sessio
     runtime.blockingReason,
     "stale_runtime_queue_without_active_session"
   );
+});
+
+test("workflow control preserves graph blocker when stale runtime queue would otherwise reset setup", async (t) => {
+  const projectRoot = await makeProject(t, "openclaw-wf-stage-stale-graph-");
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "stale-graph-runtime",
+    current_stage: "setup",
+    owner_agent: "researcher",
+    next_action: "/project-init",
+    blocking_reason: "stale_runtime_queue_without_active_session",
+    workflow_control: {
+      schema_version: 1,
+      contract_id: "wfctl_setup_fixture",
+      reconciled_at: "2026-05-17T05:43:51.770Z",
+      stage: "setup",
+      owner: "researcher",
+      next_action: "/project-init",
+      status: "waiting",
+      blocking_reason: "stale_runtime_queue_without_active_session",
+      completion: {
+        status: "incomplete",
+        source: "setup_completion",
+        reason: "stale_runtime_queue_without_active_session",
+      },
+      runtime_state: "degraded",
+      queue_key: "queue:research:stale",
+      session_key: null,
+    },
+  });
+  await writeGraphDecision(projectRoot, {
+    decision: "blocked",
+    status: "blocked",
+    source_backed_graph_claim: false,
+    source_index_path: null,
+    reason: "PaperNexus remote discovery/import is not graph-ready yet.",
+    limitations: [
+      "Request-specific literature evidence did not close.",
+    ],
+  });
+  await writeJson(
+    path.join(projectRoot, ".openclaw-research", "workflow-runtime-queue.json"),
+    {
+      entries: [
+        {
+          transition_id: "transition-graph",
+          queue_key: "queue:research:stale",
+          owner_agent: "researcher",
+          channel_key: "local",
+          requester_session_key: "requester",
+          family: "research",
+          kind: "research_pipeline",
+          queued_at: "2026-05-17T05:37:18.531Z",
+          status: "running",
+          project_root: projectRoot,
+          dispatch_payload: {
+            to_role: "researcher",
+            project_root: projectRoot,
+            summary: "stale graph-build background queue",
+          },
+        },
+      ],
+    }
+  );
+  await writeJson(
+    path.join(projectRoot, ".openclaw-research", "workflow-runtime-sessions.json"),
+    {
+      entries: [],
+    }
+  );
+
+  const reconciled = await reconcileWorkflowControl({
+    projectRoot,
+    now: "2026-05-17T05:44:00.000Z",
+  });
+  assert.equal(reconciled.contract.stage, "graph_build");
+  assert.equal(reconciled.contract.owner, "researcher");
+  assert.equal(reconciled.contract.next_action, "/graph-build");
+  assert.equal(reconciled.contract.completion.source, "graph_completion");
+  assert.equal(reconciled.contract.blocking_reason, "graph_build_decision_blocked");
+  assert.equal(reconciled.contract.runtime_state, "degraded");
+  assert.equal(reconciled.contract.queue_key, "queue:research:stale");
+  assert.equal(reconciled.manifest.current_stage, "graph_build");
+  assert.equal(reconciled.manifest.next_action, "/graph-build");
 });
 
 test("setup completion owner stays aligned with stage routing policy", async (t) => {

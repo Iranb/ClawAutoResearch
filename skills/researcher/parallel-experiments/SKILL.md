@@ -43,7 +43,7 @@ Below, `<server>` means a host chosen from the resolved `list`.
 
 ## Decision: What to Parallelize
 
-> **File ownership**: Write ONLY to `{PROJ}/researcher/`, `{PROJ}/PROJECT_MANIFEST.json`, and `{PROJ}/TRACK_REGISTRY.json`. `{PROJ}` = `{PROJECTS_ROOT}/{proj-id}`
+> **File ownership**: Write ONLY to `{PROJ}/researcher/`, `{PROJ}/TRACK_REGISTRY.json`, and experiment evidence/projection fields in `{PROJ}/PROJECT_MANIFEST.json` through workflow tools where available. `{PROJ}` = `{PROJECTS_ROOT}/{proj-id}`
 
 Read `{PROJ}/orchestrator/PLAN.md` and classify each experiment:
 
@@ -252,11 +252,11 @@ Build summary:
 
 Update PARALLEL_STATE.json to `"status": "completed"`.
 Update EXPERIMENT_REGISTRY.md: all rows finalized.
-Update `{PROJ}/researcher/EXPERIMENT_LEDGER.json` and `PROJECT_MANIFEST.json.experiment_memory` so resume logic can recover the completed run set without rereading old chat context.
+Update `{PROJ}/researcher/EXPERIMENT_LEDGER.json`, `PROJECT_MANIFEST.json.experiment_memory`, and `EXPERIMENT_SEARCH.json` through workflow tools so resume logic can recover the completed run set without rereading old chat context.
 
 Then update `{PROJ}/TRACK_REGISTRY.json` with per-track experiment outcomes and recommended next action.
 
-Pass control to `/analyze-results` for figure generation and narrative report.
+Then call `research_workflow.evaluate_experiment_search_decision`. Pass control to `/analyze-results` only if `analysis_gate.decision = "ready_for_analysis"`; otherwise continue bounded search/tuning or repair the recorded blocker.
 
 ## Error Recovery
 

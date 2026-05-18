@@ -71,13 +71,60 @@ type ExperimentAnalysisGateVote = {
   blockers: string[];
 };
 
+type MetricDirection = "higher_is_better" | "lower_is_better";
+
+type MetricDirectionSource = "search_spec" | "ledger" | "manifest" | "heuristic";
+
+type PrimaryMetricContract = {
+  metricName: string | null;
+  direction: MetricDirection | null;
+  directionSource: MetricDirectionSource | null;
+  minimumImprovement: number | null;
+  primaryEvidence: string[];
+  paperContributionMetric: string | null;
+};
+
 type ExperimentAnalysisGate = {
   schema_version: 1;
   decision: "ready_for_analysis" | "continue_search" | "repair_required";
   rule: "karpathy_improvement_required_then_2_of_3";
   primary_gate: "execution_reviewer";
+  metric_contract: {
+    metric_name: string | null;
+    direction: MetricDirection | null;
+    direction_source: MetricDirectionSource | null;
+    minimum_improvement: number | null;
+    observed_delta: number | null;
+    observed_delta_source: string | null;
+    experiment_id: string | null;
+    paper_contribution_metric: string | null;
+  };
   hard_blockers: string[];
   votes: ExperimentAnalysisGateVote[];
+};
+
+type ExperimentNextCandidateGuidance = {
+  schema_version: 1;
+  authority: "experiment_next_candidate_guidance";
+  trigger_decision: ExperimentSearchDecision;
+  source_validation_stage: string;
+  target: "primary_metric_gain";
+  primary_metric_contract: {
+    metric_name: string | null;
+    direction: MetricDirection | null;
+    direction_source: MetricDirectionSource | null;
+    minimum_improvement: number | null;
+    paper_contribution_metric: string | null;
+  };
+  required_properties: string[];
+  avoid: {
+    experiment_ids: string[];
+    one_change_signatures: string[];
+    failure_cluster_ids: string[];
+  };
+  blocker_basis: string[];
+  innovation_anchor_points: string[];
+  recommended_focus: string[];
 };
 
 function readString(value: unknown): string | null {
@@ -103,19 +150,61 @@ function pickNumber(record: Record<string, unknown> | null, keys: string[]): num
   return null;
 }
 
-function compactReasons(values: string[]): string[] {
-  return values.filter(Boolean).slice(0, 3);
+function compactReasons(values: string[], limit = 3): string[] {
+  return values.filter(Boolean).slice(0, limit);
 }
 
-function inferMetricDirection(record: Record<string, unknown>): "higher_is_better" | "lower_is_better" {
+function uniqueCompactStrings(values: Array<string | null | undefined>, limit = 8): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const value of values) {
+    const trimmed = typeof value === "string" ? value.trim() : "";
+    if (!trimmed || seen.has(trimmed)) continue;
+    seen.add(trimmed);
+    result.push(trimmed);
+    if (result.length >= limit) break;
+  }
+  return result;
+}
+
+function normalizeMetricDirection(value: unknown): MetricDirection | null {
+  const normalized = normalizeStageLike(value);
+  if (
+    [
+      "lower_is_better",
+      "minimize",
+      "minimise",
+      "lower",
+      "decrease",
+      "decrease_is_better",
+      "smaller_is_better",
+    ].includes(normalized)
+  ) {
+    return "lower_is_better";
+  }
+  if (
+    [
+      "higher_is_better",
+      "maximize",
+      "maximise",
+      "higher",
+      "increase",
+      "increase_is_better",
+      "larger_is_better",
+    ].includes(normalized)
+  ) {
+    return "higher_is_better";
+  }
+  return null;
+}
+
+function inferMetricDirection(record: Record<string, unknown>): MetricDirection {
   const explicitDirection = normalizeStageLike(
     record.direction ?? record.optimization_direction ?? record.optimizationDirection
   );
-  if (explicitDirection === "lower_is_better" || explicitDirection === "minimize") {
-    return "lower_is_better";
-  }
-  if (explicitDirection === "higher_is_better" || explicitDirection === "maximize") {
-    return "higher_is_better";
+  const normalizedDirection = normalizeMetricDirection(explicitDirection);
+  if (normalizedDirection) {
+    return normalizedDirection;
   }
   const metricName = normalizeStageLike(
     record.name ?? record.metric_name ?? record.metricName ?? record.primary_metric ?? record.primaryMetric
@@ -161,9 +250,95 @@ function isFailureLike(value: unknown): boolean {
   );
 }
 
-function readMetricDeltaFromEntry(entry: Record<string, unknown>): {
+function resolvePrimaryMetricContract(params: {
+  spec: ExperimentSearchSpecLike;
+  manifestRecord: Record<string, unknown> | null;
+}): PrimaryMetricContract {
+  const researchProgram = readRecord(params.manifestRecord?.research_program);
+  const benchmarkProtocol =
+    readRecord(params.manifestRecord?.benchmark_protocol) ??
+    readRecord(params.manifestRecord?.benchmarkProtocol);
+  const specContract = params.spec.primaryMetricContract;
+  const specDirection = normalizeMetricDirection(specContract.direction);
+  const benchmarkDirection =
+    normalizeMetricDirection(benchmarkProtocol?.metric_direction) ??
+    normalizeMetricDirection(benchmarkProtocol?.metricDirection) ??
+    normalizeMetricDirection(benchmarkProtocol?.primary_metric_direction) ??
+    normalizeMetricDirection(benchmarkProtocol?.primaryMetricDirection);
+  const manifestDirection =
+    normalizeMetricDirection(params.manifestRecord?.primary_metric_direction) ??
+    normalizeMetricDirection(params.manifestRecord?.primaryMetricDirection) ??
+    normalizeMetricDirection(researchProgram?.primary_metric_direction) ??
+    normalizeMetricDirection(researchProgram?.primaryMetricDirection);
+  const direction = specDirection ?? benchmarkDirection ?? manifestDirection;
+  const directionSource: MetricDirectionSource | null = specDirection
+    ? "search_spec"
+    : benchmarkDirection || manifestDirection
+      ? "manifest"
+      : null;
+  const metricName =
+    specContract.metricName ??
+    readString(benchmarkProtocol?.primary_metric) ??
+    readString(benchmarkProtocol?.primaryMetric) ??
+    readString(researchProgram?.primary_metric) ??
+    readString(researchProgram?.primaryMetric) ??
+    readString(params.manifestRecord?.primary_metric) ??
+    readString(params.manifestRecord?.primaryMetric);
+  return {
+    metricName,
+    direction,
+    directionSource,
+    minimumImprovement:
+      specContract.minimumImprovement ??
+      readNumber(benchmarkProtocol?.minimum_improvement) ??
+      readNumber(benchmarkProtocol?.minimumImprovement) ??
+      readNumber(params.manifestRecord?.minimum_improvement) ??
+      readNumber(params.manifestRecord?.minimumImprovement),
+    primaryEvidence: specContract.primaryEvidence,
+    paperContributionMetric:
+      readString(benchmarkProtocol?.paper_contribution_metric) ??
+      readString(benchmarkProtocol?.paperContributionMetric) ??
+      readString(researchProgram?.paper_contribution_metric) ??
+      readString(researchProgram?.paperContributionMetric) ??
+      readString(params.manifestRecord?.paper_contribution_metric) ??
+      readString(params.manifestRecord?.paperContributionMetric) ??
+      metricName,
+  };
+}
+
+function resolveMetricDirection(params: {
+  record: Record<string, unknown>;
+  metricContract: PrimaryMetricContract;
+}): { direction: MetricDirection; directionSource: MetricDirectionSource } {
+  if (params.metricContract.direction) {
+    return {
+      direction: params.metricContract.direction,
+      directionSource: params.metricContract.directionSource ?? "search_spec",
+    };
+  }
+  const ledgerDirection =
+    normalizeMetricDirection(params.record.direction) ??
+    normalizeMetricDirection(params.record.optimization_direction) ??
+    normalizeMetricDirection(params.record.optimizationDirection);
+  if (ledgerDirection) {
+    return { direction: ledgerDirection, directionSource: "ledger" };
+  }
+  return {
+    direction: inferMetricDirection(params.record),
+    directionSource: "heuristic",
+  };
+}
+
+function readMetricDeltaFromEntry(
+  entry: Record<string, unknown>,
+  metricContract: PrimaryMetricContract
+): {
   delta: number | null;
   source: string | null;
+  direction: MetricDirection | null;
+  directionSource: MetricDirectionSource | null;
+  minimumImprovement: number | null;
+  metricName: string | null;
 } {
   const keyMetric = readRecord(entry.key_metric) ?? readRecord(entry.keyMetric);
   const metrics = readRecord(entry.metrics);
@@ -192,7 +367,23 @@ function readMetricDeltaFromEntry(entry: Record<string, unknown>): {
       "metricDelta",
     ]);
     if (delta !== null) {
-      return { delta, source: source.label };
+      const direction = source.record
+        ? resolveMetricDirection({ record: source.record, metricContract })
+        : null;
+      return {
+        delta,
+        source: source.label,
+        direction: direction?.direction ?? metricContract.direction,
+        directionSource: direction?.directionSource ?? metricContract.directionSource,
+        minimumImprovement: metricContract.minimumImprovement,
+        metricName:
+          source.record
+            ? readString(source.record.name) ??
+              readString(source.record.metric_name) ??
+              readString(source.record.metricName) ??
+              metricContract.metricName
+            : metricContract.metricName,
+      };
     }
   }
   for (const source of sources) {
@@ -200,23 +391,47 @@ function readMetricDeltaFromEntry(entry: Record<string, unknown>): {
     const value = pickNumber(source.record, ["value", "candidate", "h_score", "hScore"]);
     const baseline = pickNumber(source.record, ["baseline", "baseline_h_score", "baselineHScore"]);
     if (value !== null && baseline !== null) {
-      const direction = inferMetricDirection(source.record);
+      const direction = resolveMetricDirection({
+        record: source.record,
+        metricContract,
+      });
       return {
-        delta: direction === "lower_is_better" ? baseline - value : value - baseline,
+        delta: direction.direction === "lower_is_better" ? baseline - value : value - baseline,
         source: source.label,
+        direction: direction.direction,
+        directionSource: direction.directionSource,
+        minimumImprovement: metricContract.minimumImprovement,
+        metricName:
+          readString(source.record.name) ??
+          readString(source.record.metric_name) ??
+          readString(source.record.metricName) ??
+          metricContract.metricName,
       };
     }
   }
-  return { delta: null, source: null };
+  return {
+    delta: null,
+    source: null,
+    direction: metricContract.direction,
+    directionSource: metricContract.directionSource,
+    minimumImprovement: metricContract.minimumImprovement,
+    metricName: metricContract.metricName,
+  };
 }
 
 function selectKarpathyMetricEvidence(params: {
   ledgerExperiments: Record<string, unknown>[];
   preferredExperimentIds: string[];
+  metricContract: PrimaryMetricContract;
 }): {
   experimentId: string | null;
   delta: number | null;
   source: string | null;
+  direction: MetricDirection | null;
+  directionSource: MetricDirectionSource | null;
+  minimumImprovement: number | null;
+  metricName: string | null;
+  paperContributionMetric: string | null;
   retained: boolean;
 } {
   const candidates = params.ledgerExperiments.filter((entry) => {
@@ -228,7 +443,7 @@ function selectKarpathyMetricEvidence(params: {
     );
   });
   for (const entry of candidates.slice().reverse()) {
-    const metric = readMetricDeltaFromEntry(entry);
+    const metric = readMetricDeltaFromEntry(entry, params.metricContract);
     if (metric.delta !== null) {
       return {
         experimentId:
@@ -237,11 +452,22 @@ function selectKarpathyMetricEvidence(params: {
           isRetainedTrialDecision(entry.decision) ||
           isRetainedTrialDecision(entry.last_decision) ||
           isRetainedTrialDecision(entry.lastDecision),
+        paperContributionMetric: params.metricContract.paperContributionMetric,
         ...metric,
       };
     }
   }
-  return { experimentId: null, delta: null, source: null, retained: false };
+  return {
+    experimentId: null,
+    delta: null,
+    source: null,
+    direction: params.metricContract.direction,
+    directionSource: params.metricContract.directionSource,
+    minimumImprovement: params.metricContract.minimumImprovement,
+    metricName: params.metricContract.metricName,
+    paperContributionMetric: params.metricContract.paperContributionMetric,
+    retained: false,
+  };
 }
 
 function buildExperimentAnalysisGate(params: {
@@ -251,6 +477,11 @@ function buildExperimentAnalysisGate(params: {
     experimentId: string | null;
     delta: number | null;
     source: string | null;
+    direction: MetricDirection | null;
+    directionSource: MetricDirectionSource | null;
+    minimumImprovement: number | null;
+    metricName: string | null;
+    paperContributionMetric: string | null;
     retained: boolean;
   };
   multiSeedReady: boolean;
@@ -268,16 +499,25 @@ function buildExperimentAnalysisGate(params: {
     params.hasRecordedRunEvidence ? "" : "execution_evidence_missing",
     params.reviewBlockerCount > 0 ? "review_blockers_open" : "",
   ]);
-  const positiveDelta =
+  const hasPositiveDelta =
     params.metricEvidence.delta !== null && params.metricEvidence.delta > 0;
+  const minimumImprovement = params.metricEvidence.minimumImprovement;
+  const meetsMinimumImprovement =
+    hasPositiveDelta &&
+    (minimumImprovement == null ||
+      minimumImprovement <= 0 ||
+      params.metricEvidence.delta! >= minimumImprovement);
   const executionBlockers = compactReasons([
-    positiveDelta ? "" : "no_positive_primary_metric_delta",
+    hasPositiveDelta ? "" : "no_positive_primary_metric_delta",
+    hasPositiveDelta && !meetsMinimumImprovement
+      ? "primary_metric_below_minimum_improvement"
+      : "",
     params.metricEvidence.retained ? "" : "trial_not_promoted_or_kept",
     params.multiSeedReady ? "" : "multi_seed_not_ready",
     params.ablationReady ? "" : "ablation_not_ready",
     params.comparableTrialBudgetStatus === "over_budget" ? "trial_over_budget" : "",
     params.oneChangeValidationStatus === "missing" ? "one_change_signature_missing" : "",
-  ]);
+  ], 6);
   const noveltyBlockers = compactReasons([
     isReadyLike(params.innovationStatus) || params.innovationStatus === "supported"
       ? ""
@@ -301,12 +541,21 @@ function buildExperimentAnalysisGate(params: {
           ? "approve"
           : "continue_search",
       basis: compactReasons([
-        positiveDelta ? "positive_primary_metric_delta" : "",
+        hasPositiveDelta ? "positive_primary_metric_delta" : "",
+        meetsMinimumImprovement && minimumImprovement != null
+          ? `minimum_improvement_met:${minimumImprovement}`
+          : "",
         params.metricEvidence.retained ? "promoted_or_kept_trial" : "",
+        params.metricEvidence.direction
+          ? `metric_direction:${params.metricEvidence.direction}`
+          : "",
+        params.metricEvidence.directionSource
+          ? `metric_direction_source:${params.metricEvidence.directionSource}`
+          : "",
         params.multiSeedReady ? "multi_seed_ready" : "",
         params.ablationReady ? "ablation_ready" : "",
         params.metricEvidence.source ? `metric_source:${params.metricEvidence.source}` : "",
-      ]),
+      ], 7),
       blockers: executionBlockers,
     },
     {
@@ -346,8 +595,111 @@ function buildExperimentAnalysisGate(params: {
     decision,
     rule: "karpathy_improvement_required_then_2_of_3",
     primary_gate: "execution_reviewer",
+    metric_contract: {
+      metric_name: params.metricEvidence.metricName,
+      direction: params.metricEvidence.direction,
+      direction_source: params.metricEvidence.directionSource,
+      minimum_improvement: params.metricEvidence.minimumImprovement,
+      observed_delta: params.metricEvidence.delta,
+      observed_delta_source: params.metricEvidence.source,
+      experiment_id: params.metricEvidence.experimentId,
+      paper_contribution_metric: params.metricEvidence.paperContributionMetric,
+    },
     hard_blockers: hardBlockers,
     votes,
+  };
+}
+
+function buildNextCandidateGuidance(params: {
+  decision: ExperimentSearchDecision;
+  validationStage: string;
+  search: ReturnType<typeof normalizeExperimentSearchState>;
+  ledgerExperiments: Record<string, unknown>[];
+  failureClusters: ExperimentFailureCluster[];
+  analysisGate: ExperimentAnalysisGate | null;
+  metricContract: PrimaryMetricContract;
+  innovationAnchorPoints: string[];
+  innerLoop: ReturnType<typeof normalizeExperimentInnerLoopContract>;
+}): ExperimentNextCandidateGuidance | null {
+  if (params.decision !== "continue_tuning" && params.decision !== "narrow_search") {
+    return null;
+  }
+  const gateVoteBlockers =
+    params.analysisGate?.votes.flatMap((vote) => vote.blockers) ?? [];
+  const blockerBasis = uniqueCompactStrings(
+    [
+      ...gateVoteBlockers,
+      params.analysisGate?.decision === "continue_search"
+        ? "analysis_gate_continue_search"
+        : null,
+      params.search.searchExhaustionStatus
+        ? `search_exhaustion:${params.search.searchExhaustionStatus}`
+        : null,
+    ],
+    10
+  );
+  const avoidExperimentIds = uniqueCompactStrings(
+    params.ledgerExperiments.map(
+      (entry) => readString(entry.experiment_id) ?? readString(entry.experimentId)
+    )
+  );
+  const avoidOneChangeSignatures = uniqueCompactStrings([
+    params.search.oneChangeSignature,
+    ...params.ledgerExperiments.flatMap((entry) => [
+      readString(entry.one_change_signature),
+      readString(entry.oneChangeSignature),
+      readString(readRecord(entry.metadata)?.one_change_signature),
+      readString(readRecord(entry.metadata)?.oneChangeSignature),
+    ]),
+  ]);
+  const requiredProperties = uniqueCompactStrings([
+    "one_change_signature",
+    "fixed_trial_budget",
+    "baseline_fairness",
+    "primary_metric_delta",
+    params.metricContract.direction ? "explicit_metric_direction" : null,
+    params.metricContract.minimumImprovement != null
+      ? "minimum_improvement_threshold"
+      : null,
+  ]);
+  const recommendedFocus = uniqueCompactStrings([
+    params.metricContract.metricName
+      ? `optimize_primary_metric:${params.metricContract.metricName}`
+      : "define_primary_metric_before_next_trial",
+    params.metricContract.minimumImprovement != null
+      ? `beat_minimum_improvement:${params.metricContract.minimumImprovement}`
+      : "produce_positive_primary_metric_delta",
+    params.innerLoop.strictComparableBudget
+      ? `stay_within_trial_budget_minutes:${params.innerLoop.trialTimeBudgetMinutes}`
+      : "keep_budget_comparable",
+    params.innovationAnchorPoints.length > 0
+      ? "stay_aligned_to_innovation_anchors"
+      : "record_topic_specific_innovation_anchor",
+  ]);
+  return {
+    schema_version: 1,
+    authority: "experiment_next_candidate_guidance",
+    trigger_decision: params.decision,
+    source_validation_stage: params.validationStage,
+    target: "primary_metric_gain",
+    primary_metric_contract: {
+      metric_name: params.metricContract.metricName,
+      direction: params.metricContract.direction,
+      direction_source: params.metricContract.directionSource,
+      minimum_improvement: params.metricContract.minimumImprovement,
+      paper_contribution_metric: params.metricContract.paperContributionMetric,
+    },
+    required_properties: requiredProperties,
+    avoid: {
+      experiment_ids: avoidExperimentIds,
+      one_change_signatures: avoidOneChangeSignatures,
+      failure_cluster_ids: params.failureClusters
+        .map((cluster) => cluster.clusterId)
+        .slice(0, 8),
+    },
+    blocker_basis: blockerBasis,
+    innovation_anchor_points: params.innovationAnchorPoints.slice(0, 8),
+    recommended_focus: recommendedFocus,
   };
 }
 
@@ -655,9 +1007,14 @@ export function evaluateExperimentSearchDecision(params: {
   const ablationReady = isReadyLike(ablationStatus);
   const plotPackReadyForGate =
     isReadyLike(search.plotPackStatus) || Boolean(search.plotPackPath);
+  const primaryMetricContract = resolvePrimaryMetricContract({
+    spec,
+    manifestRecord,
+  });
   const metricEvidence = selectKarpathyMetricEvidence({
     ledgerExperiments,
     preferredExperimentIds,
+    metricContract: primaryMetricContract,
   });
   const analysisGate = buildExperimentAnalysisGate({
     search,
@@ -1030,6 +1387,18 @@ export function evaluateExperimentSearchDecision(params: {
     validationStage = "search_refinement";
   }
 
+  const nextCandidateGuidance = buildNextCandidateGuidance({
+    decision,
+    validationStage,
+    search,
+    ledgerExperiments,
+    failureClusters,
+    analysisGate: analysisGatePatch,
+    metricContract: primaryMetricContract,
+    innovationAnchorPoints,
+    innerLoop,
+  });
+
   const persistedPatch = {
     ...(analysisGatePatch
       ? {
@@ -1050,6 +1419,9 @@ export function evaluateExperimentSearchDecision(params: {
               ? { status: "searching" }
               : {}),
         }
+      : {}),
+    ...(nextCandidateGuidance
+      ? { next_candidate_guidance: nextCandidateGuidance }
       : {}),
     inner_loop_mode: innerLoop.mode,
     trial_time_budget_minutes: innerLoop.trialTimeBudgetMinutes,

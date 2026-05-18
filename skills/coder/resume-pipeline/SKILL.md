@@ -36,15 +36,16 @@ Use after session loss, gateway restart, or when Researcher asks Coder to contin
 
 ## Resume Logic
 
-1. Determine the target experiment from explicit argument or the first incomplete coder task in `TODOS.md`.
-2. If the code bundle is incomplete, continue `/implement-experiment`.
-3. If the code bundle is complete and `REMOTE_RUN.json` exists:
+1. Verify that `PROJECT_MANIFEST.json.workflow_control` or the current Workflow Guard snapshot routes work to Coder; if ownership is stale, report the blocker instead of taking over.
+2. Determine the target experiment from explicit argument, canonical next action, or the first incomplete coder task in `TODOS.md`.
+3. If the code bundle is incomplete, continue `/implement-experiment`.
+4. If the code bundle is complete and `REMOTE_RUN.json` exists:
    - check remote `screen -ls`
    - if the recorded screen is still active, do not relaunch
    - if the screen is gone, inspect the remote log before deciding whether to relaunch
-4. If the bundle participates in a search session and `planner/EXPERIMENT_SEARCH_SPEC.json` plus bundle-local `SEARCH_STATE.json` exist, resume the git-native inner loop with `/search-experiment` instead of treating the next candidate as an unrelated one-shot launch.
-5. If Researcher assigned a fresh launch and no active run exists, continue with `/run-experiment`.
-6. Return a structured status summary for Researcher to persist into `EXPERIMENT_REGISTRY.md`.
+5. If the bundle participates in a search session and `planner/EXPERIMENT_SEARCH_SPEC.json` plus bundle-local `SEARCH_STATE.json` exist, resume the git-native inner loop with `/search-experiment` instead of treating the next candidate as an unrelated one-shot launch.
+6. If Researcher assigned a fresh launch and no active run exists, continue with `/run-experiment`.
+7. Return a structured status summary for Researcher to persist into `EXPERIMENT_REGISTRY.md`.
 
 ## Safety Rules
 

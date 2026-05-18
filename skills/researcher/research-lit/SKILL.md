@@ -64,7 +64,7 @@ Use the workflow-owned broad retrieval backbone as the primary discovery path wh
    - **Step 17:** If local Zotero MCP is available, sync verified paper identities into the configured project Zotero `selected` collection and put baseline-defining papers into the project `baselines` collection; refresh `{PROJ}/researcher/ZOTERO_PACKET.md`
 3. **After EACH merged search query** (≥20 papers or a materially new PASA cluster):
    - Trigger `/graph-build` if ≥3 new papers ingested; treat it as a short graph-readiness + brainstorm refresh pass, not a manual rebuild loop
-   - Update `PROJECT_MANIFEST.json` with `paper_ingestion` metadata
+   - Update `paper_ingestion` metadata through `research_workflow.set_paper_ingestion` or the active literature/graph materializer
    - If baseline coverage, recent-paper coverage, or metadata quality still feels weak, run `research_workflow.audit_literature_coverage` as a non-blocking diagnosis pass
    - If only a few in-corpus anchors look strong, run `research_workflow.plan_citation_expansion` to create one bounded follow-up packet instead of widening into an uncontrolled crawl
    - If the paper pool is still thin after one packet, run another bounded citation-expansion round with refreshed seeds; do not stop after a single seed packet when baseline coverage is still weak
@@ -268,7 +268,7 @@ Do not postpone the HuggingFace attempt until after later filtering if the curre
 /graph-build
 ```
 
-Update `{PROJ}/PROJECT_MANIFEST.json`:
+Update paper-ingestion evidence through workflow tools, expected to mirror these fields into `{PROJ}/PROJECT_MANIFEST.json`:
 ```json
 {
   "paper_ingestion": {
@@ -386,7 +386,7 @@ Important:
 **After `/graph-build`:**
 
 1. Check project graph presence against the shared global graph
-2. Update `PROJECT_MANIFEST.json` with:
+2. Update `PROJECT_MANIFEST.json` through workflow tools/materializers with:
    - `graph_last_built_at`
    - `paper_ingestion.last_graph_sync_at`
    - shared-graph readiness metadata written by the workflow runtime

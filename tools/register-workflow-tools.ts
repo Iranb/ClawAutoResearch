@@ -126,6 +126,10 @@ import {
 import { runLiteratureProviderEvidence } from "./literature-discovery/provider-evidence-runner";
 import { materializeCapabilityCompletionControllerArtifacts } from "./capability-completion/controller";
 import { materializePapernexusPacketContracts } from "./papernexus-packets/materializer";
+import { materializeAnalysisArtifactsImpl } from "./workflow-guard-materializers/analysis-artifacts-materializer";
+import { materializeWorkflowFinalScorecard } from "./workflow-final-scorecard";
+import { materializeLateStageClosureSmoke } from "./workflow-late-stage-closure-smoke";
+import { evaluatePaperGuruGate } from "./autoresearch-loop-state";
 import { materializeCycleMemory } from "./research-memory-cycle";
 import { materializeWritingSupportArtifacts } from "./research-writing/materializers";
 import { materializeWritingHookPolicies } from "./research-writing/hook-policies";
@@ -1388,6 +1392,9 @@ const SERIALIZED_WORKFLOW_ACTIONS = new Set([
   "materialize_literature_discovery_packet",
   "materialize_plan_state",
   "materialize_papernexus_packet_contracts",
+  "materialize_analysis_artifacts",
+  "materialize_workflow_final_scorecard",
+  "materialize_late_stage_closure_smoke",
   "materialize_paper_story_state",
   "set_storyline_planner_state",
   "materialize_storyline_planner_state",
@@ -1508,6 +1515,9 @@ const WORKFLOW_ACTION_FUNCTIONS: Record<string, string> = {
   materialize_literature_discovery_packet: "materializeLiteratureDiscoveryPacket",
   materialize_plan_state: "materializePlanState",
   materialize_papernexus_packet_contracts: "materializePapernexusPacketContracts",
+  materialize_analysis_artifacts: "materializeAnalysisArtifactsImpl",
+  materialize_workflow_final_scorecard: "materializeWorkflowFinalScorecard",
+  materialize_late_stage_closure_smoke: "materializeLateStageClosureSmoke",
   materialize_idea_catalyst_state: "materializeIdeaCatalystState",
   run_idea_catalyst_research30: "runIdeaCatalystResearch30",
   capture_diagnostic_bundle: "captureWorkflowDiagnosticBundle",
@@ -1557,6 +1567,7 @@ const WORKFLOW_ACTION_FUNCTIONS: Record<string, string> = {
   set_paper_ingestion: "setPaperIngestionState",
   get_theory_state: "getTheoryStateSummary",
   get_writing_contract: "getWritingContractStateSummary",
+  get_paperguru_gate: "evaluatePaperGuruGate",
   get_paper_story_state: "getPaperStoryStateSummary",
   get_storyline_planner_state: "getStorylinePlannerStateSummary",
   get_results_storyline_state: "getResultsStorylineStateSummary",
@@ -1753,8 +1764,46 @@ async function resolveWorkflowToolState(params: {
     projectRequiredMessage:
       "A resolved project is required for this workflow action. Bind the current Discord/channel session to a project or set OPENCLAW_PROJECT.",
     bindingRole:
-      snapshot.role ?? (params.agentCtx.agentId ? params.agentCtx.agentId.toLowerCase() : null),
+      snapshot.role ??
+      (params.agentCtx.agentId ? params.agentCtx.agentId.toLowerCase() : null),
   };
+}
+
+async function canonicalizeReadOnlyWorkflowProjectRoot(
+  projectRoot: string | null
+): Promise<string | null> {
+  if (!projectRoot) {
+    return null;
+  }
+  const resolvedProjectRoot = path.resolve(projectRoot);
+  try {
+    await fs.stat(path.join(resolvedProjectRoot, "PROJECT_MANIFEST.json"));
+    const projectRootStat = await fs.lstat(resolvedProjectRoot);
+    return projectRootStat.isSymbolicLink()
+      ? await fs.realpath(resolvedProjectRoot)
+      : resolvedProjectRoot;
+  } catch {
+    return null;
+  }
+}
+
+async function resolveReadOnlyWorkflowProjectRoot(params: {
+  agentCtx: ToolContext;
+  rawParams: Record<string, unknown>;
+}): Promise<string | null> {
+  const candidates = [
+    readString(params.rawParams.projectRoot),
+    readString(params.rawParams.project_root),
+    readString(params.agentCtx.workspaceDir),
+    readString(process.env.OPENCLAW_PROJECT),
+  ];
+  for (const candidate of candidates) {
+    const projectRoot = await canonicalizeReadOnlyWorkflowProjectRoot(candidate ?? null);
+    if (projectRoot) {
+      return projectRoot;
+    }
+  }
+  return null;
 }
 
 function shouldQueueWorkflowAction(action: string): boolean {
@@ -2270,19 +2319,74 @@ async function resolveBackgroundRunOwnerRuntimeStatus(params: {
   if (!projectRoot) {
     return null;
   }
+  const stage =
+    readString(params.snapshot.currentStage) ??
+    readString(params.backgroundRun.kind) ??
+    null;
+  const owner =
+    readString(params.snapshot.role) ??
+    readString(params.ctx.agentId) ??
+    null;
+  const nextAction =
+    readString(params.backgroundRun.commandText) ??
+    readString(params.snapshot.nextAction) ??
+    readString(params.backgroundRun.kind) ??
+    null;
+  if (params.result.queued === true) {
+    const queueKey = readString(params.result.queueKey) ?? null;
+    if (!queueKey) {
+      return {
+        status: "blocked",
+        stage,
+        owner,
+        nextAction,
+        runtimeState: "degraded",
+        queueKey: null,
+        sessionKey: readString(params.result.sessionKey) ?? null,
+        runId: readString(params.result.runId) ?? null,
+        reason: "runtime_queue_missing_key",
+        error: null,
+        didDispatch: true,
+      };
+    }
+    return {
+      status: "queued",
+      stage,
+      owner,
+      nextAction,
+      runtimeState: "queued",
+      queueKey,
+      sessionKey: readString(params.result.sessionKey) ?? null,
+      runId: readString(params.result.runId) ?? null,
+      reason: readString(params.result.reason) ?? "owner_runtime_queued",
+      error: null,
+      didDispatch: true,
+    };
+  }
+  if (params.result.reason === "session_unavailable") {
+    const queueKey = readString(params.result.queueKey) ?? null;
+    if (queueKey) {
+      return {
+        status: "active",
+        stage,
+        owner,
+        nextAction,
+        runtimeState: "active",
+        queueKey,
+        sessionKey: readString(params.result.sessionKey) ?? null,
+        runId: readString(params.result.runId) ?? null,
+        reason: "background_run_active_duplicate",
+        error: null,
+        didDispatch: false,
+      };
+    }
+  }
   return ensureWorkflowOwnerRuntime({
     projectRoot,
     projectId: params.result.projectId ?? params.snapshot.projectId ?? null,
-    stage:
-      params.snapshot.currentStage ??
-      readString(params.backgroundRun.kind) ??
-      null,
-    owner: params.snapshot.role ?? params.ctx.agentId ?? null,
-    nextAction:
-      readString(params.backgroundRun.commandText) ??
-      params.snapshot.nextAction ??
-      readString(params.backgroundRun.kind) ??
-      null,
+    stage,
+    owner,
+    nextAction,
     summary: params.result.summary,
     queueKey: params.result.queueKey,
     writeRuntimeEvent: false,
@@ -2296,6 +2400,24 @@ async function resolveBackgroundRunOwnerRuntimeStatus(params: {
       runId: params.result.runId,
     }),
   });
+}
+
+function resolveBackgroundRunBroadcastStatus(
+  result: BackgroundRunStartResult
+): Parameters<typeof maybeBroadcastWorkflowStatusUpdate>[0]["status"] {
+  if (result.started) {
+    return "started";
+  }
+  if (result.queued || result.reason === "channel_capacity_reached") {
+    return "queued";
+  }
+  if (result.reason === "session_unavailable") {
+    return "continued";
+  }
+  if (result.reason === "runtime_unavailable") {
+    return "blocked";
+  }
+  return "waiting";
 }
 
 function readLatestHandoffDeliveryAttempt(intent: {
@@ -3261,6 +3383,9 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               "materialize_literature_discovery_packet",
               "materialize_plan_state",
               "materialize_papernexus_packet_contracts",
+              "materialize_analysis_artifacts",
+              "materialize_workflow_final_scorecard",
+              "materialize_late_stage_closure_smoke",
               "materialize_paper_story_state",
               "materialize_storyline_planner_state",
               "materialize_results_storyline_state",
@@ -3300,6 +3425,7 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               "set_paper_ingestion",
   "get_theory_state",
   "get_writing_contract",
+  "get_paperguru_gate",
   "get_paper_story_state",
   "set_storyline_planner_state",
   "get_storyline_planner_state",
@@ -3757,6 +3883,18 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
       },
       async execute(_id, params) {
         const action = String(params.action ?? "");
+        if (action === "get_paperguru_gate") {
+          const resolvedProjectRoot = await resolveReadOnlyWorkflowProjectRoot({
+            agentCtx: ctx,
+            rawParams: params,
+          });
+          if (resolvedProjectRoot) {
+            const gate = await evaluatePaperGuruGate({
+              projectRoot: resolvedProjectRoot,
+            });
+            return textResponse(JSON.stringify(gate, null, 2));
+          }
+        }
         const executeAction = async () => {
           let state = await resolveWorkflowToolState({
             plugin,
@@ -4659,11 +4797,7 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                       sessionKey: ctx.sessionKey,
                       projectId: resolvedProjectId,
                       projectRoot: resolvedProjectRoot,
-                      status: result.started
-                        ? "started"
-                        : result.reason === "channel_capacity_reached"
-                          ? "queued"
-                          : "waiting",
+                      status: resolveBackgroundRunBroadcastStatus(result),
                       stage: snapshot.currentStage,
                       summary: result.summary,
                       idempotencyKeySuffix: [
@@ -4708,6 +4842,13 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               });
               const resolvedProjectId = result.projectId ?? snapshot.projectId;
               const resolvedProjectRoot = result.projectRoot ?? projectRoot;
+              const ownerRuntimeStatus =
+                await resolveBackgroundRunOwnerRuntimeStatus({
+                  result,
+                  snapshot,
+                  ctx,
+                  backgroundRun,
+                });
               if (
                 resolvedProjectRoot &&
                 result.started &&
@@ -4751,11 +4892,7 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                       sessionKey: ctx.sessionKey,
                       projectId: resolvedProjectId,
                       projectRoot: resolvedProjectRoot,
-                      status: result.started
-                        ? "started"
-                        : result.reason === "channel_capacity_reached"
-                          ? "queued"
-                          : "waiting",
+                      status: resolveBackgroundRunBroadcastStatus(result),
                       stage: snapshot.currentStage,
                       summary: backgroundRun.summary ?? result.summary,
                       idempotencyKeySuffix: [
@@ -4780,6 +4917,7 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                     ...result,
                     wrapper: backgroundRun.wrapper,
                     commandText: backgroundRun.commandText,
+                    ownerRuntimeStatus,
                     statusBroadcast,
                   },
                   null,
@@ -6083,6 +6221,13 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
               });
               return textResponse(JSON.stringify(summary, null, 2));
             }
+            case "get_paperguru_gate": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const gate = await evaluatePaperGuruGate({
+                projectRoot: resolvedProjectRoot,
+              });
+              return textResponse(JSON.stringify(gate, null, 2));
+            }
             case "get_paper_story_state": {
               const resolvedProjectRoot = requireWorkflowProjectRoot(state);
               const summary = await getPaperStoryStateSummary({
@@ -6147,6 +6292,30 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
                   "packetPaths"
                 ),
                 trigger: "research_workflow",
+                agentId: ctx.agentId,
+              });
+              return textResponse(JSON.stringify(result, null, 2));
+            }
+            case "materialize_analysis_artifacts": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const result = await materializeAnalysisArtifactsImpl({
+                projectRoot: resolvedProjectRoot,
+                trigger: "research_workflow",
+                agentId: ctx.agentId,
+              });
+              return textResponse(JSON.stringify(result, null, 2));
+            }
+            case "materialize_workflow_final_scorecard": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const result = await materializeWorkflowFinalScorecard({
+                projectRoot: resolvedProjectRoot,
+              });
+              return textResponse(JSON.stringify(result, null, 2));
+            }
+            case "materialize_late_stage_closure_smoke": {
+              const resolvedProjectRoot = requireWorkflowProjectRoot(state);
+              const result = await materializeLateStageClosureSmoke({
+                projectRoot: resolvedProjectRoot,
                 agentId: ctx.agentId,
               });
               return textResponse(JSON.stringify(result, null, 2));
@@ -7838,6 +8007,6 @@ export function registerWorkflowTools(plugin: PluginRegistrationContext) {
         });
       },
     }),
-    { optional: true }
+    { name: "research_workflow", optional: true }
   );
 }

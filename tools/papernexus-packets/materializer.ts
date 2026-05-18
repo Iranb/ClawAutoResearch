@@ -290,6 +290,56 @@ function collectSourceSpanIds(value: unknown): string[] {
     .filter((entry): entry is string => Boolean(entry));
 }
 
+function inferExplicitBudgetText(value: unknown): string | null {
+  const text = asString(value);
+  if (!text) {
+    return null;
+  }
+  const normalized = text.replace(/\s+/gu, " ");
+  const match = normalized.match(
+    /\b(?<amount>\d+(?:\.\d+)?)\s*(?:-| )?(?<unit>minutes?|mins?|m|hours?|hrs?|h)\s*(?<qualifier>per(?:-| )?run|cpu trial|trial|run|budget)?(?:\s+budget)?\b/iu
+  );
+  if (!match?.groups) {
+    return null;
+  }
+  const matchedText = match[0];
+  if (!/\b(per(?:-| )?run|trial|run|budget)\b/iu.test(matchedText)) {
+    return null;
+  }
+  const amount = match.groups.amount;
+  const unit = /^h(?:ours?|rs?)?$/iu.test(match.groups.unit)
+    ? "hour"
+    : "minute";
+  const parts = [amount, unit];
+  if (/\bper(?:-| )?run\b/iu.test(matchedText)) {
+    parts.push("per-run");
+  }
+  if (/\bcpu\b/iu.test(normalized)) {
+    parts.push("CPU");
+  }
+  parts.push("budget");
+  return parts.join(" ");
+}
+
+function inferResearchProgramTextBudget(
+  researchProgram: Record<string, unknown>
+): string | null {
+  const textCandidates = [
+    pickString(researchProgram, ["goal"]),
+    pickString(researchProgram, ["problem_statement", "problemStatement"]),
+    pickString(researchProgram, ["description", "topic"]),
+    ...asStringArray(researchProgram.success_criteria ?? researchProgram.successCriteria),
+    ...asStringArray(researchProgram.constraints),
+  ];
+  for (const candidate of textCandidates) {
+    const budget = inferExplicitBudgetText(candidate);
+    if (budget) {
+      return budget;
+    }
+  }
+  return null;
+}
+
 function inferResearchProgramBudgetText(
   researchProgram: Record<string, unknown>
 ): string | null {
@@ -303,6 +353,10 @@ function inferResearchProgramBudgetText(
   ]);
   if (explicit) {
     return explicit;
+  }
+  const textBudget = inferResearchProgramTextBudget(researchProgram);
+  if (textBudget) {
+    return textBudget;
   }
   const budgetCriterion = asStringArray(
     researchProgram.success_criteria ?? researchProgram.successCriteria
@@ -559,6 +613,39 @@ function deriveInnovationPacketFromBundle(params: {
       ),
     },
     last_updated_at: nowIso(),
+  };
+}
+
+function deriveBlockedInnovationPacket(params: {
+  existingPacket: Record<string, unknown>;
+  ideaCatalystContract: IdeaCatalystContract | null;
+  ideaCatalystContractPath: string;
+  projectRoot: string;
+}): Record<string, unknown> {
+  return {
+    contract_version: "innovation-packet-v1",
+    status: "blocked",
+    generated_from: "idea_catalyst_contract",
+    previous_status:
+      normalizeStage(params.existingPacket.status) ??
+      asString(params.existingPacket.status) ??
+      null,
+    previous_selected_idea_fragment_id:
+      pickString(params.existingPacket, [
+        "selected_idea_fragment_id",
+        "selectedIdeaFragmentId",
+      ]) ?? null,
+    blocking_contract_path: path.relative(
+      params.projectRoot,
+      params.ideaCatalystContractPath
+    ),
+    graph_decision_path:
+      params.ideaCatalystContract?.graph_decision_path ??
+      DEFAULT_GRAPH_BUILD_DECISION_PATH,
+    superseded_reason:
+      params.ideaCatalystContract?.reason ??
+      "Idea-Catalyst contract is not ready.",
+    stale_packet_terminalized_at: nowIso(),
   };
 }
 
@@ -1259,6 +1346,17 @@ export async function materializePapernexusPacketContracts(params: {
   });
   if (innovationPacket) {
     await writeJsonEnsured(innovationPacketPath, innovationPacket);
+    generatedFiles.push(path.relative(projectRoot, innovationPacketPath));
+  } else if (rawInnovationPacket && ideaCatalystContract?.status !== "ready") {
+    await writeJsonEnsured(
+      innovationPacketPath,
+      deriveBlockedInnovationPacket({
+        existingPacket: rawInnovationPacket,
+        ideaCatalystContract,
+        ideaCatalystContractPath,
+        projectRoot,
+      })
+    );
     generatedFiles.push(path.relative(projectRoot, innovationPacketPath));
   }
 

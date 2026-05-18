@@ -459,6 +459,129 @@ test("experiment analysis gate treats lower-is-better primary metrics as positiv
   assert.equal(result.persistedPatch.analysis_gate.votes[0].basis[0], "positive_primary_metric_delta");
 });
 
+test("experiment analysis gate prefers search spec metric direction over name heuristics", () => {
+  const result = evaluateExperimentSearchDecision({
+    experimentSearch: {
+      status: "searching",
+      baseline_fairness_status: "ready",
+      implementation_confidence: "trusted",
+      multi_seed_status: "ready",
+      ablation_status: "ready",
+      innovation_status: "supported",
+      search_exhaustion_status: "active",
+      evidence_cleanliness_status: "clean",
+      one_change_signature: "ranking temperature clamp",
+      one_change_validation_status: "ready",
+      comparable_trial_budget_status: "within_budget",
+      last_trial_outcome: "keep",
+      incumbent_experiment_id: "exp-2",
+      evaluation_summary_path: "researcher/evaluation_summary.json",
+      plot_pack_status: "ready",
+    },
+    experimentSearchSpec: {
+      primary_metric_contract: {
+        metric_name: "ranking_score",
+        direction: "lower_is_better",
+        minimum_improvement: 0.05,
+      },
+    },
+    experimentLedger: {
+      experiments: [
+        {
+          experiment_id: "exp-2",
+          status: "completed",
+          decision: "keep",
+          key_metric: {
+            name: "score",
+            value: 0.4,
+            baseline: 0.5,
+          },
+        },
+      ],
+    },
+    gpuMonitor: { recommendation: "none", likelyFinishedRunCount: 0 },
+  });
+
+  assert.equal(result.decision, "innovation_supported");
+  assert.equal(result.persistedPatch.analysis_gate.decision, "ready_for_analysis");
+  assert.equal(result.persistedPatch.analysis_gate.metric_contract.direction, "lower_is_better");
+  assert.equal(result.persistedPatch.analysis_gate.metric_contract.direction_source, "search_spec");
+  assert.ok(
+    Math.abs(result.persistedPatch.analysis_gate.metric_contract.observed_delta - 0.1) < 1e-12
+  );
+  assert.match(
+    result.persistedPatch.analysis_gate.votes[0].basis.join(" "),
+    /minimum_improvement_met:0.05/
+  );
+});
+
+test("experiment analysis gate requires the search spec minimum improvement threshold", () => {
+  const result = evaluateExperimentSearchDecision({
+    experimentSearch: {
+      status: "searching",
+      baseline_fairness_status: "ready",
+      implementation_confidence: "trusted",
+      multi_seed_status: "ready",
+      ablation_status: "ready",
+      innovation_status: "supported",
+      search_exhaustion_status: "active",
+      evidence_cleanliness_status: "clean",
+      one_change_signature: "ranking temperature clamp",
+      one_change_validation_status: "ready",
+      comparable_trial_budget_status: "within_budget",
+      last_trial_outcome: "keep",
+      incumbent_experiment_id: "exp-2",
+      evaluation_summary_path: "researcher/evaluation_summary.json",
+      plot_pack_status: "ready",
+    },
+    experimentSearchSpec: {
+      primary_metric_contract: {
+        metric_name: "ranking_score",
+        direction: "lower_is_better",
+        minimum_improvement: 0.05,
+      },
+    },
+    experimentLedger: {
+      experiments: [
+        {
+          experiment_id: "exp-2",
+          status: "completed",
+          decision: "keep",
+          key_metric: {
+            name: "score",
+            value: 0.48,
+            baseline: 0.5,
+          },
+        },
+      ],
+    },
+    gpuMonitor: { recommendation: "none", likelyFinishedRunCount: 0 },
+  });
+
+  assert.equal(result.decision, "continue_tuning");
+  assert.equal(result.validationStage, "analysis_gate_continue_search");
+  assert.equal(result.persistedPatch.analysis_gate.decision, "continue_search");
+  assert.deepEqual(result.persistedPatch.analysis_gate.votes[0].blockers, [
+    "primary_metric_below_minimum_improvement",
+  ]);
+  assert.equal(
+    result.persistedPatch.next_candidate_guidance.authority,
+    "experiment_next_candidate_guidance"
+  );
+  assert.equal(
+    result.persistedPatch.next_candidate_guidance.primary_metric_contract.minimum_improvement,
+    0.05
+  );
+  assert.deepEqual(result.persistedPatch.next_candidate_guidance.avoid.experiment_ids, [
+    "exp-2",
+  ]);
+  assert.ok(
+    result.persistedPatch.next_candidate_guidance.required_properties.includes(
+      "minimum_improvement_threshold"
+    )
+  );
+});
+
 test("experiment analysis gate keeps Karpathy search running when no positive metric gain exists", () => {
   const result = evaluateExperimentSearchDecision({
     experimentSearch: {
@@ -504,6 +627,25 @@ test("experiment analysis gate keeps Karpathy search running when no positive me
   assert.deepEqual(result.persistedPatch.analysis_gate.votes[0].blockers, [
     "no_positive_primary_metric_delta",
   ]);
+  assert.equal(
+    result.persistedPatch.next_candidate_guidance.source_validation_stage,
+    "analysis_gate_continue_search"
+  );
+  assert.ok(
+    result.persistedPatch.next_candidate_guidance.blocker_basis.includes(
+      "no_positive_primary_metric_delta"
+    )
+  );
+  assert.ok(
+    result.persistedPatch.next_candidate_guidance.required_properties.includes(
+      "one_change_signature"
+    )
+  );
+  assert.ok(
+    result.persistedPatch.next_candidate_guidance.recommended_focus.includes(
+      "produce_positive_primary_metric_delta"
+    )
+  );
 });
 
 test("experiment analysis gate rejects positive metric deltas from discarded trials", () => {

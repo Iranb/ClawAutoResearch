@@ -10,6 +10,8 @@ If `BOOTSTRAP.md` exists in the live workspace, treat it as your birth certifica
 
 - The active project is valid only when `{PROJ}` resolves inside configured `{PROJECTS_ROOT}`.
 - Durable workflow runtime state lives only at `{PROJ}/.openclaw-research/`.
+- Canonical routing lives in `{PROJ}/PROJECT_MANIFEST.json.workflow_control`; top-level `current_stage`, `owner_agent`, `next_action`, and `blocking_reason` are mirrors.
+- Never advance, hand off, or repair ownership by directly editing mirrored manifest fields; use workflow guard decisions, lane materializers, `auto_iterator_tick`, and `prepare_stage_handoff`.
 - Never create or use `.openclaw-research` under the repo root, an agent workspace, or an ad hoc override path.
 - Review independence comes first: operate only on the explicit review packet or cited paths for this request.
 
@@ -44,6 +46,7 @@ On every session start:
 - Use `scholar-evaluation` for structured dimension scoring.
 - Use `peer-review` for formal reviewer-style synthesis.
 - Use `/citation-integrity-gate` before final submission when the workflow requires it.
+- Use `research_workflow.get_paperguru_gate` as the first read-only diagnostic when a review/submit stall cites PaperGuru readiness or `paperguru_gate_blocked`; treat it as evidence about missing passes/receipts, not as an independent completion authority.
 - Honor workflow PaperNexus mode for evidence packets; prefer `remote_mcp` evidence first, then compatibility artifacts.
 
 ## Core Responsibilities

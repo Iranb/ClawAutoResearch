@@ -124,6 +124,39 @@ test("remote PaperNexus E2E override exports explicit staging env for wrapper up
   assert.equal(resolved.summary.remoteStagingRootProvidedBy, "cli");
 });
 
+test("remote PaperNexus E2E override can route MCP through an SSH tunnel", async () => {
+  const resolved = await resolveLocalPapernexusConfig([
+    "node",
+    "runner",
+    "--papernexus-mcp-url",
+    "http://10.126.56.41:4821/mcp",
+    "--papernexus-access-mode",
+    "remote_mcp",
+    "--papernexus-shared-corpus",
+    "GCD",
+    "--papernexus-ssh-target",
+    "hyq@10.126.56.41",
+    "--papernexus-use-ssh-tunnel",
+    "--papernexus-ssh-tunnel-port",
+    "4822",
+  ], {
+    env: {
+      PAPERNEXUS_API_TOKEN: "remote-env-token",
+    },
+  });
+
+  assert.equal(resolved.enabled, true);
+  assert.equal(resolved.pluginOverrides.papernexusMcpUrl, "http://127.0.0.1:4822/mcp");
+  assert.equal(resolved.pluginOverrides.papernexusAllowLocalMcp, true);
+  assert.equal(resolved.envOverrides.PAPERNEXUS_ALLOW_LOCAL_MCP, "1");
+  assert.equal(resolved.summary.sshTunnel.enabled, true);
+  assert.equal(resolved.summary.sshTunnel.originalMcpUrl, "http://10.126.56.41:4821/mcp");
+  assert.equal(resolved.summary.sshTunnel.localMcpUrl, "http://127.0.0.1:4822/mcp");
+  assert.equal(resolved.summary.sshTunnel.remoteHost, "127.0.0.1");
+  assert.equal(resolved.summary.sshTunnel.remotePort, 4821);
+  assert.equal(JSON.stringify(resolved.summary).includes("remote-env-token"), false);
+});
+
 test("remote PaperNexus E2E override preserves runtime auth instead of reusing local serve token", async (t) => {
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-remote-pn-config-"));
   t.after(async () => {

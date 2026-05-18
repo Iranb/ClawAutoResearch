@@ -94,7 +94,7 @@ export type ApiLike = {
   };
   registerTool: (
     spec: ToolSpec | ((ctx: ToolContext) => ToolSpec | null | undefined),
-    options?: { optional?: boolean }
+    options?: { name?: string; names?: string[]; optional?: boolean }
   ) => void;
   registerCommand?: (command: OpenClawPluginCommandDefinition) => void;
   registerService?: (service: OpenClawPluginService) => void;

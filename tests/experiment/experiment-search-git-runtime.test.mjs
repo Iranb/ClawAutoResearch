@@ -103,6 +103,12 @@ async function makeSearchGitProject() {
       packet_path: "researcher/papernexus/EXPERIMENT_MEMORY_PACKET.json",
       sync_status_path: "researcher/papernexus/EXPERIMENT_MEMORY_SYNC_STATUS.json",
     },
+    primary_metric_contract: {
+      metric_name: "h_score",
+      direction: "higher_is_better",
+      minimum_improvement: 0.01,
+      primary_evidence: ["coder/experiments/track-a/exp-cand-1/RESULT_SUMMARY.json"],
+    },
   });
 
   await runGit(projectRoot, ["init", "-b", "main"]);
@@ -153,6 +159,12 @@ async function makeSearchGitProject() {
       graph_memory_sync_status_path:
         "researcher/papernexus/EXPERIMENT_MEMORY_SYNC_STATUS.json",
       graph_memory_last_materialized_at: null,
+    },
+    benchmark_protocol: {
+      primary_metric: "h_score",
+      metric_direction: "higher_is_better",
+      minimum_improvement: 0.01,
+      paper_contribution_metric: "h_score improvement over incumbent",
     },
     experiment_search: experimentSearch,
   });
@@ -318,6 +330,22 @@ test("research_workflow enforces multi-agent review before creating and promotin
   assert.equal(promotedEntry.metadata.trial_contract.git_branch, `${candidateBranchPrefix}exp-cand-1`);
   assert.equal(promotedEntry.metadata.trial_contract.commit_hash, candidateCommit);
   assert.equal(promotedEntry.metadata.trial_contract.decision, "advance");
+  assert.equal(
+    promotedEntry.metadata.trial_contract.primary_metric_contract.metric_name,
+    "h_score"
+  );
+  assert.equal(
+    promotedEntry.metadata.trial_contract.primary_metric_contract.direction,
+    "higher_is_better"
+  );
+  assert.equal(
+    promotedEntry.metadata.trial_contract.primary_metric_contract.minimum_improvement,
+    0.01
+  );
+  assert.equal(
+    promotedEntry.metadata.trial_contract.primary_metric_contract.paper_contribution_metric,
+    "h_score improvement over incumbent"
+  );
   const packet = JSON.parse(
     await fs.readFile(
       path.join(projectRoot, "researcher", "papernexus", "EXPERIMENT_MEMORY_PACKET.json"),
@@ -434,6 +462,15 @@ test("research_workflow runs a reviewed experiment trial in one runtime pass", a
   assert.equal(entry.metadata.trial_contract.seed, 42);
   assert.equal(entry.metadata.trial_contract.fixed_budget_minutes, 5);
   assert.equal(entry.metadata.trial_contract.primary_metric.name, "h_score");
+  assert.equal(entry.metadata.trial_contract.primary_metric_contract.metric_name, "h_score");
+  assert.equal(
+    entry.metadata.trial_contract.primary_metric_contract.minimum_improvement,
+    0.01
+  );
+  assert.equal(
+    entry.metadata.trial_contract.primary_metric.minimum_improvement,
+    0.01
+  );
   assert.equal(entry.metadata.trial_contract.keep_discard_decision, "keep");
   assert.equal(entry.metadata.trial_contract.cost.local_execution, true);
   assert.equal(entry.metadata.trial_contract.failure_reason, null);

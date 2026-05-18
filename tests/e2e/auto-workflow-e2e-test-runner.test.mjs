@@ -10,12 +10,14 @@ import {
   buildAutoWorkflowResearchHarnessScorecard,
   buildAutoWorkflowPrChecklist,
   buildAutoWorkflowTransportParityScorecard,
+  buildPapernexusSshTunnelCommand,
   buildAutoWorkflowTraceEvalScorecard,
   collectAutoWorkflowEnvironmentPreflight,
   configuredProjectsRootFromOpenClawConfig,
   configuredModelRefsForAgent,
   deriveAutoWorkflowChildMaxIterations,
   defaultProjectIdForAutoWorkflowRun,
+  formatHumanSummary,
   materializeAutoWorkflowModelOverrideConfig,
   normalizeAutoWorkflowBootstrapTransport,
   normalizeAutoWorkflowCommand,
@@ -25,6 +27,7 @@ import {
   shouldAutoGenerateLiveProjectId,
   shouldEnableAgentModelSyncWatchdog,
   shouldRestartGatewayAfterAgentModelSync,
+  terminalizeAutoWorkflowE2ERuntimeResidue,
   verifyAgentRuntimeModelConfig,
 } from "../../scripts/run_auto_workflow_e2e_test.mjs";
 import {
@@ -437,6 +440,8 @@ test("auto workflow E2E runner builds a Discord parity scorecard", () => {
   assert.equal(scorecard.expectedCommandSource, "native");
   assert.equal(scorecard.localFallbackInjected, false);
   assert.equal(scorecard.hiddenProjectIdOverrideUsed, false);
+  assert.equal(scorecard.lanes[0].userPathAligned, true);
+  assert.deepEqual(scorecard.lanes[0].alignmentIssues, []);
   assert.equal(
     scorecard.lanes[0].bootstrapSessionKey,
     "agent:researcher:discord:slash:owner"
@@ -445,6 +450,55 @@ test("auto workflow E2E runner builds a Discord parity scorecard", () => {
     scorecard.lanes[0].commandTargetSessionKey,
     "agent:researcher:discord:channel:gcd-research-lab"
   );
+});
+
+test("auto workflow E2E runner flags Discord parity transport drift", () => {
+  const scorecard = buildAutoWorkflowTransportParityScorecard({
+    command: normalizeAutoWorkflowCommand("/auto-research"),
+    mode: "live",
+    bootstrapTransport: "discord",
+    conversationId: "gcd-research-lab",
+    resultSummary: {
+      lanes: [
+        {
+          lane: "experiment",
+          transport: "local",
+          conversationId: "gcd-research-lab",
+          projectRoot: "/tmp/projects/generalized-category-discovery",
+          finalVerdict: "partial",
+          commandSource: "local",
+          bootstrapFallbackTransport: "fell back to local command replay",
+          bootstrapSessionKey: "agent:researcher:local:conversation:gcd-research-lab",
+          commandTargetSessionKey: "agent:researcher:local:conversation:gcd-research-lab",
+          originatingChannel: "local",
+          originatingTo: "conversation:gcd-research-lab",
+        },
+      ],
+    },
+    workflowLocalFallback: {
+      codeReviewFallbackAfterMs: null,
+      autoModeDiscussionFallbackAfterMs: null,
+    },
+    projectIdArg: null,
+    generatedProjectId: null,
+    explicitProjectId: null,
+  });
+
+  assert.equal(scorecard.profile, "discord-parity");
+  assert.equal(scorecard.userPathAligned, false);
+  assert.equal(scorecard.lanes[0].userPathAligned, false);
+  assert.deepEqual(scorecard.lanes[0].alignmentIssues, [
+    "transport_mismatch_expected_discord_actual_local",
+    "command_source_mismatch_expected_native_actual_local",
+    "unexpected_bootstrap_fallback_transport",
+    "bootstrap_session_not_discord_scoped",
+    "command_target_session_not_discord_scoped",
+    "originating_channel_not_discord",
+  ]);
+  assert.equal(scorecard.lanes[0].originatingChannel, "local");
+  assert.equal(scorecard.lanes[0].originatingTo, "conversation:gcd-research-lab");
+  assert.equal(scorecard.lanes[0].expectedOriginatingChannel, "discord");
+  assert.equal(scorecard.lanes[0].expectedOriginatingTo, "channel:gcd-research-lab");
 });
 
 test("auto workflow E2E runner builds a compact trace/eval scorecard", () => {
@@ -536,6 +590,110 @@ test("auto workflow E2E runner builds a PR checklist artifact model", () => {
   assert.match(checklist.rollback.strategy, /Revert the code diff/);
   assert.ok(checklist.residualRisks.includes("run_status_partial"));
   assert.ok(checklist.residualRisks.includes("writing_stage_not_reached_by_this_run"));
+});
+
+test("auto workflow PR checklist residual risks include transport parity drift", () => {
+  const checklist = buildAutoWorkflowPrChecklist({
+    generatedAt: "2026-05-18T01:00:00.000Z",
+    status: "partial",
+    failureReason: "max_iterations_reached",
+    command: normalizeAutoWorkflowCommand("/auto-research"),
+    topic: "SQLite index design",
+    mode: "live",
+    bootstrapTransport: "discord",
+    preflight: [
+      { name: "node_version", ok: true, detail: "25.4.0" },
+    ],
+    resultSummary: {
+      lanes: [
+        {
+          lane: "experiment",
+          transport: "local",
+          projectRoot: "/tmp/project",
+          finalVerdict: "partial",
+          finalStage: "idea",
+          finalOwner: "researcher",
+          blockingReason: "idea_catalyst_pending",
+        },
+      ],
+    },
+    transportParity: {
+      profile: "discord-parity",
+      userPathAligned: false,
+      expectedCommandSource: "native",
+      lanes: [
+        {
+          lane: "experiment",
+          userPathAligned: false,
+          alignmentIssues: [
+            "transport_mismatch_expected_discord_actual_local",
+            "command_source_mismatch_expected_native_actual_local",
+          ],
+        },
+      ],
+    },
+    summaryPath: "/tmp/run/AUTO_WORKFLOW_E2E_SUMMARY.json",
+    traceEvalScorecardPath: "/tmp/run/TRACE_EVAL_SCORECARD.json",
+    researchHarnessScorecardPath: "/tmp/run/RESEARCH_HARNESS_SCORECARD.json",
+    runRoot: "/tmp/run",
+    projectsRoot: "/tmp/projects",
+  });
+
+  assert.equal(checklist.validationEvidence[3].status, "fail");
+  assert.ok(
+    checklist.residualRisks.includes(
+      "transport_parity_user_path_misaligned:experiment:transport_mismatch_expected_discord_actual_local,experiment:command_source_mismatch_expected_native_actual_local"
+    )
+  );
+});
+
+test("auto workflow human summary includes transport parity alignment issues", () => {
+  const text = formatHumanSummary({
+    status: "partial",
+    command: normalizeAutoWorkflowCommand("/auto-research"),
+    topic: "SQLite index design",
+    projectId: null,
+    mode: "live",
+    conversationId: "gcd-research-lab",
+    runRoot: "/tmp/run",
+    projectsRoot: "/tmp/projects",
+    summaryPath: "/tmp/run/AUTO_WORKFLOW_E2E_SUMMARY.json",
+    traceEvalScorecardPath: "/tmp/run/TRACE_EVAL_SCORECARD.json",
+    researchHarnessScorecardPath: "/tmp/run/RESEARCH_HARNESS_SCORECARD.json",
+    prChecklistPath: "/tmp/run/PR_CHECKLIST.json",
+    projectsDashboardHtmlPath: "/tmp/run/dashboard.html",
+    projectsDashboardPath: "/tmp/run/dashboard.json",
+    preflight: [],
+    transportParity: {
+      profile: "discord-parity",
+      userPathAligned: false,
+      expectedCommandSource: "native",
+      localFallbackInjected: false,
+      hiddenProjectIdOverrideUsed: false,
+      lanes: [
+        {
+          lane: "experiment",
+          userPathAligned: false,
+          alignmentIssues: [
+            "transport_mismatch_expected_discord_actual_local",
+            "command_source_mismatch_expected_native_actual_local",
+            "originating_channel_not_discord",
+          ],
+          commandTargetSessionKey: "agent:researcher:local:conversation:gcd-research-lab",
+          originatingChannel: "local",
+          originatingTo: "conversation:gcd-research-lab",
+          projectId: "sqlite-index-design",
+        },
+      ],
+    },
+    result: { lanes: [] },
+  });
+
+  assert.match(text, /transport parity: discord-parity aligned=false/);
+  assert.match(
+    text,
+    /transport parity experiment: aligned=false issues=transport_mismatch_expected_discord_actual_local,command_source_mismatch_expected_native_actual_local,originating_channel_not_discord target=agent:researcher:local:conversation:gcd-research-lab origin=local:conversation:gcd-research-lab/
+  );
 });
 
 test("auto workflow E2E runner preserves explicit fallback configuration", () => {
@@ -640,6 +798,73 @@ test("auto workflow E2E runner validates exact runtime model provider state", ()
   assert.match(missing.detail, /missing_models=bailian\/qwen3\.6-plus/);
 });
 
+test("auto workflow E2E runner accepts runtime auth-state aliases for agent model providers", () => {
+  const config = {
+    models: {
+      providers: {
+        qwen: {
+          models: [{ id: "qwen3.6-plus" }],
+        },
+      },
+    },
+    agents: {
+      defaults: {
+        model: {
+          primary: "qwen/qwen3.6-plus",
+        },
+      },
+      list: [{ id: "researcher" }],
+    },
+  };
+  const modelsCatalog = {
+    providers: {
+      qwen: {
+        models: [{ id: "qwen3.6-plus" }],
+      },
+    },
+  };
+  const authState = {
+    lastGood: {
+      qwen: "modelstudio:default",
+    },
+  };
+
+  const resolved = verifyAgentRuntimeModelConfig({
+    config,
+    agentId: "researcher",
+    agentDir: "/tmp/agent",
+    modelsCatalog,
+    authProfile: {
+      profiles: {
+        "modelstudio:default": {
+          type: "api_key",
+          provider: "modelstudio",
+        },
+      },
+    },
+    authState,
+    acceptedAuthProviders: [],
+  });
+
+  assert.equal(resolved.ok, true);
+  assert.match(resolved.detail, /credentials=qwen:auth-state:modelstudio:default/);
+
+  const missingProfile = verifyAgentRuntimeModelConfig({
+    config,
+    agentId: "researcher",
+    agentDir: "/tmp/agent",
+    modelsCatalog,
+    authProfile: {
+      profiles: {},
+    },
+    authState,
+    acceptedAuthProviders: [],
+  });
+
+  assert.equal(missingProfile.ok, false);
+  assert.match(missingProfile.detail, /missing_credentials=qwen/);
+});
+
 test("auto workflow E2E runner preflights environment without leaking secrets", async (t) => {
   const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-e2e-env-"));
   t.after(async () => {
@@ -704,6 +929,37 @@ test("auto workflow E2E runner preflights environment without leaking secrets", 
   const renderedDetails = checks.map((entry) => entry.detail).join("\n");
   assert.doesNotMatch(renderedDetails, /paper-secret|gateway-secret|super-secret/);
   assert.doesNotMatch(renderedDetails, /user:super-secret/);
+});
+
+test("auto workflow E2E runner builds a redacted PaperNexus SSH tunnel command", () => {
+  const command = buildPapernexusSshTunnelCommand({
+    summary: {
+      sshTunnel: {
+        enabled: true,
+        sshTarget: "hyq@10.126.56.41",
+        localHost: "127.0.0.1",
+        localPort: 4822,
+        remoteHost: "127.0.0.1",
+        remotePort: 4821,
+      },
+    },
+  });
+
+  assert.equal(command.ok, true);
+  assert.equal(command.command, "ssh");
+  assert.deepEqual(command.args, [
+    "-N",
+    "-L",
+    "127.0.0.1:4822:127.0.0.1:4821",
+    "-o",
+    "ExitOnForwardFailure=yes",
+    "-o",
+    "BatchMode=yes",
+    "-o",
+    "ConnectTimeout=10",
+    "hyq@10.126.56.41",
+  ]);
+  assert.doesNotMatch(command.detail, /token|secret/i);
 });
 
 test("auto workflow E2E runner does not require repo node_modules for fixture preflight", async (t) => {
@@ -1775,6 +2031,71 @@ test("live no-Discord orchestrator passes the gateway runtime into owner handoff
   assert.equal(params.requesterSessionKey, "agent:researcher:local:e2e");
   assert.equal(params.waitTimeoutMs, 45_000);
   assert.match(params.extraBody, /Produce a real research plan/);
+});
+
+test("auto workflow E2E closeout supersedes generated-project runtime residue", async (t) => {
+  const projectsRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-e2e-runtime-closeout-"));
+  t.after(() => fs.rm(projectsRoot, { recursive: true, force: true }));
+  const projectRoot = path.join(projectsRoot, "research-closeout");
+  const runtimeDir = path.join(projectRoot, ".openclaw-research");
+  await fs.mkdir(runtimeDir, { recursive: true });
+  await fs.writeFile(
+    path.join(runtimeDir, "workflow-runtime-sessions.json"),
+    `${JSON.stringify(
+      {
+        schemaVersion: 1,
+        entries: [
+          { sessionKey: "active-session", status: "active", lastError: null },
+          { sessionKey: "idle-session", status: "idle", lastError: null },
+        ],
+      },
+      null,
+      2
+    )}\n`
+  );
+  await fs.writeFile(
+    path.join(runtimeDir, "workflow-runtime-queue.json"),
+    `${JSON.stringify(
+      {
+        schemaVersion: 1,
+        entries: [
+          { queueKey: "running-queue", status: "running", lastError: null },
+          { queueKey: "done-queue", status: "completed", lastError: null },
+        ],
+      },
+      null,
+      2
+    )}\n`
+  );
+
+  const closeout = await terminalizeAutoWorkflowE2ERuntimeResidue({
+    mode: "live",
+    projectsRoot,
+    resultSummary: {
+      lanes: [{ lane: "experiment", projectRoot }],
+    },
+    finishedAt: "2026-05-16T15:00:00.000Z",
+    reason: "test_closeout",
+  });
+
+  assert.equal(closeout.enabled, true);
+  assert.equal(closeout.sessionCount, 1);
+  assert.equal(closeout.queueCount, 1);
+  assert.match(closeout.lanes[0].sessions.backupPath, /workflow-runtime-sessions\.json\.e2e-closeout-backup-/);
+  assert.match(closeout.lanes[0].queue.backupPath, /workflow-runtime-queue\.json\.e2e-closeout-backup-/);
+
+  const sessions = JSON.parse(
+    await fs.readFile(path.join(runtimeDir, "workflow-runtime-sessions.json"), "utf8")
+  );
+  const queue = JSON.parse(
+    await fs.readFile(path.join(runtimeDir, "workflow-runtime-queue.json"), "utf8")
+  );
+  assert.equal(sessions.entries[0].status, "superseded");
+  assert.equal(sessions.entries[0].terminalReason, "test_closeout");
+  assert.equal(sessions.entries[1].status, "idle");
+  assert.equal(queue.entries[0].status, "superseded");
+  assert.equal(queue.entries[0].terminalReason, "test_closeout");
+  assert.equal(queue.entries[1].status, "completed");
 });
 
 test("auto workflow E2E runner creates a durable local summary for /autoresearch", async (t) => {

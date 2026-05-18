@@ -374,8 +374,10 @@ type WorkflowPanelRuntimeAttempt<Role extends string, Result> = {
 
 type IdleResearchLaunchAttempt = {
   launched: boolean;
+  queued?: boolean;
   reason:
     | "started"
+    | "queued"
     | "no_runtime_subagent"
     | "no_recommended_idle_research"
     | "idle_research_disabled"
@@ -388,6 +390,7 @@ type IdleResearchLaunchAttempt = {
   topic: string | null;
   sessionKey: string | null;
   runId: string | null;
+  queueKey?: string | null;
   dueKey: string | null;
   summary: string | null;
   reusedIdleSession: boolean;
@@ -402,7 +405,8 @@ type AutoZoteroSyncAttempt = {
     | "queued"
     | "no_candidate"
     | "already_launched"
-    | "already_queued";
+    | "already_queued"
+    | "runtime_unavailable";
   projectId: string | null;
   projectRoot: string;
   trigger: string | null;
@@ -416,6 +420,21 @@ type AutoZoteroSyncAttempt = {
   markdownPath: string | null;
 };
 
+function classifyAutoZoteroLaunchReason(
+  launched: Awaited<ReturnType<typeof startBackgroundWorkflowRun>>
+): AutoZoteroSyncAttempt["reason"] {
+  if (launched.started) {
+    return "started";
+  }
+  if (launched.queued) {
+    return "queued";
+  }
+  if (launched.reason === "session_unavailable") {
+    return "already_launched";
+  }
+  return "runtime_unavailable";
+}
+
 type PaperIngestionWorkerAttempt = {
   launched: boolean;
   queued: boolean;
@@ -425,6 +444,7 @@ type PaperIngestionWorkerAttempt = {
     | "no_runtime_subagent"
     | "no_request"
     | "already_active"
+    | "runtime_unavailable"
     | "blocked";
   projectId: string | null;
   projectRoot: string;
@@ -1877,6 +1897,7 @@ export function deriveWorkflowCoordinatorStatusUpdate(params: {
   autoMitigationDispatch: AutoModeMitigationDispatchAttempt;
   autoStageLaunch: AutoStageLaunchAttempt;
   idleResearchLaunch: IdleResearchLaunchAttempt;
+  surveyBriefRefinement?: WorkflowPanelDiscussionServiceAttempt;
   autoZoteroSync?: AutoZoteroSyncAttempt;
   paperIngestionWorker?: PaperIngestionWorkerAttempt;
 }): WorkflowCoordinatorVisibleStatusUpdate | null {
@@ -1930,10 +1951,12 @@ export function deriveWorkflowCoordinatorStatusUpdate(params: {
   }
   const blockingHookAttempt =
     params.beforeStageHandoffHooks?.approved === false &&
-    params.beforeStageHandoffHooks.reason === "blocked"
+    (params.beforeStageHandoffHooks.reason === "blocked" ||
+      params.beforeStageHandoffHooks.reason === "no_runtime_subagent")
       ? params.beforeStageHandoffHooks
       : params.artifactHooks?.approved === false &&
-          params.artifactHooks.reason === "blocked"
+          (params.artifactHooks.reason === "blocked" ||
+            params.artifactHooks.reason === "no_runtime_subagent")
         ? params.artifactHooks
         : null;
   if (blockingHookAttempt) {
@@ -1942,10 +1965,12 @@ export function deriveWorkflowCoordinatorStatusUpdate(params: {
       stage: blockingHookAttempt.stage ?? params.stageAfter ?? null,
       summary:
         blockingHookAttempt.blockingReason ??
-        `Workflow hooks at ${blockingHookAttempt.hookPoint} blocked the current transition.`,
+        (blockingHookAttempt.reason === "no_runtime_subagent"
+          ? `Blocked because workflow hook reviewer runtime is unavailable at ${blockingHookAttempt.hookPoint}.`
+          : `Workflow hooks at ${blockingHookAttempt.hookPoint} blocked the current transition.`),
       dedupeKey: [
         "workflow-hooks",
-        "blocked",
+        blockingHookAttempt.reason,
         blockingHookAttempt.hookPoint,
         blockingHookAttempt.stage ?? params.stageAfter ?? "unknown",
       ].join(":"),
@@ -2020,6 +2045,42 @@ export function deriveWorkflowCoordinatorStatusUpdate(params: {
       ].join(":"),
     };
   }
+  if (params.paperIngestionWorker?.reason === "already_active") {
+    return {
+      status: "waiting",
+      stage: params.stageAfter ?? null,
+      summary:
+        params.paperIngestionWorker.summary ??
+        `Waiting for the active workflow-owned PaperNexus ingestion worker for ${
+          params.projectId ?? path.basename(params.projectRoot)
+        }.`,
+      dedupeKey: [
+        "paper-ingestion-worker",
+        "already-active",
+        params.paperIngestionWorker.queueKey ?? "no-queue-key",
+        params.paperIngestionWorker.sessionKey ?? "no-session-key",
+      ].join(":"),
+    };
+  }
+  if (
+    params.paperIngestionWorker?.reason === "runtime_unavailable" ||
+    params.paperIngestionWorker?.reason === "blocked"
+  ) {
+    return {
+      status: "blocked",
+      stage: params.stageAfter ?? null,
+      summary:
+        params.paperIngestionWorker.summary ??
+        `Blocked workflow-owned PaperNexus upload worker for ${
+          params.projectId ?? path.basename(params.projectRoot)
+        }.`,
+      dedupeKey: [
+        "paper-ingestion-worker",
+        params.paperIngestionWorker.reason,
+        params.paperIngestionWorker.queueKey ?? "no-queue-key",
+      ].join(":"),
+    };
+  }
   if (params.idleResearchLaunch.launched) {
     return {
       status: "started",
@@ -2035,7 +2096,10 @@ export function deriveWorkflowCoordinatorStatusUpdate(params: {
       ].join(":"),
     };
   }
-  if (params.idleResearchLaunch.reason === "channel_capacity_reached") {
+  if (
+    params.idleResearchLaunch.queued === true ||
+    params.idleResearchLaunch.reason === "channel_capacity_reached"
+  ) {
     return {
       status: "queued",
       stage: params.stageAfter ?? null,
@@ -2044,7 +2108,7 @@ export function deriveWorkflowCoordinatorStatusUpdate(params: {
         `Queued idle research${params.idleResearchLaunch.topic ? ` for ${params.idleResearchLaunch.topic}` : ""} until a Researcher background session becomes idle in this channel.`,
       dedupeKey: [
         "idle-research",
-        "capacity",
+        params.idleResearchLaunch.queueKey ?? "queued",
         params.idleResearchLaunch.topic ?? "unknown-topic",
         String(params.idleResearchLaunch.activeResearcherSessionsInChannel ?? "unknown"),
       ].join(":"),
@@ -2069,8 +2133,7 @@ export function deriveWorkflowCoordinatorStatusUpdate(params: {
   }
   if (
     params.autoZoteroSync &&
-    params.autoZoteroSync.queued &&
-    params.autoZoteroSync.reason === "queued"
+    params.autoZoteroSync.queued
   ) {
     return {
       status: "queued",
@@ -2082,7 +2145,41 @@ export function deriveWorkflowCoordinatorStatusUpdate(params: {
         }.`,
       dedupeKey: [
         "zotero-sync",
-        "queued",
+        params.autoZoteroSync.reason,
+        params.autoZoteroSync.trigger ?? "unknown",
+        params.autoZoteroSync.queueKey ?? "no-queue-key",
+      ].join(":"),
+    };
+  }
+  if (params.autoZoteroSync?.reason === "runtime_unavailable") {
+    return {
+      status: "continued",
+      stage: params.stageAfter ?? null,
+      summary:
+        params.autoZoteroSync.summary ??
+        `Non-blocking Zotero sync did not start for ${
+          params.projectId ?? path.basename(params.projectRoot)
+        }; workflow can continue.`,
+      dedupeKey: [
+        "zotero-sync",
+        "runtime-unavailable",
+        params.autoZoteroSync.trigger ?? "unknown",
+        params.autoZoteroSync.queueKey ?? "no-queue-key",
+      ].join(":"),
+    };
+  }
+  if (params.autoZoteroSync?.reason === "already_launched") {
+    return {
+      status: "continued",
+      stage: params.stageAfter ?? null,
+      summary:
+        params.autoZoteroSync.summary ??
+        `Non-blocking Zotero sync is already active for ${
+          params.projectId ?? path.basename(params.projectRoot)
+        }; workflow can continue.`,
+      dedupeKey: [
+        "zotero-sync",
+        "already-launched",
         params.autoZoteroSync.trigger ?? "unknown",
         params.autoZoteroSync.queueKey ?? "no-queue-key",
       ].join(":"),
@@ -2101,6 +2198,45 @@ export function deriveWorkflowCoordinatorStatusUpdate(params: {
         "auto-code-review",
         autoCodeReview.stage ?? params.stageAfter ?? "code",
         autoCodeReview.status ?? autoCodeReview.reason,
+      ].join(":"),
+    };
+  }
+  if (
+    autoCodeReview.reason === "no_runtime_subagent" ||
+    autoCodeReview.reason === "bundle_incomplete" ||
+    autoCodeReview.reason === "launch_failed" ||
+    autoCodeReview.reason === "already_approved" ||
+    autoCodeReview.reason === "already_rejected" ||
+    autoCodeReview.reason.startsWith("local_static_review_") ||
+    autoCodeReview.status === "rejected" ||
+    autoCodeReview.status === "approved" ||
+    autoCodeReview.approved === true
+  ) {
+    const codeReviewApproved =
+      autoCodeReview.approved === true ||
+      autoCodeReview.status === "approved" ||
+      autoCodeReview.reason === "already_approved";
+    const localStaticReview = autoCodeReview.reason.startsWith("local_static_review_");
+    const summary = codeReviewApproved
+      ? `Code innovation review approved${localStaticReview ? " via local static review" : ""}; workflow can continue.`
+      : autoCodeReview.reason === "no_runtime_subagent"
+        ? "Blocked because code innovation reviewer runtime is unavailable."
+        : autoCodeReview.reason === "bundle_incomplete"
+          ? "Blocked because the code innovation review bundle is incomplete."
+        : autoCodeReview.reason === "launch_failed"
+          ? "Blocked because code innovation review failed to launch."
+          : localStaticReview
+            ? "Blocked because local static code innovation review rejected the current implementation packet."
+            : "Blocked because the code innovation review rejected the current implementation packet.";
+    return {
+      status: codeReviewApproved ? "continued" : "blocked",
+      stage: autoCodeReview.stage ?? params.stageAfter ?? null,
+      summary,
+      dedupeKey: [
+        "auto-code-review",
+        autoCodeReview.reason,
+        autoCodeReview.stage ?? params.stageAfter ?? "code",
+        autoCodeReview.status ?? "unknown-status",
       ].join(":"),
     };
   }
@@ -2135,6 +2271,50 @@ export function deriveWorkflowCoordinatorStatusUpdate(params: {
     };
   }
   if (
+    params.autoGateReview.reason === "no_runtime_subagent" ||
+    params.autoGateReview.reason === "launch_failed" ||
+    params.autoGateReview.reason === "already_rejected" ||
+    params.autoGateReview.status === "rejected"
+  ) {
+    const summary =
+      params.autoGateReview.reason === "no_runtime_subagent"
+        ? `Blocked because auto gate reviewer runtime is unavailable for ${params.autoGateReview.gateId ?? params.autoGateReview.stage ?? "the current gate"}.`
+        : params.autoGateReview.reason === "launch_failed"
+          ? `Blocked because auto gate review failed to launch for ${params.autoGateReview.gateId ?? params.autoGateReview.stage ?? "the current gate"}.`
+          : `Blocked because gate review rejected ${params.autoGateReview.gateId ?? params.autoGateReview.stage ?? "the current packet"}.`;
+    return {
+      status: "blocked",
+      stage: params.autoGateReview.stage ?? params.stageAfter ?? null,
+      summary,
+      dedupeKey: [
+        "auto-gate",
+        params.autoGateReview.reason,
+        params.autoGateReview.stage ?? params.stageAfter ?? "submit",
+        params.autoGateReview.status ?? "unknown-status",
+      ].join(":"),
+    };
+  }
+  if (
+    params.autoGateReview.reason === "already_approved" ||
+    params.autoGateReview.status === "approved" ||
+    params.autoGateReview.approved === true
+  ) {
+    return {
+      status: "continued",
+      stage: params.autoGateReview.stage ?? params.stageAfter ?? null,
+      summary: `Auto gate review approved ${
+        params.autoGateReview.gateId ?? params.autoGateReview.stage ?? "the current gate"
+      }; workflow can continue.`,
+      dedupeKey: [
+        "auto-gate",
+        "approved",
+        params.autoGateReview.gateId ?? "unknown-gate",
+        params.autoGateReview.stage ?? params.stageAfter ?? "submit",
+        params.autoGateReview.status ?? params.autoGateReview.reason,
+      ].join(":"),
+    };
+  }
+  if (
     params.autoModeDiscussion.reason === "started" ||
     params.autoModeDiscussion.reason === "reviewing"
   ) {
@@ -2151,29 +2331,63 @@ export function deriveWorkflowCoordinatorStatusUpdate(params: {
     };
   }
   if (
-    params.autoStageLaunch.reason === "risk_discussion_pending" ||
-    params.autoStageLaunch.reason === "cooldown_active" ||
-    params.autoStageLaunch.reason === "already_launched" ||
-    params.autoStageLaunch.reason === "session_pool_full"
+    params.autoModeDiscussion.reason === "resolved" ||
+    params.autoModeDiscussion.status === "resolved" ||
+    params.autoModeDiscussion.resolved === true
+  ) {
+    return {
+      status: "continued",
+      stage: params.autoModeDiscussion.stage ?? params.stageAfter ?? null,
+      summary:
+        params.autoModeDiscussion.summary ??
+        "Auto-mode risk discussion resolved; workflow can continue.",
+      dedupeKey: [
+        "auto-discussion",
+        "resolved",
+        params.autoModeDiscussion.stage ?? params.stageAfter ?? "unknown",
+        params.autoModeDiscussion.fingerprint ?? "unknown-fingerprint",
+        params.autoModeDiscussion.status ?? params.autoModeDiscussion.reason,
+      ].join(":"),
+    };
+  }
+  if (
+    params.autoMitigationDispatch.reason === "no_runtime_subagent" ||
+    params.autoMitigationDispatch.reason === "binding_missing" ||
+    params.autoMitigationDispatch.reason === "dispatch_failed"
   ) {
     const summary =
-      params.autoStageLaunch.reason === "risk_discussion_pending"
-        ? "Waiting for auto-mode risk discussion before handing off the next stage."
-        : params.autoStageLaunch.reason === "cooldown_active"
-          ? `Queued the next stage handoff until the workflow contact cooldown clears for ${params.autoStageLaunch.owner ?? "the next owner"}.`
-          : params.autoStageLaunch.reason === "session_pool_full"
-            ? `Queued the ${params.autoStageLaunch.stage ?? params.stageAfter ?? "current"} stage until an idle Researcher service session is available.`
-            : `Queued behind the already-running ${params.autoStageLaunch.stage ?? params.stageAfter ?? "workflow"} stage handoff.`;
+      params.autoMitigationDispatch.reason === "no_runtime_subagent"
+        ? `Blocked because workflow execution runtime is unavailable for auto-mode mitigation by ${params.autoMitigationDispatch.owner ?? "the recommended owner"}.`
+        : params.autoMitigationDispatch.reason === "binding_missing"
+          ? params.autoMitigationDispatch.error ??
+            "Blocked because auto-mode mitigation requires an active workflow project binding."
+          : `Blocked because auto-mode mitigation dispatch to ${params.autoMitigationDispatch.owner ?? "the recommended owner"} failed${params.autoMitigationDispatch.error ? `: ${params.autoMitigationDispatch.error}` : "."}`;
     return {
-      status:
-        params.autoStageLaunch.reason === "risk_discussion_pending" ? "waiting" : "queued",
-      stage: params.autoStageLaunch.stage ?? params.stageAfter ?? null,
+      status: "blocked",
+      stage: params.autoMitigationDispatch.stage ?? params.stageAfter ?? null,
       summary,
       dedupeKey: [
-        "stage-wait",
-        params.autoStageLaunch.reason,
-        params.autoStageLaunch.stage ?? params.stageAfter ?? "unknown",
-        params.autoStageLaunch.owner ?? "unknown-owner",
+        "mitigation-blocked",
+        params.autoMitigationDispatch.reason,
+        params.autoMitigationDispatch.stage ?? params.stageAfter ?? "unknown",
+        params.autoMitigationDispatch.owner ?? "unknown-owner",
+        params.autoMitigationDispatch.fingerprint ?? "unknown-fingerprint",
+      ].join(":"),
+    };
+  }
+  if (params.autoMitigationDispatch.reason === "already_dispatched") {
+    return {
+      status: "waiting",
+      stage: params.autoMitigationDispatch.stage ?? params.stageAfter ?? null,
+      summary: `Waiting for the already-dispatched auto-mode mitigation pass by ${
+        params.autoMitigationDispatch.owner ?? "the recommended owner"
+      } before retrying the stage handoff.`,
+      dedupeKey: [
+        "mitigation-wait",
+        "already-dispatched",
+        params.autoMitigationDispatch.stage ?? params.stageAfter ?? "unknown",
+        params.autoMitigationDispatch.owner ?? "unknown-owner",
+        params.autoMitigationDispatch.fingerprint ?? "unknown-fingerprint",
       ].join(":"),
     };
   }
@@ -2185,25 +2399,147 @@ export function deriveWorkflowCoordinatorStatusUpdate(params: {
         "Queued the mitigation pass until an idle Researcher service session is available.",
       dedupeKey: [
         "mitigation-wait",
+        "session-pool-full",
         params.autoMitigationDispatch.stage ?? params.stageAfter ?? "unknown",
         params.autoMitigationDispatch.owner ?? "researcher",
+        params.autoMitigationDispatch.fingerprint ?? "unknown-fingerprint",
+      ].join(":"),
+    };
+  }
+  if (
+    params.autoModeDiscussion.reason === "binding_missing" ||
+    params.autoModeDiscussion.reason === "round_limit_reached" ||
+    params.autoModeDiscussion.reason === "no_runtime_subagent" ||
+    params.autoModeDiscussion.reason.startsWith("local_static_discussion_")
+  ) {
+    const discussionResolved = params.autoModeDiscussion.status === "resolved";
+    const discussionSummary =
+      params.autoModeDiscussion.summary ??
+      params.autoModeDiscussion.blockers[0] ??
+      params.autoModeDiscussion.actionItems[0] ??
+      (params.autoModeDiscussion.reason === "binding_missing"
+        ? "Blocked because auto-mode risk discussion requires an active workflow project binding."
+        : params.autoModeDiscussion.reason === "round_limit_reached"
+          ? "Blocked because auto-mode risk discussion reached the mitigation round limit."
+          : params.autoModeDiscussion.reason === "no_runtime_subagent"
+            ? "Blocked because auto-mode risk discussion reviewer runtime is unavailable."
+            : discussionResolved
+              ? "Local static auto-mode risk discussion allowed the workflow to continue."
+              : "Local static auto-mode risk discussion requested remediation before continuing.");
+    return {
+      status: discussionResolved ? "continued" : "blocked",
+      stage: params.autoModeDiscussion.stage ?? params.stageAfter ?? null,
+      summary: discussionSummary,
+      dedupeKey: [
+        "auto-discussion",
+        params.autoModeDiscussion.reason,
+        params.autoModeDiscussion.stage ?? params.stageAfter ?? "unknown",
+        params.autoModeDiscussion.fingerprint ?? "unknown-fingerprint",
+        params.autoModeDiscussion.status ?? "unknown-status",
+      ].join(":"),
+    };
+  }
+  const surveyBriefRefinement = params.surveyBriefRefinement;
+  const hasSurveyBriefRefinementContract =
+    surveyBriefRefinement?.discussionId === "survey-brief-refinement" &&
+    (surveyBriefRefinement.launched ||
+      Boolean(surveyBriefRefinement.packetPath) ||
+      Boolean(surveyBriefRefinement.roundId) ||
+      Boolean(surveyBriefRefinement.status));
+  if (surveyBriefRefinement && hasSurveyBriefRefinementContract) {
+    const surveyRefinementResolved =
+      surveyBriefRefinement.resolved === true ||
+      surveyBriefRefinement.reason === "resolved" ||
+      surveyBriefRefinement.status === "resolved";
+    const surveyRefinementBlocked =
+      surveyBriefRefinement.reason === "no_runtime_subagent" ||
+      surveyBriefRefinement.reason === "round_limit_reached" ||
+      surveyBriefRefinement.status === "blocked";
+    if (
+      surveyRefinementResolved ||
+      surveyRefinementBlocked ||
+      surveyBriefRefinement.reason === "started" ||
+      surveyBriefRefinement.reason === "reviewing" ||
+      surveyBriefRefinement.status === "reviewing"
+    ) {
+      const summary = surveyRefinementResolved
+        ? (surveyBriefRefinement.summary ??
+          "Survey brief refinement panel resolved; workflow can continue.")
+        : surveyBriefRefinement.reason === "no_runtime_subagent"
+          ? "Blocked because survey brief refinement panel runtime is unavailable."
+          : surveyBriefRefinement.reason === "round_limit_reached"
+            ? "Blocked because survey brief refinement panel reached the round limit."
+            : (surveyBriefRefinement.summary ??
+              surveyBriefRefinement.blockers[0] ??
+              surveyBriefRefinement.actionItems[0] ??
+              "Waiting for survey brief refinement panel before continuing survey review.");
+      return {
+        status: surveyRefinementResolved
+          ? "continued"
+          : surveyRefinementBlocked
+            ? "blocked"
+            : "waiting",
+        stage: surveyBriefRefinement.stage ?? params.stageAfter ?? null,
+        summary,
+        dedupeKey: [
+          "survey-brief-refinement",
+          surveyBriefRefinement.reason,
+          surveyBriefRefinement.status ?? "unknown-status",
+          surveyBriefRefinement.roundId ?? "no-round",
+        ].join(":"),
+      };
+    }
+  }
+  if (
+    params.autoStageLaunch.reason === "risk_discussion_pending" ||
+    params.autoStageLaunch.reason === "cooldown_active" ||
+    params.autoStageLaunch.reason === "already_launched" ||
+    params.autoStageLaunch.reason === "runtime_reconciliation_waiting" ||
+    params.autoStageLaunch.reason === "session_pool_full"
+  ) {
+    const summary =
+      params.autoStageLaunch.reason === "risk_discussion_pending"
+        ? "Waiting for auto-mode risk discussion before handing off the next stage."
+        : params.autoStageLaunch.reason === "cooldown_active"
+          ? `Queued the next stage handoff until the workflow contact cooldown clears for ${params.autoStageLaunch.owner ?? "the next owner"}.`
+          : params.autoStageLaunch.reason === "runtime_reconciliation_waiting"
+            ? params.autoStageLaunch.error ??
+              "Waiting for existing owner runtime to settle before repeating the stage dispatch."
+          : params.autoStageLaunch.reason === "session_pool_full"
+            ? `Queued the ${params.autoStageLaunch.stage ?? params.stageAfter ?? "current"} stage until an idle Researcher service session is available.`
+            : `Queued behind the already-running ${params.autoStageLaunch.stage ?? params.stageAfter ?? "workflow"} stage handoff.`;
+    return {
+      status:
+        params.autoStageLaunch.reason === "risk_discussion_pending" ||
+        params.autoStageLaunch.reason === "runtime_reconciliation_waiting"
+          ? "waiting"
+          : "queued",
+      stage: params.autoStageLaunch.stage ?? params.stageAfter ?? null,
+      summary,
+      dedupeKey: [
+        "stage-wait",
+        params.autoStageLaunch.reason,
+        params.autoStageLaunch.stage ?? params.stageAfter ?? "unknown",
+        params.autoStageLaunch.owner ?? "unknown-owner",
+        params.autoStageLaunch.launchKey ?? "no-launch-key",
       ].join(":"),
     };
   }
   if (
     params.autoStageLaunch.reason === "gate_blocked" ||
-    params.autoStageLaunch.reason === "dispatch_failed" ||
-    autoCodeReview.reason === "already_rejected" ||
-    params.autoGateReview.reason === "already_rejected"
+    params.autoStageLaunch.reason === "binding_missing" ||
+    params.autoStageLaunch.reason === "no_runtime_subagent" ||
+    params.autoStageLaunch.reason === "dispatch_failed"
   ) {
     const summary =
-      autoCodeReview.reason === "already_rejected"
-        ? "Blocked because the code innovation review rejected the current implementation packet."
-        : params.autoGateReview.reason === "already_rejected"
-        ? "Blocked because the submit auto gate review rejected the packet."
-        : params.autoStageLaunch.reason === "gate_blocked"
-          ? `Blocked by the current ${params.autoStageLaunch.stage ?? params.stageAfter ?? "workflow"} gate.`
-          : `Blocked because the handoff to ${params.autoStageLaunch.owner ?? "the next owner"} failed${params.autoStageLaunch.error ? `: ${params.autoStageLaunch.error}` : "."}`;
+      params.autoStageLaunch.reason === "gate_blocked"
+        ? `Blocked by the current ${params.autoStageLaunch.stage ?? params.stageAfter ?? "workflow"} gate.`
+        : params.autoStageLaunch.reason === "binding_missing"
+          ? params.autoStageLaunch.error ??
+            "Blocked because auto-stage dispatch requires an active workflow project binding."
+        : params.autoStageLaunch.reason === "no_runtime_subagent"
+          ? `Blocked because workflow execution runtime is unavailable for ${params.autoStageLaunch.owner ?? "the next owner"} at ${params.autoStageLaunch.stage ?? params.stageAfter ?? "the current stage"}.`
+        : `Blocked because the handoff to ${params.autoStageLaunch.owner ?? "the next owner"} failed${params.autoStageLaunch.error ? `: ${params.autoStageLaunch.error}` : "."}`;
     return {
       status: "blocked",
       stage: params.autoStageLaunch.stage ?? params.stageAfter ?? null,
@@ -2389,10 +2725,14 @@ export async function maybeLaunchIdleResearchForProject(params: {
         },
       });
       if (!launched.started || !launched.runId || !launched.sessionKey) {
+        const queued = launched.queued === true;
         return {
           launched: false,
+          queued,
           reason:
-            launched.reason === "channel_capacity_reached"
+            queued
+              ? "queued"
+              : launched.reason === "channel_capacity_reached"
               ? "channel_capacity_reached"
               : "no_runtime_subagent",
           projectId: params.projectId,
@@ -2400,8 +2740,11 @@ export async function maybeLaunchIdleResearchForProject(params: {
           topic,
           sessionKey: null,
           runId: null,
+          queueKey: launched.queueKey,
           dueKey,
-          summary: launched.summary,
+          summary: queued
+            ? `Queued idle research for ${topic} until workflow runtime capacity is available.`
+            : launched.summary,
           reusedIdleSession: false,
           activeResearcherSessionsInChannel:
             launched.activeResearcherSessionsInChannel,
@@ -2410,12 +2753,14 @@ export async function maybeLaunchIdleResearchForProject(params: {
       params.launchedDueKeys.set(params.projectRoot, dueKey);
       return {
         launched: true,
+        queued: false,
         reason: "started",
         projectId: params.projectId,
         projectRoot: params.projectRoot,
         topic,
         sessionKey: launched.sessionKey,
         runId: launched.runId,
+        queueKey: launched.queueKey,
         dueKey,
         summary: launched.summary,
         reusedIdleSession: launched.reusedIdleSession,
@@ -2597,7 +2942,7 @@ export async function maybeLaunchAutoZoteroSyncForProject(params: {
       return {
         launched: launched.started,
         queued: launched.queued,
-        reason: launched.started ? "started" : launched.queued ? "queued" : "queued",
+        reason: classifyAutoZoteroLaunchReason(launched),
         projectId: params.projectId,
         projectRoot: params.projectRoot,
         trigger: candidate.trigger,
@@ -2716,6 +3061,8 @@ export async function maybeLaunchPaperIngestionWorkerForProject(params: {
           ? "queued"
           : result.reason === "session_unavailable"
             ? "already_active"
+            : result.reason === "runtime_unavailable"
+              ? "runtime_unavailable"
             : "blocked";
       return {
         launched: result.started,
@@ -7046,6 +7393,7 @@ export function createWorkflowCoordinatorService(
               autoMitigationDispatch: autoMitigationAttempts[index],
               autoStageLaunch: autoStageAttempts[index],
               idleResearchLaunch: idleResearchAttempts[index],
+              surveyBriefRefinement: surveyBriefRefinementAttempts[index],
               autoZoteroSync: autoZoteroSyncAttempts[index],
               paperIngestionWorker: paperIngestionWorkerAttempts[index],
             });

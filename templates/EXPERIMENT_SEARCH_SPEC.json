@@ -47,6 +47,12 @@
     "sync_status_path": "researcher/papernexus/EXPERIMENT_MEMORY_SYNC_STATUS.json",
     "reflection_path": "researcher/INNOVATION_REFLECTION.md"
   },
+  "primary_metric_contract": {
+    "metric_name": null,
+    "direction": null,
+    "minimum_improvement": null,
+    "primary_evidence": []
+  },
   "created_at": "1970-01-01T00:00:00Z",
   "updated_at": "1970-01-01T00:00:00Z"
 }

@@ -108,6 +108,76 @@ function formatRuntimeAuditLine(snapshot: SnapshotLike): string | null {
   return `Runtime audit: ${freshness ?? "unknown"}${status ? `/${status}` : ""}${summary ? ` - ${summary}` : ""}`;
 }
 
+function normalizedStringList(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
+    .filter((entry) => entry.length > 0);
+}
+
+function formatPromptList(value: unknown, maxItems = 5): string {
+  const values = normalizedStringList(value);
+  if (values.length === 0) {
+    return "none";
+  }
+  const visible = values.slice(0, maxItems);
+  const suffix = values.length > visible.length ? `,+${values.length - visible.length}` : "";
+  return `${visible.join(",")}${suffix}`;
+}
+
+function hasExperimentNextCandidateGuidance(snapshot: SnapshotLike): boolean {
+  return Boolean(
+    snapshot.experimentSearchNextCandidateMetricName ||
+      snapshot.experimentSearchNextCandidateMetricDirection ||
+      snapshot.experimentSearchNextCandidateMinimumImprovement != null ||
+      snapshot.experimentSearchNextCandidatePaperContributionMetric ||
+      normalizedStringList(snapshot.experimentSearchNextCandidateRequiredProperties).length > 0 ||
+      normalizedStringList(snapshot.experimentSearchNextCandidateRecommendedFocus).length > 0 ||
+      normalizedStringList(snapshot.experimentSearchNextCandidateBlockerBasis).length > 0 ||
+      normalizedStringList(snapshot.experimentSearchNextCandidateInnovationAnchors).length > 0 ||
+      normalizedStringList(snapshot.experimentSearchNextCandidateAvoidExperimentIds).length > 0 ||
+      normalizedStringList(snapshot.experimentSearchNextCandidateAvoidOneChangeSignatures).length > 0 ||
+      normalizedStringList(snapshot.experimentSearchNextCandidateAvoidFailureClusterIds).length > 0
+  );
+}
+
+function formatExperimentNextCandidateGuidanceCompact(snapshot: SnapshotLike): string | null {
+  if (!hasExperimentNextCandidateGuidance(snapshot)) {
+    return null;
+  }
+  return [
+    `next_candidate_guidance=metric:${snapshot.experimentSearchNextCandidateMetricName ?? "unset"}`,
+    `direction:${snapshot.experimentSearchNextCandidateMetricDirection ?? "unset"}`,
+    `min_delta:${snapshot.experimentSearchNextCandidateMinimumImprovement ?? "unset"}`,
+    `paper_metric:${snapshot.experimentSearchNextCandidatePaperContributionMetric ?? "unset"}`,
+    `required=${formatPromptList(snapshot.experimentSearchNextCandidateRequiredProperties)}`,
+    `avoid_experiments=${formatPromptList(snapshot.experimentSearchNextCandidateAvoidExperimentIds)}`,
+    `avoid_signatures=${formatPromptList(snapshot.experimentSearchNextCandidateAvoidOneChangeSignatures)}`,
+    `avoid_failures=${formatPromptList(snapshot.experimentSearchNextCandidateAvoidFailureClusterIds)}`,
+    `blockers=${formatPromptList(snapshot.experimentSearchNextCandidateBlockerBasis)}`,
+    `focus=${formatPromptList(snapshot.experimentSearchNextCandidateRecommendedFocus)}`,
+  ].join(" ");
+}
+
+function formatExperimentCandidateSelectionRule(snapshot: SnapshotLike): string | null {
+  if (!hasExperimentNextCandidateGuidance(snapshot)) {
+    return null;
+  }
+  const metric = snapshot.experimentSearchNextCandidateMetricName ?? "the primary metric";
+  const paperMetric =
+    snapshot.experimentSearchNextCandidatePaperContributionMetric ?? "the paper contribution metric";
+  return `candidate_selection_rule=propose_exactly_one_new_one_change_signature; reject_avoid_list_hits; explain_${metric}_improvement_mechanism; preserve_fixed_budget_and_required_properties; align_with_${paperMetric}_and_innovation_anchors`;
+}
+
+function formatExperimentCandidateReviewBoardCompact(snapshot: SnapshotLike): string | null {
+  if (!hasExperimentNextCandidateGuidance(snapshot)) {
+    return null;
+  }
+  return "candidate_review_board=performance_reviewer:metric_mechanism+fixed_budget+baseline_parity; innovation_reviewer:innovation_anchor_alignment+reject_generic_tuning; plan_reviewer:new_one_change_signature+avoid_lists+plan_consistency; aggregate=hard_reject_avoid_or_missing_signature,performance_approve_and_2_of_3_before_dispatch";
+}
+
 export function buildFocusedPromptAssemblyImpl(
   params: {
     snapshot: SnapshotLike;
@@ -217,6 +287,20 @@ export function buildFocusedPromptAssemblyImpl(
     layer2Lines.push(
       `missing_signals=${(snapshot.missingStageSignals ?? []).slice(0, 4).join("; ")}`
     );
+  }
+  const nextCandidateGuidanceLine =
+    formatExperimentNextCandidateGuidanceCompact(snapshot);
+  if (nextCandidateGuidanceLine) {
+    layer2Lines.push(nextCandidateGuidanceLine);
+    const candidateSelectionRule = formatExperimentCandidateSelectionRule(snapshot);
+    if (candidateSelectionRule) {
+      layer2Lines.push(candidateSelectionRule);
+    }
+    const candidateReviewBoard =
+      formatExperimentCandidateReviewBoardCompact(snapshot);
+    if (candidateReviewBoard) {
+      layer2Lines.push(candidateReviewBoard);
+    }
   }
   if (
     snapshot.orchestrationStatus ||
@@ -967,6 +1051,22 @@ export function formatWorkflowSnapshotForPromptImpl(
     lines.push(
       `Experiment outer loop: dataset_coverage=${snapshot.experimentSearchBaselineDatasetCoverageStatus ?? "unset"}, innovation_deviation=${snapshot.experimentSearchInnovationDeviationStatus ?? "unset"}, deviation_score=${snapshot.experimentSearchInnovationDeviationScore ?? "unset"}`
     );
+    const nextCandidateGuidanceLine =
+      formatExperimentNextCandidateGuidanceCompact(snapshot);
+    if (nextCandidateGuidanceLine) {
+      lines.push(
+        `Experiment next candidate guidance: metric=${snapshot.experimentSearchNextCandidateMetricName ?? "unset"}, direction=${snapshot.experimentSearchNextCandidateMetricDirection ?? "unset"}, min_improvement=${snapshot.experimentSearchNextCandidateMinimumImprovement ?? "unset"}, paper_metric=${snapshot.experimentSearchNextCandidatePaperContributionMetric ?? "unset"}, required=${formatPromptList(snapshot.experimentSearchNextCandidateRequiredProperties)}, focus=${formatPromptList(snapshot.experimentSearchNextCandidateRecommendedFocus)}`
+      );
+      lines.push(
+        `Experiment next candidate avoid: experiments=${formatPromptList(snapshot.experimentSearchNextCandidateAvoidExperimentIds)}, one_change_signatures=${formatPromptList(snapshot.experimentSearchNextCandidateAvoidOneChangeSignatures)}, failure_clusters=${formatPromptList(snapshot.experimentSearchNextCandidateAvoidFailureClusterIds)}, blockers=${formatPromptList(snapshot.experimentSearchNextCandidateBlockerBasis)}, anchors=${formatPromptList(snapshot.experimentSearchNextCandidateInnovationAnchors)}`
+      );
+      lines.push(
+        `Experiment next candidate rule: propose exactly one new one_change_signature; reject candidates matching the avoid lists; explain the ${snapshot.experimentSearchNextCandidateMetricName ?? "primary metric"} improvement mechanism; preserve fixed budget and required properties; align with ${snapshot.experimentSearchNextCandidatePaperContributionMetric ?? "the paper contribution metric"} and innovation anchors.`
+      );
+      lines.push(
+        "Experiment candidate review board: performance_reviewer checks primary metric mechanism, fixed budget, and baseline parity; innovation_reviewer checks Innovation Packet / idea-anchor alignment and rejects generic tuning drift; plan_reviewer checks one new one_change_signature, avoid lists, required properties, and plan/search-spec consistency; aggregate: hard reject avoid-list hits or missing one_change_signature, otherwise require performance approve and 2 of 3 approve before dispatch."
+      );
+    }
   }
   if (snapshot.paperStoryStatus) {
     lines.push(

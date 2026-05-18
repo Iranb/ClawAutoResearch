@@ -374,6 +374,116 @@ test("graph-build source catch-up blocks instead of local fallback when remote d
   assert.equal(receipt.source_backed_graph_claim, false);
 });
 
+test("graph-build source catch-up preserves verified graph authority when remote discovery later fails", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  const previousToken = process.env.PAPERNEXUS_TEST_TOKEN;
+  const server = await startFakeRemoteDiscoveryMcpServer({
+    literatureDiscoveryError: "Remote MCP request failed: fetch failed",
+  });
+  t.after(async () => {
+    if (previousToken === undefined) {
+      delete process.env.PAPERNEXUS_TEST_TOKEN;
+    } else {
+      process.env.PAPERNEXUS_TEST_TOKEN = previousToken;
+    }
+    await server.close();
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+  process.env.PAPERNEXUS_TEST_TOKEN = "remote-test-token";
+
+  const satisfactionPath =
+    "researcher/idea-catalyst/requisition/req-verified/REQUISITION_SATISFACTION_REPORT.json";
+  await writeJson(path.join(projectRoot, satisfactionPath), {
+    kind: "literature_requisition_decision",
+    request_id: "req-verified",
+    status: "valid",
+    decision: "satisfied_remote_import_evidence",
+    evidence_gap_closed: true,
+    source_backed_count: 6,
+    cited_evidence: {
+      source_index_path: "researcher/PAPER_SOURCE_INDEX.json",
+    },
+  });
+  await writeJson(path.join(projectRoot, "researcher", "PAPER_SOURCE_INDEX.json"), {
+    papers: [
+      {
+        canonical_id: "arxiv:2501.00001",
+        arxiv_id: "2501.00001",
+        title: "Verified Source-Backed Paper",
+        source_kind: "pdf",
+        source_path:
+          "/srv/papernexus/corpora/GCD/.papernexus/discovery/staging/pdf/2501.00001.pdf",
+        import_status: "graph_synced",
+        metadata_graph_status: "source_backed",
+      },
+    ],
+  });
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "source-catchup-demo",
+    current_stage: "graph_build",
+    owner_agent: "researcher",
+    research_program: {
+      goal: "Use PaperNexus to find request-specific SQLite index design papers.",
+    },
+    paper_ingestion: {
+      runtime_status: "waiting_graph",
+      graph_presence_status: "ready",
+      papernexus_certification_status: "ready",
+      papernexus_claim_level: "source_backed_graph",
+      papernexus_source_backed_graph_claim: true,
+      queued_requests: [
+        {
+          request_id: "req-verified",
+          request_kind: "requisition",
+          status: "running",
+          wrapper: "papernexus_remote_mcp",
+          validation_report_path: satisfactionPath,
+          trigger_kind: "idea_catalyst_requisition",
+          summary: "Previously verified request-specific source-backed evidence.",
+          detail: "A later transient remote failure must not downgrade graph authority.",
+          created_at: "2026-04-24T10:20:00.000Z",
+          updated_at: "2026-04-24T10:20:00.000Z",
+          attempt_count: 1,
+        },
+      ],
+    },
+  });
+
+  const result = await maybeMaterializeGraphBuildPaperSources({
+    projectRoot,
+    projectId: "source-catchup-demo",
+    workflowPolicy: {
+      papernexusAccessMode: "remote_mcp",
+      papernexusSharedCorpus: "GCD",
+      papernexusMcpUrl: server.url,
+      papernexusApiTokenSource: "env",
+      papernexusApiTokenEnv: "PAPERNEXUS_TEST_TOKEN",
+    },
+    now: "2026-04-24T10:40:00.000Z",
+    fetchImpl: async () => assert.fail("remote_mcp failure must not fetch literature locally"),
+  });
+
+  assert.equal(result.queued, false);
+  assert.equal(result.skippedReason, "remote_literature_discovery_failed");
+  assert.match(result.errors.join("\n"), /Remote MCP request failed/);
+
+  const receipt = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "graph", "PAPERNEXUS_GRAPH_BUILD_RECEIPT.json"), "utf8")
+  );
+  assert.equal(receipt.status, "graph_ready");
+  assert.equal(receipt.graph_visibility, "verified");
+  assert.equal(receipt.source_backed_graph_claim, true);
+  assert.match(receipt.limitations.join("\n"), /Remote MCP request failed/);
+
+  const graphDecision = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "graph", "GRAPH_BUILD_DECISION.json"), "utf8")
+  );
+  assert.equal(graphDecision.decision, "complete");
+  assert.equal(graphDecision.source_backed_graph_claim, true);
+  assert.equal(graphDecision.requisition_satisfaction_report_path, satisfactionPath);
+  assert.match(graphDecision.limitations.join("\n"), /Remote MCP request failed/);
+});
+
 test("graph-build source catch-up classifies remote literature_discovery launch timeouts", async (t) => {
   const projectRoot = await makeProjectRoot();
   const previousToken = process.env.PAPERNEXUS_TEST_TOKEN;

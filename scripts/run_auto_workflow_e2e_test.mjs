@@ -47,6 +47,10 @@ function formatUsage() {
     "  --max-iterations <n>  Live auto-iterator budget.",
     "  --bootstrap-transport local|discord",
     "                         local-live debug path or Discord native-slash parity path.",
+    "  --papernexus-use-ssh-tunnel",
+    "                         Tunnel --papernexus-mcp-url through --papernexus-ssh-target.",
+    "  --papernexus-ssh-tunnel-port <port>",
+    "                         Local port for the PaperNexus SSH tunnel.",
     "  --strict-content      Enforce publication-depth content quality checks in the paper harness.",
     "  --allow-partial       Treat partial live progress as a reportable outcome.",
     "  --json                Print the summary JSON.",
@@ -510,6 +514,131 @@ async function probeHttpReachability(params) {
   } finally {
     clearTimeout(timeout);
   }
+}
+
+export function buildPapernexusSshTunnelCommand(localPapernexus) {
+  const tunnel = localPapernexus?.summary?.sshTunnel;
+  if (!tunnel?.enabled) {
+    return null;
+  }
+  const sshTarget = readString(tunnel.sshTarget);
+  const localHost = readString(tunnel.localHost) ?? "127.0.0.1";
+  const remoteHost = readString(tunnel.remoteHost);
+  const localPort = Number(tunnel.localPort);
+  const remotePort = Number(tunnel.remotePort);
+  if (
+    !sshTarget ||
+    !remoteHost ||
+    !Number.isFinite(localPort) ||
+    localPort <= 0 ||
+    !Number.isFinite(remotePort) ||
+    remotePort <= 0
+  ) {
+    return {
+      ok: false,
+      command: "ssh",
+      args: [],
+      detail: "invalid PaperNexus SSH tunnel config",
+    };
+  }
+  const forwarding = `${localHost}:${Math.floor(localPort)}:${remoteHost}:${Math.floor(remotePort)}`;
+  return {
+    ok: true,
+    command: "ssh",
+    args: [
+      "-N",
+      "-L",
+      forwarding,
+      "-o",
+      "ExitOnForwardFailure=yes",
+      "-o",
+      "BatchMode=yes",
+      "-o",
+      "ConnectTimeout=10",
+      sshTarget,
+    ],
+    detail: `${forwarding} via ${sshTarget}`,
+  };
+}
+
+async function startPapernexusSshTunnel(localPapernexus) {
+  const tunnelCommand = buildPapernexusSshTunnelCommand(localPapernexus);
+  if (!tunnelCommand) {
+    return { enabled: false, check: null, child: null };
+  }
+  if (!tunnelCommand.ok) {
+    return {
+      enabled: true,
+      check: {
+        name: "papernexus_ssh_tunnel",
+        ok: false,
+        detail: tunnelCommand.detail,
+      },
+      child: null,
+    };
+  }
+  let stderr = "";
+  const child = spawn(tunnelCommand.command, tunnelCommand.args, {
+    stdio: ["ignore", "ignore", "pipe"],
+  });
+  child.stderr?.on("data", (chunk) => {
+    stderr += chunk.toString("utf8");
+  });
+  const cleanup = () => {
+    if (child.exitCode === null && !child.killed) {
+      child.kill("SIGTERM");
+    }
+  };
+  process.once("exit", cleanup);
+  const started = await new Promise((resolve) => {
+    let settled = false;
+    const done = (value) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      resolve(value);
+    };
+    child.once("error", (error) => {
+      done({
+        ok: false,
+        detail: `ssh spawn failed: ${readString(error?.message) ?? "unknown"}`,
+      });
+    });
+    child.once("exit", (code, signal) => {
+      done({
+        ok: false,
+        detail: `ssh tunnel exited before ready code=${code ?? "null"} signal=${signal ?? "null"} stderr=${stderr.slice(0, 300)}`,
+      });
+    });
+    setTimeout(() => {
+      done({ ok: true, detail: tunnelCommand.detail });
+    }, 750);
+  });
+  return {
+    enabled: true,
+    check: {
+      name: "papernexus_ssh_tunnel",
+      ok: started.ok,
+      detail: started.detail,
+    },
+    child: started.ok ? child : null,
+  };
+}
+
+async function stopPapernexusSshTunnel(tunnel) {
+  const child = tunnel?.child;
+  if (!child || child.exitCode !== null || child.killed) {
+    return;
+  }
+  child.kill("SIGTERM");
+  await new Promise((resolve) => {
+    const timer = setTimeout(resolve, 1000);
+    child.once("close", () => {
+      clearTimeout(timer);
+      resolve();
+    });
+  });
 }
 
 export async function collectAutoWorkflowEnvironmentPreflight(params = {}) {
@@ -1006,6 +1135,27 @@ function valueContainsProvider(value, provider) {
   return false;
 }
 
+function profileExists(authProfile, profileId) {
+  if (typeof profileId !== "string" || !profileId.trim()) {
+    return false;
+  }
+  const profile = authProfile?.profiles?.[profileId.trim()];
+  return Boolean(
+    profile &&
+      typeof profile === "object" &&
+      !Array.isArray(profile) &&
+      Object.keys(profile).length > 0
+  );
+}
+
+function authStateLastGoodProfileForProvider(authState, providerId) {
+  if (typeof providerId !== "string" || !providerId.trim()) {
+    return null;
+  }
+  const profileId = authState?.lastGood?.[providerId.trim()];
+  return typeof profileId === "string" && profileId.trim() ? profileId.trim() : null;
+}
+
 function credentialStatusForProvider(params) {
   const provider = params.modelsCatalog?.providers?.[params.providerId];
   if (providerHasInlineCredential(provider)) {
@@ -1013,6 +1163,13 @@ function credentialStatusForProvider(params) {
   }
   if (params.authProfile && valueContainsProvider(params.authProfile, params.providerId)) {
     return "auth-profile";
+  }
+  const lastGoodProfileId = authStateLastGoodProfileForProvider(
+    params.authState,
+    params.providerId
+  );
+  if (lastGoodProfileId && profileExists(params.authProfile, lastGoodProfileId)) {
+    return `auth-state:${lastGoodProfileId}`;
   }
   for (const acceptedProvider of params.acceptedAuthProviders ?? []) {
     if (params.authProfile && valueContainsProvider(params.authProfile, acceptedProvider)) {
@@ -1048,6 +1205,7 @@ export function verifyAgentRuntimeModelConfig(params) {
     const credentialStatus = credentialStatusForProvider({
       modelsCatalog: params.modelsCatalog,
       authProfile: params.authProfile,
+      authState: params.authState,
       providerId: parsed.provider,
       acceptedAuthProviders: params.acceptedAuthProviders,
     });
@@ -1430,6 +1588,7 @@ export function buildAutoWorkflowTraceEvalScorecard(params) {
       failedCount: failedPreflight.length,
     },
     transportParity: params?.transportParity ?? null,
+    runtimeCloseout: params?.runtimeCloseout ?? null,
     lanes: lanes.map(compactLaneTrace),
   };
 }
@@ -1775,6 +1934,22 @@ function buildPrChecklistResidualRisks(params) {
   if (params.bootstrapTransport !== "discord") {
     risks.push("discord_transport_parity_not_covered_by_this_run");
   }
+  if (params.transportParity?.userPathAligned === false) {
+    const laneIssues = Array.isArray(params.transportParity?.lanes)
+      ? params.transportParity.lanes
+          .flatMap((lane) =>
+            Array.isArray(lane?.alignmentIssues)
+              ? lane.alignmentIssues.map((issue) => `${lane?.lane ?? "lane"}:${issue}`)
+              : []
+          )
+          .filter(Boolean)
+      : [];
+    risks.push(
+      laneIssues.length > 0
+        ? `transport_parity_user_path_misaligned:${laneIssues.slice(0, 5).join(",")}`
+        : "transport_parity_user_path_misaligned"
+    );
+  }
   const lanes = Array.isArray(params.resultSummary?.lanes) ? params.resultSummary.lanes : [];
   if (!lanes.some((lane) => lane.finalStage === "writing" || lane.finalStage === "write")) {
     risks.push("writing_stage_not_reached_by_this_run");
@@ -1931,6 +2106,45 @@ function localFallbackInjected(workflowLocalFallback) {
   );
 }
 
+function isExpectedNativeSlashReplayFallback(value) {
+  const text = String(value ?? "").toLowerCase();
+  return text.includes("isolated native slash replay") || text.includes("isolated native slash bootstrap");
+}
+
+function buildLaneTransportAlignmentIssues({
+  bootstrapTransport,
+  lane,
+  context,
+  actualTransport,
+  actualCommandSource,
+  bootstrapFallbackTransport,
+  actualBootstrapSessionKey,
+  actualCommandTargetSessionKey,
+}) {
+  const issues = [];
+  if (actualTransport !== bootstrapTransport) {
+    issues.push(`transport_mismatch_expected_${bootstrapTransport}_actual_${actualTransport ?? "missing"}`);
+  }
+  if (actualCommandSource !== context.commandSource) {
+    issues.push(`command_source_mismatch_expected_${context.commandSource}_actual_${actualCommandSource ?? "missing"}`);
+  }
+  if (bootstrapTransport === "discord") {
+    if (bootstrapFallbackTransport && !isExpectedNativeSlashReplayFallback(bootstrapFallbackTransport)) {
+      issues.push("unexpected_bootstrap_fallback_transport");
+    }
+    if (!String(actualBootstrapSessionKey ?? "").includes(":discord:")) {
+      issues.push("bootstrap_session_not_discord_scoped");
+    }
+    if (!String(actualCommandTargetSessionKey ?? "").includes(":discord:")) {
+      issues.push("command_target_session_not_discord_scoped");
+    }
+    if (!String(lane.originatingChannel ?? context.originatingChannel ?? "").startsWith("discord")) {
+      issues.push("originating_channel_not_discord");
+    }
+  }
+  return issues;
+}
+
 function expectedLaneNames(command) {
   if (command?.lane === "full") {
     return ["experiment", "survey"];
@@ -1998,30 +2212,52 @@ export function buildAutoWorkflowTransportParityScorecard(params) {
         lane.conversationId ??
         expectedConversationIdForLane(params?.conversationId, laneName, command.lane),
     });
+    const actualTransport = lane.transport ?? bootstrapTransport;
+    const actualCommandSource = lane.commandSource ?? lane.actualCommandSource ?? context.commandSource;
+    const bootstrapFallbackTransport = lane.bootstrapFallbackTransport ?? null;
+    const actualBootstrapSessionKey = lane.bootstrapSessionKey ?? context.bootstrapSessionKey;
+    const actualCommandTargetSessionKey = lane.commandTargetSessionKey ?? context.commandTargetSessionKey;
+    const actualOriginatingChannel = lane.originatingChannel ?? context.originatingChannel;
+    const actualOriginatingTo = lane.originatingTo ?? context.originatingTo;
+    const alignmentIssues = buildLaneTransportAlignmentIssues({
+      bootstrapTransport,
+      lane,
+      context,
+      actualTransport,
+      actualCommandSource,
+      bootstrapFallbackTransport,
+      actualBootstrapSessionKey,
+      actualCommandTargetSessionKey,
+    });
     return {
       lane: laneName,
-      transport: lane.transport ?? bootstrapTransport,
+      transport: actualTransport,
       conversationId: lane.conversationId ?? context.conversationId,
       projectRoot: lane.projectRoot ?? null,
       projectId: lane.projectRoot ? path.basename(lane.projectRoot) : null,
       finalVerdict: lane.finalVerdict ?? null,
       failureReason: lane.failureReason ?? null,
       expectedCommandSource: context.commandSource,
-      bootstrapSessionKey: lane.bootstrapSessionKey ?? context.bootstrapSessionKey,
-      commandTargetSessionKey: context.commandTargetSessionKey,
-      originatingChannel: context.originatingChannel,
-      originatingTo: context.originatingTo,
+      actualCommandSource,
+      bootstrapSessionKey: actualBootstrapSessionKey,
+      commandTargetSessionKey: actualCommandTargetSessionKey,
+      originatingChannel: actualOriginatingChannel,
+      originatingTo: actualOriginatingTo,
+      expectedOriginatingChannel: context.originatingChannel,
+      expectedOriginatingTo: context.originatingTo,
       routePeer: context.to,
       bindingChannelKey: context.channelKey,
       bootstrapRunId: lane.bootstrapRunId ?? null,
-      bootstrapFallbackTransport: lane.bootstrapFallbackTransport ?? null,
+      bootstrapFallbackTransport,
+      userPathAligned: alignmentIssues.length === 0,
+      alignmentIssues,
     };
   });
   return {
     profile: transportProfileForBootstrapTransport(bootstrapTransport),
     mode: params?.mode ?? null,
     bootstrapTransport,
-    userPathAligned: bootstrapTransport === "discord",
+    userPathAligned: lanes.length > 0 && lanes.every((lane) => lane.userPathAligned),
     expectedCommandSource: bootstrapTransport === "discord" ? "native" : "local",
     hiddenProjectIdOverrideUsed: Boolean(params?.projectIdArg || params?.generatedProjectId),
     requestedProjectId: params?.projectIdArg ?? null,
@@ -2077,6 +2313,145 @@ async function copyIfExists(sourcePath, destinationPath) {
   await fs.mkdir(path.dirname(destinationPath), { recursive: true });
   await fs.copyFile(sourcePath, destinationPath);
   return true;
+}
+
+function isPathInside(parentPath, candidatePath) {
+  const parent = path.resolve(parentPath);
+  const candidate = path.resolve(candidatePath);
+  const relative = path.relative(parent, candidate);
+  return relative === "" || (relative && !relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+const E2E_ACTIVE_SESSION_STATUSES = new Set(["active"]);
+const E2E_ACTIVE_QUEUE_STATUSES = new Set(["queued", "pending", "launching", "running"]);
+
+async function terminalizeRuntimeResidueFile(params) {
+  const store = await readJson(params.filePath, null);
+  if (!store || typeof store !== "object") {
+    return {
+      filePath: params.filePath,
+      changedCount: 0,
+      backupPath: null,
+      missing: true,
+    };
+  }
+  const entries = Array.isArray(store.entries) ? store.entries : null;
+  if (!entries) {
+    return {
+      filePath: params.filePath,
+      changedCount: 0,
+      backupPath: null,
+      missing: false,
+    };
+  }
+
+  let changedCount = 0;
+  const nextEntries = entries.map((entry) => {
+    if (!entry || typeof entry !== "object" || !params.activeStatuses.has(String(entry.status ?? ""))) {
+      return entry;
+    }
+    changedCount += 1;
+    return {
+      ...entry,
+      status: "superseded",
+      lastCheckedAt: params.finishedAt,
+      lastFinishedAt: entry.lastFinishedAt ?? params.finishedAt,
+      terminalReason: params.reason,
+      supersededAt: params.finishedAt,
+      lastError: [entry.lastError, params.reason].filter(Boolean).join(" "),
+    };
+  });
+
+  if (changedCount === 0) {
+    return {
+      filePath: params.filePath,
+      changedCount,
+      backupPath: null,
+      missing: false,
+    };
+  }
+
+  const backupPath = `${params.filePath}.e2e-closeout-backup-${params.finishedAt.replace(/[:.]/g, "")}`;
+  await fs.copyFile(params.filePath, backupPath);
+  await fs.writeFile(
+    params.filePath,
+    `${JSON.stringify({ ...store, updatedAt: params.finishedAt, entries: nextEntries }, null, 2)}\n`,
+    "utf8"
+  );
+  return {
+    filePath: params.filePath,
+    changedCount,
+    backupPath,
+    missing: false,
+  };
+}
+
+export async function terminalizeAutoWorkflowE2ERuntimeResidue(params) {
+  if (params?.mode !== "live") {
+    return {
+      enabled: false,
+      reason: "non_live_mode",
+      lanes: [],
+      sessionCount: 0,
+      queueCount: 0,
+    };
+  }
+  const projectsRoot = params?.projectsRoot ? path.resolve(params.projectsRoot) : null;
+  if (!projectsRoot) {
+    return {
+      enabled: false,
+      reason: "missing_projects_root",
+      lanes: [],
+      sessionCount: 0,
+      queueCount: 0,
+    };
+  }
+  const lanes = [];
+  for (const lane of params?.resultSummary?.lanes ?? []) {
+    const projectRoot = lane?.projectRoot ? path.resolve(lane.projectRoot) : null;
+    if (!projectRoot) {
+      continue;
+    }
+    if (!isPathInside(projectsRoot, projectRoot)) {
+      lanes.push({
+        lane: lane.lane ?? null,
+        projectRoot,
+        skipped: true,
+        reason: "project_root_outside_e2e_projects_root",
+      });
+      continue;
+    }
+    const runtimeDir = path.join(projectRoot, ".openclaw-research");
+    const reason = params.reason ?? "e2e_harness_closeout_superseded";
+    const [sessions, queue] = await Promise.all([
+      terminalizeRuntimeResidueFile({
+        filePath: path.join(runtimeDir, "workflow-runtime-sessions.json"),
+        activeStatuses: E2E_ACTIVE_SESSION_STATUSES,
+        finishedAt: params.finishedAt,
+        reason,
+      }),
+      terminalizeRuntimeResidueFile({
+        filePath: path.join(runtimeDir, "workflow-runtime-queue.json"),
+        activeStatuses: E2E_ACTIVE_QUEUE_STATUSES,
+        finishedAt: params.finishedAt,
+        reason,
+      }),
+    ]);
+    lanes.push({
+      lane: lane.lane ?? null,
+      projectRoot,
+      skipped: false,
+      sessions,
+      queue,
+    });
+  }
+  return {
+    enabled: true,
+    reason: params.reason ?? "e2e_harness_closeout_superseded",
+    lanes,
+    sessionCount: lanes.reduce((total, lane) => total + (lane.sessions?.changedCount ?? 0), 0),
+    queueCount: lanes.reduce((total, lane) => total + (lane.queue?.changedCount ?? 0), 0),
+  };
 }
 
 async function collectProjectSnapshots(params) {
@@ -2222,15 +2597,18 @@ async function preflight(params) {
       for (const role of params.agentAuthRoles ?? []) {
         const agentDir = resolveAgentDir(config, openclawHome, role);
         const authProfilePath = path.join(agentDir, "auth-profiles.json");
+        const authStatePath = path.join(agentDir, "auth-state.json");
         const modelsPath = path.join(agentDir, "models.json");
         const modelsCatalog = await readJson(modelsPath, null);
         const authProfile = await readJson(authProfilePath, null);
+        const authState = await readJson(authStatePath, null);
         const runtimeCheck = verifyAgentRuntimeModelConfig({
           config,
           agentId: role,
           agentDir,
           modelsCatalog,
           authProfile,
+          authState,
           acceptedAuthProviders: params.agentAuthProviders,
         });
         checks.push({
@@ -2245,7 +2623,7 @@ async function preflight(params) {
   return checks;
 }
 
-function formatHumanSummary(summary) {
+export function formatHumanSummary(summary) {
   const lines = [
     `Auto workflow E2E: ${summary.status}`,
     `command: ${summary.command.displayCommand}`,
@@ -2274,13 +2652,22 @@ function formatHumanSummary(summary) {
   }
   if (summary.transportParity) {
     lines.push(
-      `transport parity: ${summary.transportParity.profile} commandSource=${summary.transportParity.expectedCommandSource} localFallbackInjected=${summary.transportParity.localFallbackInjected} hiddenProjectIdOverride=${summary.transportParity.hiddenProjectIdOverrideUsed}`
+      `transport parity: ${summary.transportParity.profile} aligned=${summary.transportParity.userPathAligned === false ? "false" : summary.transportParity.userPathAligned === true ? "true" : "unknown"} commandSource=${summary.transportParity.expectedCommandSource} localFallbackInjected=${summary.transportParity.localFallbackInjected} hiddenProjectIdOverride=${summary.transportParity.hiddenProjectIdOverrideUsed}`
     );
     for (const lane of summary.transportParity.lanes ?? []) {
+      const laneIssues =
+        Array.isArray(lane.alignmentIssues) && lane.alignmentIssues.length > 0
+          ? lane.alignmentIssues.slice(0, 5).join(",")
+          : "none";
       lines.push(
-        `transport parity ${lane.lane}: target=${lane.commandTargetSessionKey ?? "unknown"} origin=${lane.originatingChannel ?? "unknown"}:${lane.originatingTo ?? "unknown"} project=${lane.projectId ?? "unknown"}`
+        `transport parity ${lane.lane}: aligned=${lane.userPathAligned === false ? "false" : lane.userPathAligned === true ? "true" : "unknown"} issues=${laneIssues} target=${lane.commandTargetSessionKey ?? "unknown"} origin=${lane.originatingChannel ?? "unknown"}:${lane.originatingTo ?? "unknown"} project=${lane.projectId ?? "unknown"}`
       );
     }
+  }
+  if (summary.runtimeCloseout?.enabled) {
+    lines.push(
+      `runtime closeout: sessions=${summary.runtimeCloseout.sessionCount ?? 0} queues=${summary.runtimeCloseout.queueCount ?? 0} reason=${summary.runtimeCloseout.reason ?? "unknown"}`
+    );
   }
   for (const lane of summary.result.lanes) {
     lines.push(
@@ -2479,21 +2866,28 @@ async function main(argv = process.argv) {
   await fs.mkdir(runRoot, { recursive: true });
   await fs.mkdir(projectsRoot, { recursive: true });
 
+  const papernexusSshTunnel = await startPapernexusSshTunnel(localPapernexus);
+  const papernexusTunnelChecks = papernexusSshTunnel.check
+    ? [papernexusSshTunnel.check]
+    : [];
   const preflightChecks = noPreflight
     ? [{ name: "preflight", ok: true, detail: "skipped" }]
-    : await preflight({
-        mode,
-        sourceConfigPath: effectiveSourceConfig.configPath,
-        isolatedGateway,
-        skipAgentAuthPreflight,
-        skipAgentModelSync,
-        skipGatewayRestartAfterAgentSync,
-        agentAuthRoles,
-        agentAuthProviders,
-        bootstrapTransport,
-        gatewayToken,
-        localPapernexus,
-      });
+    : [
+        ...papernexusTunnelChecks,
+        ...(await preflight({
+          mode,
+          sourceConfigPath: effectiveSourceConfig.configPath,
+          isolatedGateway,
+          skipAgentAuthPreflight,
+          skipAgentModelSync,
+          skipGatewayRestartAfterAgentSync,
+          agentAuthRoles,
+          agentAuthProviders,
+          bootstrapTransport,
+          gatewayToken,
+          localPapernexus,
+        })),
+      ];
   const preflightOk = preflightChecks.every((entry) => entry.ok);
 
   const childArgs = [
@@ -2636,6 +3030,7 @@ async function main(argv = process.argv) {
       failureReason = "missing_json_payload";
     }
   }
+  await stopPapernexusSshTunnel(papernexusSshTunnel);
 
   let modelOverrideSummary = effectiveSourceConfig.summary;
   if (modelOverrideSummary) {
@@ -2668,6 +3063,16 @@ async function main(argv = process.argv) {
   }
 
   const finishedAt = new Date().toISOString();
+  const runtimeCloseout = await terminalizeAutoWorkflowE2ERuntimeResidue({
+    mode,
+    projectsRoot,
+    resultSummary,
+    finishedAt,
+    reason:
+      status === "pass"
+        ? "e2e_harness_pass_closeout"
+        : `e2e_harness_${failureReason ?? status}_closeout`,
+  });
   const summaryPath = path.join(runRoot, "AUTO_WORKFLOW_E2E_SUMMARY.json");
   const markdownSummaryPath = path.join(runRoot, "AUTO_WORKFLOW_E2E_SUMMARY.md");
   const traceEvalScorecardPath = path.join(runRoot, "TRACE_EVAL_SCORECARD.json");
@@ -2708,6 +3113,7 @@ async function main(argv = process.argv) {
     preflight: preflightChecks,
     resultSummary,
     transportParity,
+    runtimeCloseout,
   });
   const researchHarnessScorecard = await buildAutoWorkflowResearchHarnessScorecard({
     generatedAt: finishedAt,
@@ -2739,6 +3145,7 @@ async function main(argv = process.argv) {
     stderrPath,
     runRoot,
     projectsRoot,
+    runtimeCloseout,
   });
   const prChecklistMarkdown = formatAutoWorkflowPrChecklistMarkdown(prChecklist);
   const summary = {
@@ -2763,6 +3170,7 @@ async function main(argv = process.argv) {
       timedOut: child.timedOut,
     },
     result: resultSummary,
+    runtimeCloseout,
     transportParity,
     traceEvalScorecardPath,
     traceEvalScorecard,

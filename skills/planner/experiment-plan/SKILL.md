@@ -15,7 +15,7 @@ allowed-tools:
 
 Build or revise the workflow-owned pre-launch packet for a reviewed-auto experiment round.
 
-> **Write scope**: planner writes only under `{PROJ}/planner/`. Use workflow tools to mirror status back into `PROJECT_MANIFEST.json`.
+> **Write scope**: planner writes only under `{PROJ}/planner/`. Use workflow tools to mirror review status back into `PROJECT_MANIFEST.json`; do not hand-edit canonical `workflow_control`.
 
 ## Goals
 

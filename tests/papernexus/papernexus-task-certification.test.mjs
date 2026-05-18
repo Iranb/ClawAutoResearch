@@ -374,6 +374,84 @@ test("PaperNexus certification keeps remote corpus summary partial without expli
   );
 });
 
+test("PaperNexus certification accepts active remote graph evidence with source spans", async (t) => {
+  const projectRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "papernexus-cert-active-graph-")
+  );
+  t.after(() => fs.rm(projectRoot, { recursive: true, force: true }));
+
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "gcd-papernexus-cert-active-graph",
+    paper_ingestion: {},
+  });
+  await writeJson(path.join(projectRoot, "graph", "PAPERNEXUS_STATUS.json"), {
+    status: "ready",
+    mode: "remote_mcp",
+    verification_mode: "remote_corpus_summary",
+  });
+  await writeJson(path.join(projectRoot, "graph", "GRAPH_PRESENCE_CHECK.json"), {
+    status: "ready",
+    verification_mode: "remote_corpus_summary",
+    ready_proof_level: "source_span",
+    expected_paper_count: 2,
+    present_paper_count: 2,
+    missing_paper_count: 0,
+    present_papers: [
+      {
+        canonical_id: "paper-a",
+        title: "FixMatch for Generalized Category Discovery",
+        corpus_paper_id: "remote-paper-a",
+        corpus_source_key: "sources/fixmatch.md",
+        ...sourceBackedEvidence("remote-paper-a", "sources/fixmatch.md"),
+      },
+      {
+        canonical_id: "paper-b",
+        title: "Contrastive Discovery Baselines",
+        corpus_paper_id: "remote-paper-b",
+        corpus_source_key: "sources/contrastive.md",
+        graph_index_evidence: {
+          available: false,
+          active_in_graph: true,
+          paper_id: "remote-paper-b",
+          source_key: "sources/contrastive.md",
+        },
+        source_span_evidence: {
+          available: true,
+          count: 1,
+          spans: [
+            {
+              span_id: "span:remote-paper-b",
+              source_type: "source_text",
+              source_key: "sources/contrastive.md",
+              paper_id: "remote-paper-b",
+              start_line: 1,
+              end_line: 1,
+              evidence_text: "source-backed excerpt",
+              source_span_available: true,
+            },
+          ],
+        },
+      },
+    ],
+  });
+
+  const certification = await certifyPapernexusTaskForProject({ projectRoot });
+
+  assert.equal(certification.status, "ready");
+  assert.equal(certification.claim_level, "source_backed_graph");
+  assert.equal(certification.source_backed_graph_claim, true);
+  assert.equal(certification.graph.paper_index_present_count, 2);
+  assert.equal(certification.graph.source_backed_present_count, 2);
+  assert.equal(
+    certification.limitations.includes("missing_per_paper_graph_index_evidence"),
+    false
+  );
+  assert.equal(
+    certification.limitations.includes("missing_per_paper_source_span_evidence"),
+    false
+  );
+});
+
 test("PaperNexus certification flags manifest items that never received remote task ids", async (t) => {
   const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "papernexus-cert-missing-task-"));
   t.after(() => fs.rm(projectRoot, { recursive: true, force: true }));

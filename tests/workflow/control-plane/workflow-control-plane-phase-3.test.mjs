@@ -2103,6 +2103,80 @@ test("aggressive auto iterator auto-assembles the write package before evaluatin
   assert.equal(writePackage.validationErrors.length, 0);
 });
 
+test("aggressive auto iterator repairs stale-ready write package projections before the write-stage gate", async (t) => {
+  const projectRoot = await makeProjectRoot();
+
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await seedWriteProject(projectRoot);
+  await seedWritePackageSourceSummaries(projectRoot);
+  await writeText(path.join(projectRoot, "reviewer", "CITATION_VERIFICATION.md"));
+
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.citation_integrity.verification_status = "verified";
+  manifest.citation_integrity.last_verified_at = "2026-03-26T10:35:00.000Z";
+  manifest.write_package = {
+    status: "ready",
+    assembly_status: "ready",
+    assembly_mode: "local_authoring_closeout",
+    winning_track_ids: ["track-main"],
+    claim_evidence_matrix_path: "analyzer/CLAIM_EVIDENCE_MATRIX.md",
+    narrative_report_path: "analyzer/NARRATIVE_REPORT.md",
+    track_verdicts_path: "analyzer/TRACK_VERDICTS.md",
+    unsupported_claims_path: "analyzer/UNSUPPORTED_CLAIMS.md",
+    baseline_summary_path: "researcher/baseline_summary.json",
+    research_summary_path: "researcher/research_summary.json",
+    ablation_summary_path: "researcher/ablation_summary.json",
+    evaluation_summary_path: "researcher/evaluation_summary.json",
+    figure_pack_path: "academic_writer/FIGURE_PACK.json",
+    table_pack_path: "academic_writer/TABLE_PACK.json",
+    proof_packet_dir: "analyzer/proof-packets",
+    citation_candidates_path: "academic_writer/CITATION_CANDIDATES.json",
+    package_manifest_path: "academic_writer/WRITE_PACKAGE.json",
+    assembly_report_path: "academic_writer/WRITE_PACKAGE_ASSEMBLY_REPORT.json",
+    section_assembly_queue_path: "academic_writer/SECTION_ASSEMBLY_QUEUE.json",
+    source_artifact_count: 0,
+    derived_artifact_count: 0,
+    pending_reason: null,
+  };
+  await writeJson(manifestPath, manifest);
+
+  const result = await runWorkflowAutoIterator({
+    projectRoot,
+    agentId: "academic_writer",
+    mode: "phase-3-write-package-stale-ready-auto-assembly",
+    queueMailbox: false,
+    policy: {
+      autoMode: "aggressive",
+    },
+  });
+
+  assert.equal(result.configuredAutoMode, "aggressive");
+  assert.equal(result.stageBefore, "write");
+  assert.equal(result.stageAfter, "submit");
+  assert.notEqual(result.blockingReason, "write_package_artifacts_missing");
+  await assert.doesNotReject(
+    fs.readFile(
+      path.join(projectRoot, "academic_writer", "CITATION_CANDIDATES.json"),
+      "utf8"
+    )
+  );
+  await assert.doesNotReject(
+    fs.readFile(path.join(projectRoot, "academic_writer", "WRITE_PACKAGE.json"), "utf8")
+  );
+
+  const writePackage = await getWritePackageStateSummary({
+    projectRoot,
+  });
+  assert.equal(writePackage.state.status, "ready");
+  assert.equal(writePackage.state.sourceArtifactCount > 0, true);
+  assert.equal(writePackage.state.derivedArtifactCount > 0, true);
+  assert.equal(writePackage.validationErrors.length, 0);
+});
+
 test("focused prompt assembly returns layered payload metadata for current section work", () => {
   const assembly = buildFocusedPromptAssembly({
     snapshot: {

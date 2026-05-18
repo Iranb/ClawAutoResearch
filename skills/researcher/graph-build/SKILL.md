@@ -23,7 +23,7 @@ Workflow soft-sync rule:
 - do not wait for that background Zotero pass before reporting graph readiness
 - if this graph-build continuation already refreshed Zotero successfully, keep `{PROJ}/researcher/ZOTERO_SYNC_PACKET.json` / `{PROJ}/researcher/ZOTERO_PACKET.md` truthful so the coordinator does not immediately requeue duplicate work
 
-> **File ownership**: Write ONLY to `{PROJ}/graph/` and `{PROJ}/PROJECT_MANIFEST.json`.
+> **File ownership**: Write ONLY to `{PROJ}/graph/` and graph evidence/projection fields in `{PROJ}/PROJECT_MANIFEST.json` through workflow tools where available.
 > `{PROJ}` = `{PROJECTS_ROOT}/{proj-id}`
 
 ## Workflow-Owned Micro-Stages
@@ -227,7 +227,7 @@ Write `{PROJ}/graph/GRAPH_BUILD_REPORT.md`:
 - Notes: [coverage quality, missing papers, Markdown-vs-PDF counts, missing Markdown fallbacks, manual command if refresh failed, etc.]
 ```
 
-Update `{PROJ}/PROJECT_MANIFEST.json` with:
+Update graph evidence/projection state with:
 - leave `papernexus_corpus`, `paper_source_dir`, and `graph_source_dir` unset unless the project intentionally overrides the shared-global defaults
 - `graph_last_built_at`
 - `paper_ingestion.last_graph_sync_at`
@@ -237,10 +237,10 @@ Update `{PROJ}/PROJECT_MANIFEST.json` with:
 - `paper_ingestion.refresh_reason: null`
 - refreshed `brainstorm_cycle.provider*`, `contract_version`, artifact pointers, and `latest_run_at` when this pass updates the brainstorm bundle
 - `graph_watch.enabled`
-- `current_stage: "graph_build"`
-- `current_micro_stage: "uploading" | "verifying" | "brainstorm_refresh"` while the stage is still active
 - `updated_at`
 - `gates.quality: "pending"` until frontier mapping and track selection complete
+
+Do not hand-edit stage/owner/action mirrors such as `current_stage`, `current_micro_stage`, `owner_agent`, or `next_action`. The graph-build resolver should derive `graph_build/uploading`, `graph_build/verifying`, or `graph_build/brainstorm_refresh` into canonical `workflow_control`.
 
 ## Hard Stop Conditions
 

@@ -3055,7 +3055,7 @@ test("auto iterator stays in setup when required setup signals are missing", asy
   assert.equal(result.stageAfter, "setup");
   assert.equal(result.ownerAfter, "researcher");
   assert.equal(result.gateBlocking, false);
-  assert.match(result.blockingReason ?? "", /PROJECT_MANIFEST\.json/);
+  assert.match(result.blockingReason ?? "", /PROJECT_MANIFEST\.json|TRACK_REGISTRY\.json/);
   assert.ok(result.auditPath);
 });
 
@@ -4857,6 +4857,127 @@ test("graph presence check preserves remote_mcp per-paper evidence in summary-on
   );
 });
 
+test("graph presence check accepts cached remote corpus superset when current expected papers have per-paper proof", async (t) => {
+  const projectRoot = await makeTempProject();
+  const previousToken = process.env.PAPERNEXUS_API_TOKEN;
+  const requests = [];
+  const server = http.createServer(async (request, response) => {
+    const bodyChunks = [];
+    for await (const chunk of request) {
+      bodyChunks.push(chunk);
+    }
+    requests.push(JSON.parse(Buffer.concat(bodyChunks).toString("utf8")));
+    response.writeHead(503, { "Content-Type": "application/json" });
+    response.end(JSON.stringify({ error: "temporary remote refresh failure" }));
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  const port = typeof address === "object" && address ? address.port : null;
+  assert.notEqual(port, null);
+  t.after(async () => {
+    if (previousToken === undefined) {
+      delete process.env.PAPERNEXUS_API_TOKEN;
+    } else {
+      process.env.PAPERNEXUS_API_TOKEN = previousToken;
+    }
+    await new Promise((resolve, reject) =>
+      server.close((error) => (error ? reject(error) : resolve()))
+    );
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  process.env.PAPERNEXUS_API_TOKEN = "test-token";
+  await seedSetupCompleteProject(projectRoot, "graph_build");
+  await seedPaperSourceIndex(projectRoot, [
+    {
+      canonical_id: "arxiv:2501.00022",
+      arxiv_id: "2501.00022",
+      title: "Remote MCP Paper 22",
+      source_path: path.join(
+        projectRoot,
+        "researcher",
+        "paper_source",
+        "md",
+        "2501.00022.md"
+      ),
+    },
+  ]);
+  const cachedPresentPapers = ["2501.00022", "2501.00023", "2501.00024"].map(
+    (arxivId, index) => ({
+      canonical_id: `arxiv:${arxivId}`,
+      title: `Remote MCP Paper ${arxivId.slice(-2)}`,
+      source_kind: "markdown",
+      source_provider: "arxiv2md",
+      matched_by: "source_path",
+      corpus_paper_id: `paper:remote-superset-${index + 1}`,
+      corpus_source_key: `/remote/corpora/GCD/md/${arxivId}.md`,
+      graph_index_evidence: {
+        available: true,
+        active_in_graph: true,
+        paper_id: `paper:remote-superset-${index + 1}`,
+        paper_node_id: `paper:remote-superset-${index + 1}`,
+        source_key: `/remote/corpora/GCD/md/${arxivId}.md`,
+        identifiers: { arxivId },
+      },
+      source_span_evidence: {
+        available: true,
+        count: 1,
+        source_key: `/remote/corpora/GCD/md/${arxivId}.md`,
+        spans: [{ span_id: `source-span:${arxivId}`, source_span_available: true }],
+      },
+    })
+  );
+  await writeJson(path.join(projectRoot, "graph", "PAPERNEXUS_STATUS.json"), {
+    mode: "remote_mcp",
+    status: "ready",
+    verification_mode: "canonical_paper_index",
+    expected_paper_count: 3,
+    present_paper_count: 3,
+    missing_paper_count: 0,
+    ready_proof_level: "source_span",
+    corpus_name: "GCD",
+    corpus_root: "~/papernexus-corpora/GCD",
+    present_papers: cachedPresentPapers,
+  });
+
+  const result = await checkGraphPresenceForWorkflow({
+    projectRoot,
+    remoteAccess: {
+      mcpUrl: `http://127.0.0.1:${port}/mcp`,
+      mcpTransport: "streamable-http",
+      tokenSource: "env",
+      tokenEnv: "PAPERNEXUS_API_TOKEN",
+    },
+  });
+
+  assert.equal(result.status, "ready");
+  assert.equal(result.expectedPaperCount, 1);
+  assert.equal(result.presentPaperCount, 1);
+  assert.equal(result.missingPaperCount, 0);
+  assert.equal(result.presentPapers.length, 1);
+  assert.equal(result.presentPapers[0].canonicalId, "arxiv:2501.00022");
+  assert.equal(requests.length, 1);
+
+  const certification = JSON.parse(
+    await fs.readFile(
+      path.join(projectRoot, "graph", "PAPERNEXUS_TASK_CERTIFICATION.json"),
+      "utf8"
+    )
+  );
+  assert.equal(certification.status, "ready");
+  assert.equal(certification.claim_level, "source_backed_graph");
+  assert.equal(certification.source_backed_graph_claim, true);
+
+  const graphDecision = JSON.parse(
+    await fs.readFile(
+      path.join(projectRoot, "graph", "GRAPH_BUILD_DECISION.json"),
+      "utf8"
+    )
+  );
+  assert.equal(graphDecision.decision, "complete");
+  assert.equal(graphDecision.source_backed_graph_claim, true);
+});
+
 test("graph presence check reports remote PaperNexus reconciliation in progress when wrapper-driven ingestion is active", async (t) => {
   const projectRoot = await makeTempProject();
   const previousToken = process.env.PAPERNEXUS_API_TOKEN;
@@ -5261,8 +5382,15 @@ test("auto iterator points graph_build at a repair import pass when remote graph
   assert.equal(result.stageBefore, "graph_build");
   assert.equal(result.stageAfter, "graph_build");
   assert.equal(result.graphPresenceCheck?.status, "missing_papers");
-  assert.match(result.nextAction ?? "", /\/graph-build --repair-import true/i);
-  assert.match(result.nextAction ?? "", /--shared-corpus "?GCD"?/i);
+  assert.equal(result.nextAction, "/graph-build");
+  assert.ok(
+    result.recommendedActions.some(
+      (action) =>
+        /\/graph-build --repair-import true/i.test(action.command ?? "") &&
+        /--shared-corpus "?GCD"?/i.test(action.command ?? "")
+    ),
+    JSON.stringify(result.recommendedActions)
+  );
   assert.equal(manifest.paper_ingestion.repair_required, true);
   assert.equal(manifest.paper_ingestion.repair_target_corpus, "GCD");
   assert.match(manifest.paper_ingestion.repair_reason ?? "", /missing|repair/i);
@@ -8435,7 +8563,7 @@ test("auto iterator regresses frontier_mapping back to graph_build when graph mi
   assert.equal(result.stageEffective, "graph_build");
   assert.equal(result.stageAfter, "graph_build");
   assert.equal(result.graphPresenceCheck?.status, "missing_papers");
-  assert.match(result.blockingReason ?? "", /graph_presence_status = ready/);
+  assert.equal(result.blockingReason, "graph_build_decision_waiting");
 
   const aggressiveResult = await runWorkflowAutoIterator({
     projectRoot,
@@ -8510,7 +8638,7 @@ test("auto iterator routes frontier_mapping back to graph_build when the graph c
   assert.equal(result.stageBefore, "frontier_mapping");
   assert.equal(result.stageEffective, "graph_build");
   assert.equal(result.stageAfter, "graph_build");
-  assert.match(result.blockingReason ?? "", /graph_presence_status = ready/);
+  assert.equal(result.blockingReason, "graph_presence_missing_corpus");
   assert.ok(
     result.missingStageSignals.some((signal) =>
       /graph_presence_status = ready \(current: missing_corpus\)/i.test(signal)
@@ -8630,7 +8758,7 @@ test("auto iterator routes idea back to graph_build when graph loses canonical p
   );
   assert.equal(syncState.graph_presence.missing_paper_count, 1);
   assert.equal(syncState.workflow_projection.runtime_status, "waiting_import");
-  assert.match(result.blockingReason ?? "", /graph authority is blocked/i);
+  assert.equal(result.blockingReason, "graph_build_decision_blocked");
   assert.ok(
     result.missingStageSignals.some((signal) =>
       /missing papers|graph authority is blocked/i.test(signal)
@@ -8688,7 +8816,7 @@ test("auto iterator keeps graph_build blocked when downstream reentry finds a mi
   assert.equal(result.stageBefore, "idea");
   assert.equal(result.stageEffective, "graph_build");
   assert.equal(result.stageAfter, "graph_build");
-  assert.match(result.blockingReason ?? "", /graph authority is blocked/i);
+  assert.equal(result.blockingReason, "graph_build_decision_blocked");
   assert.ok(
     result.missingStageSignals.some((signal) =>
       /missing_corpus|graph authority is blocked/i.test(signal)
@@ -11568,10 +11696,94 @@ test("auto iterator points experiment stage at monitor-experiment while remote r
   assert.equal(result.stageAfter, "experiment");
   assert.match(result.nextAction ?? "", /\/monitor-experiment/i);
   assert.match(result.resumeAction ?? "", /\/monitor-experiment/i);
+  const repairedManifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  assert.equal(repairedManifest.workflow_control.next_action, "/monitor-experiment");
+  assert.equal(repairedManifest.workflow_control.blocking_reason, "reconcile_runtime");
   assert.ok(
     result.recommendedActions.some((action) =>
       /\/monitor-experiment/i.test(action.command ?? "")
     )
+  );
+});
+
+test("auto iterator keeps canonical experiment monitor action over stale reviewed-auto readiness branches", async (t) => {
+  const projectRoot = await makeTempProject();
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  const { now } = await seedProjectReadyForCode(projectRoot);
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.current_stage = "experiment";
+  manifest.owner_agent = "researcher";
+  manifest.current_micro_stage = "decision";
+  manifest.autonomous_execution = {
+    experiment_launch_mode: "reviewed_auto",
+    require_analyzer_review: true,
+    require_cross_review: true,
+  };
+  manifest.experiment_review_state = {
+    status: "pending",
+    launch_mode: "reviewed_auto",
+    micro_stage: "planning",
+    planner_status: "pending",
+    analyzer_status: "pending",
+    cross_reviewer_status: "pending",
+    launch_approved: false,
+    blocker_count: 0,
+    last_updated_at: now,
+  };
+  manifest.experiment_memory = {
+    ledger_path: "researcher/EXPERIMENT_LEDGER.json",
+    last_ledger_update_at: now,
+    papernexus_sync_required: false,
+    papernexus_sync_status: "clean",
+  };
+  manifest.experiment_search = {
+    status: "running",
+    current_main_stage: "decision",
+    current_substage: "stop_or_analysis_decision",
+    validation_stage: "decision",
+    baseline_fairness_status: "ready",
+    implementation_confidence: "trusted",
+    search_exhaustion_status: "active",
+    ablation_status: "pending",
+    innovation_status: "unknown",
+    evidence_cleanliness_status: "clean",
+    multi_seed_status: "ready",
+    plot_pack_status: "pending",
+    pending_reason: "Researcher must decide whether to stop search or continue.",
+  };
+  await writeJson(manifestPath, manifest);
+
+  const result = await runWorkflowAutoIterator({
+    projectRoot,
+    mode: "test",
+    queueMailbox: false,
+    policy: {
+      autoMode: "aggressive",
+      autoGate: {
+        enabled: false,
+      },
+    },
+  });
+
+  assert.equal(result.stageAfter, "experiment");
+  assert.equal(result.ownerAfter, "researcher");
+  assert.equal(result.nextAction, "/monitor-experiment");
+  assert.equal(result.experimentDecision, null);
+  assert.equal(
+    result.blockingReason,
+    "experiment_search_stop_or_analysis_decision_pending"
+  );
+  assert.doesNotMatch(result.nextAction ?? "", /experiment-plan/i);
+  const repairedManifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  assert.equal(repairedManifest.workflow_control.next_action, "/monitor-experiment");
+  assert.equal(repairedManifest.workflow_control.owner, "researcher");
+  assert.equal(
+    repairedManifest.workflow_control.blocking_reason,
+    "experiment_search_stop_or_analysis_decision_pending"
   );
 });
 

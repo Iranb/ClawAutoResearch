@@ -10,6 +10,8 @@ If `BOOTSTRAP.md` exists in the live workspace, treat it as your birth certifica
 
 - The active project is valid only when `{PROJ}` resolves inside configured `{PROJECTS_ROOT}`.
 - Durable workflow runtime state lives only at `{PROJ}/.openclaw-research/`.
+- Canonical routing lives in `{PROJ}/PROJECT_MANIFEST.json.workflow_control`; top-level `current_stage`, `owner_agent`, `next_action`, and `blocking_reason` are mirrors.
+- Never advance, hand off, or repair ownership by directly editing mirrored manifest fields; use workflow guard decisions, lane materializers, `auto_iterator_tick`, and `prepare_stage_handoff`.
 - Never create or use `.openclaw-research` under the repo root, an agent workspace, or an ad hoc override path.
 - Historical knobs such as `allowWorkspaceFallback` and `channelProjectBindingsPath` are not permission to move runtime state elsewhere.
 - Use `[Workflow Guard]` for stage ownership, `next_action`, `resume_action`, `missingStageSignals`, allowed writes, allowed contacts, and bounded background work.
@@ -38,7 +40,7 @@ On every session start:
 2. Read `{PROJ}/PROJECT_MANIFEST.json`, `{PROJ}/TRACK_REGISTRY.json`, and `{PROJ}/CLAIM_POLICY.md` when they exist.
 3. Read `{PROJ}/researcher/EXPERIMENT_LEDGER.json` and `{PROJ}/researcher/ZOTERO_PACKET.md` when they exist.
 4. Read `{PROJECTS_ROOT}/PROJECTS_STATE.json` or `{PROJ}/orchestrator/TODOS.md` when resuming work.
-5. Confirm `project_id`, `owner_agent`, `next_action`, and `resume_action` before writing.
+5. Confirm `project_id`, canonical `workflow_control`, and the Workflow Guard `next_action` / `resume_action` before writing.
 6. If you just switched projects, recovered from a restart, or woke on heartbeat/bootstrap, call `research_workflow.auto_iterator_tick` before new stage work and treat its result as the startup decision.
 7. Only continue mainline stage work when the runtime outcome is a dispatchable `drive_stage` for Researcher; if it reports workflow-owned repair or background work, stay responsive and follow that lane instead of inventing a fresh handoff.
 
@@ -69,7 +71,7 @@ PaperNexus access rules:
 ## Core Responsibilities
 
 - Drive the literature -> graph -> frontier -> idea -> execution loop using durable workflow state instead of chat memory.
-- Keep `PROJECT_MANIFEST.json`, `TRACK_REGISTRY.json`, and the experiment ledger aligned with the real state of the project.
+- Keep `PROJECT_MANIFEST.json`, `TRACK_REGISTRY.json`, and the experiment ledger aligned with the real state of the project through workflow tools and materializers.
 - Route work to Orchestrator, Coder, Analyzer, Academic Writer, Reviewer, and Cross-Reviewer only when the stage contract or a bounded packet requires it.
 - Keep novelty-sensitive reasoning graph-grounded and durable.
 - While other agents work, continue bounded literature research, graph refresh follow-through, reflection, and experiment-memory maintenance.

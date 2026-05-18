@@ -7,7 +7,7 @@ import {
   pickNumber,
   pickString,
 } from "../workflow-guard-core/coercion";
-import { readJsonIfExists } from "../workflow-guard-core/fs";
+import { pathExists, readJsonIfExists } from "../workflow-guard-core/fs";
 import { resolveProjectArtifactPath } from "../workflow-guard-core/paths";
 import {
   deriveGraphBuildMicroStage,
@@ -433,6 +433,60 @@ function buildCanonicalStageSignals(params: {
     return [`${params.stage ?? "workflow"}_completion_incomplete`];
   }
   return [];
+}
+
+const WRITE_PACKAGE_READY_STATUSES = new Set(["ready", "assembled", "approved"]);
+const DEFAULT_WRITE_PACKAGE_MANIFEST_PATH = "academic_writer/WRITE_PACKAGE.json";
+const DEFAULT_WRITE_PACKAGE_ASSEMBLY_REPORT_PATH =
+  "academic_writer/WRITE_PACKAGE_ASSEMBLY_REPORT.json";
+const DEFAULT_CITATION_CANDIDATES_PATH =
+  "academic_writer/CITATION_CANDIDATES.json";
+
+async function projectArtifactExists(
+  projectRoot: string,
+  relativePath: string | null
+): Promise<boolean> {
+  const resolved = resolveProjectArtifactPath(projectRoot, relativePath);
+  return resolved ? pathExists(resolved) : false;
+}
+
+async function writePackageNeedsAutoAssembly(params: {
+  projectRoot: string;
+  state: Record<string, unknown>;
+}): Promise<boolean> {
+  const status = normalizeStage(pickString(params.state, ["status"]));
+  if (!status || !WRITE_PACKAGE_READY_STATUSES.has(status)) {
+    return true;
+  }
+
+  const sourceArtifactCount =
+    pickNumber(params.state, ["sourceArtifactCount", "source_artifact_count"]) ?? 0;
+  const derivedArtifactCount =
+    pickNumber(params.state, ["derivedArtifactCount", "derived_artifact_count"]) ?? 0;
+  if (sourceArtifactCount <= 0 || derivedArtifactCount <= 0) {
+    return true;
+  }
+
+  const durableArtifactPaths = [
+    pickString(params.state, [
+      "citationCandidatesPath",
+      "citation_candidates_path",
+    ]) ?? DEFAULT_CITATION_CANDIDATES_PATH,
+    pickString(params.state, [
+      "packageManifestPath",
+      "package_manifest_path",
+    ]) ?? DEFAULT_WRITE_PACKAGE_MANIFEST_PATH,
+    pickString(params.state, [
+      "assemblyReportPath",
+      "assembly_report_path",
+    ]) ?? DEFAULT_WRITE_PACKAGE_ASSEMBLY_REPORT_PATH,
+  ];
+  for (const artifactPath of durableArtifactPaths) {
+    if (!(await projectArtifactExists(params.projectRoot, artifactPath))) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function stageFromCanonicalNextAction(action: string | null | undefined): string | null {
@@ -1220,9 +1274,10 @@ export async function runWorkflowAutoIteratorImpl(
   if (
     workflowPolicy.autoMode === "aggressive" &&
     (stageBefore === "write" || stageBefore === "submit") &&
-    !["ready", "assembled", "approved"].includes(
-      normalizeStage(writePackageBefore.status) ?? ""
-    )
+    (await writePackageNeedsAutoAssembly({
+      projectRoot,
+      state: writePackageBefore,
+    }))
   ) {
     await deps.assembleWritePackage({
       projectRoot,
@@ -1823,7 +1878,6 @@ export async function runWorkflowAutoIteratorImpl(
       ? `Satisfy IDEA-CATALYST requisition at {PROJ}/${ideaCatalystStateForActions.investigationRequisitionPath} by collecting the requested cross-domain papers, scheduling imports with research_workflow.schedule_papernexus_import, then rerunning /graph-build before resuming IDEA.`
       : null;
   const ownerAfter =
-    (experimentReviewCommand ? experimentReviewOwner : null) ??
     (stageAfter === stageEffective && !regressed
       ? deps.normalizeRole(canonicalControl.owner)
       : null) ??
@@ -1833,29 +1887,30 @@ export async function runWorkflowAutoIteratorImpl(
     Boolean(ownerBefore) &&
     ownerAfter !== ownerBefore;
   const dispatchStageSignals = shouldMonitorExperiments ? [] : activeStageSignals;
-  const stageRepairCommand =
+  const canonicalNextAction =
+    stageAfter === stageEffective ? canonicalControl.next_action : null;
+  const derivedStageRepairCommand =
     graphImportRepairCommand ?? ideaCatalystRequisitionCommand ?? setupOnboardingCommand;
+  const stageRepairCommand = canonicalNextAction == null ? derivedStageRepairCommand : null;
   const stageReadinessRepairSummary =
     dispatchStageSignals.length > 0
       ? `Resolve the following readiness signals before handing off ${stageAfter ?? "the current"} stage: ${dispatchStageSignals.join("; ")}.`
       : stageRepairCommand;
   const prioritizedExperimentCommand =
-    experimentMonitorCommand ??
-    experimentReviewCommand ??
-    null;
-  const canonicalNextAction =
-    stageAfter === stageEffective ? canonicalControl.next_action : null;
+    canonicalNextAction == null
+      ? experimentMonitorCommand ?? experimentReviewCommand ?? null
+      : null;
   const nextAction = gateEvaluation.blocking
     ? gateEvaluation.reason
-    : prioritizedExperimentCommand ??
+    : canonicalNextAction ??
+      prioritizedExperimentCommand ??
       stageRepairCommand ??
-      canonicalNextAction ??
       deps.formatStageCommand(stageAfter);
   const resumeAction = gateEvaluation.blocking
     ? "Wait for the blocking gate to resolve, then run /resume-pipeline."
-    : prioritizedExperimentCommand ??
+    : canonicalNextAction ??
+      prioritizedExperimentCommand ??
       stageRepairCommand ??
-      canonicalNextAction ??
       deps.formatStageCommand(stageAfter);
   const canonicalBlockingReason =
     asString(canonicalControl.blocking_reason) ??
@@ -1868,11 +1923,12 @@ export async function runWorkflowAutoIteratorImpl(
     null;
   const blockingReason = gateEvaluation.blocking
     ? gateEvaluation.reason
-    : dispatchStageSignals.length > 0
+    : canonicalBlockingReason ??
+      (dispatchStageSignals.length > 0
       ? `Waiting for ${ownerAfter ?? "workflow owner"} to satisfy: ${dispatchStageSignals.join("; ")}`
       : stageReadinessRepairSummary
         ? "Waiting for workflow-owned repair before the stage can be handed off."
-        : canonicalBlockingReason ?? null;
+        : null);
   const stageReadyForOwnerWork =
     !gateEvaluation.blocking &&
     dispatchStageSignals.length === 0 &&

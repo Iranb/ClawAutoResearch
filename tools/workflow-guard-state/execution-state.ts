@@ -95,6 +95,7 @@ type ExperimentSearchStateLike = {
   decisionConfidence: string;
   recommendedNextAction: string | null;
   failureClusterIds: string[];
+  nextCandidateGuidance: ExperimentNextCandidateGuidanceLike | null;
   evidenceCleanlinessStatus: string;
   baselineDatasetEnvelope: string[];
   validatedDatasetEnvelope: string[];
@@ -116,6 +117,24 @@ type ExperimentSearchStateLike = {
   createdAt: string | null;
   pendingReason: string | null;
   lastUpdatedAt: string | null;
+};
+
+type ExperimentNextCandidateGuidanceLike = {
+  authority: string | null;
+  triggerDecision: string | null;
+  sourceValidationStage: string | null;
+  target: string | null;
+  primaryMetricName: string | null;
+  primaryMetricDirection: string | null;
+  primaryMetricMinimumImprovement: number | null;
+  paperContributionMetric: string | null;
+  requiredProperties: string[];
+  avoidExperimentIds: string[];
+  avoidOneChangeSignatures: string[];
+  avoidFailureClusterIds: string[];
+  blockerBasis: string[];
+  innovationAnchorPoints: string[];
+  recommendedFocus: string[];
 };
 
 /**
@@ -306,6 +325,88 @@ type ReviewIssueTrackerStateLike = {
   pendingReason: string | null;
 };
 
+function normalizeExperimentNextCandidateGuidance(
+  value: unknown
+): ExperimentNextCandidateGuidanceLike | null {
+  const record = asRecord(value);
+  if (!record) {
+    return null;
+  }
+  const primaryMetricContract =
+    asRecord(record.primaryMetricContract ?? record.primary_metric_contract) ?? {};
+  const avoid = asRecord(record.avoid) ?? {};
+  const requiredProperties = asStringArray(
+    record.requiredProperties ?? record.required_properties
+  );
+  const avoidExperimentIds = asStringArray(
+    avoid.experimentIds ?? avoid.experiment_ids
+  );
+  const avoidOneChangeSignatures = asStringArray(
+    avoid.oneChangeSignatures ?? avoid.one_change_signatures
+  );
+  const avoidFailureClusterIds = asStringArray(
+    avoid.failureClusterIds ?? avoid.failure_cluster_ids
+  );
+  const blockerBasis = asStringArray(record.blockerBasis ?? record.blocker_basis);
+  const innovationAnchorPoints = asStringArray(
+    record.innovationAnchorPoints ?? record.innovation_anchor_points
+  );
+  const recommendedFocus = asStringArray(
+    record.recommendedFocus ?? record.recommended_focus
+  );
+  const metricName = pickString(primaryMetricContract, [
+    "metricName",
+    "metric_name",
+  ]);
+  const metricDirection = pickString(primaryMetricContract, ["direction"]);
+  const minimumImprovement =
+    pickNumber(primaryMetricContract, [
+      "minimumImprovement",
+      "minimum_improvement",
+    ]) ?? null;
+  const paperContributionMetric = pickString(primaryMetricContract, [
+    "paperContributionMetric",
+    "paper_contribution_metric",
+  ]);
+  const hasContent = Boolean(
+    metricName ||
+      metricDirection ||
+      minimumImprovement != null ||
+      paperContributionMetric ||
+      requiredProperties.length > 0 ||
+      avoidExperimentIds.length > 0 ||
+      avoidOneChangeSignatures.length > 0 ||
+      avoidFailureClusterIds.length > 0 ||
+      blockerBasis.length > 0 ||
+      innovationAnchorPoints.length > 0 ||
+      recommendedFocus.length > 0
+  );
+  if (!hasContent) {
+    return null;
+  }
+  return {
+    authority: pickString(record, ["authority"]),
+    triggerDecision:
+      normalizeStage(record.triggerDecision ?? record.trigger_decision) ?? null,
+    sourceValidationStage:
+      normalizeStage(
+        record.sourceValidationStage ?? record.source_validation_stage
+      ) ?? null,
+    target: normalizeStage(record.target) ?? null,
+    primaryMetricName: metricName,
+    primaryMetricDirection: metricDirection,
+    primaryMetricMinimumImprovement: minimumImprovement,
+    paperContributionMetric,
+    requiredProperties,
+    avoidExperimentIds,
+    avoidOneChangeSignatures,
+    avoidFailureClusterIds,
+    blockerBasis,
+    innovationAnchorPoints,
+    recommendedFocus,
+  };
+}
+
 /**
  * 解析实验搜索状态。
  *
@@ -480,6 +581,9 @@ export function normalizeExperimentSearchState(
     failureClusterIds: asStringArray(
       record.failureClusterIds ?? record.failure_cluster_ids
     ),
+    nextCandidateGuidance: normalizeExperimentNextCandidateGuidance(
+      record.nextCandidateGuidance ?? record.next_candidate_guidance
+    ),
     evidenceCleanlinessStatus:
       normalizeStage(
         record.evidenceCleanlinessStatus ?? record.evidence_cleanliness_status
@@ -612,6 +716,35 @@ export function serializeExperimentSearchState(
     decision_confidence: state.decisionConfidence,
     recommended_next_action: state.recommendedNextAction,
     failure_cluster_ids: state.failureClusterIds,
+    next_candidate_guidance: state.nextCandidateGuidance
+      ? {
+          authority: state.nextCandidateGuidance.authority,
+          trigger_decision: state.nextCandidateGuidance.triggerDecision,
+          source_validation_stage:
+            state.nextCandidateGuidance.sourceValidationStage,
+          target: state.nextCandidateGuidance.target,
+          primary_metric_contract: {
+            metric_name: state.nextCandidateGuidance.primaryMetricName,
+            direction: state.nextCandidateGuidance.primaryMetricDirection,
+            minimum_improvement:
+              state.nextCandidateGuidance.primaryMetricMinimumImprovement,
+            paper_contribution_metric:
+              state.nextCandidateGuidance.paperContributionMetric,
+          },
+          required_properties: state.nextCandidateGuidance.requiredProperties,
+          avoid: {
+            experiment_ids: state.nextCandidateGuidance.avoidExperimentIds,
+            one_change_signatures:
+              state.nextCandidateGuidance.avoidOneChangeSignatures,
+            failure_cluster_ids:
+              state.nextCandidateGuidance.avoidFailureClusterIds,
+          },
+          blocker_basis: state.nextCandidateGuidance.blockerBasis,
+          innovation_anchor_points:
+            state.nextCandidateGuidance.innovationAnchorPoints,
+          recommended_focus: state.nextCandidateGuidance.recommendedFocus,
+        }
+      : null,
     evidence_cleanliness_status: state.evidenceCleanlinessStatus,
     baseline_dataset_envelope: state.baselineDatasetEnvelope,
     validated_dataset_envelope: state.validatedDatasetEnvelope,

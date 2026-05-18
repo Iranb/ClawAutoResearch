@@ -15,7 +15,7 @@ allowed-tools:
 
 Reconcile experiment state from durable runtime signals so the workflow can advance to analysis without waiting for a human to notice.
 
-This is the default follow-up once remote runs exist. In auto mode, the workflow may repeatedly route the EXPERIMENT stage back here until the remote runs are terminal and `experiment_search` is ready for analysis.
+This is the default follow-up once remote runs exist. In auto mode, the workflow may repeatedly route the EXPERIMENT stage back here until remote runs are terminal and `experiment_search` has enough synchronized evidence for the Karpathy-style analysis gate.
 
 In reviewed-auto mode, monitor mode begins only after the pre-launch review loop has approved a packet and Coder has created real remote runs. Planner/analyzer/cross-reviewer work belongs to the earlier experiment micro-stages.
 
@@ -140,25 +140,36 @@ When all active remote runs are terminal:
 
 1. ensure finished outputs are copied or recorded under `{PROJ}/researcher/artifacts/results/`
 2. call `research_workflow.record_experiment_runtime_signal` if the watcher artifacts are missing or stale, so the run leaves behind a normalized heartbeat/terminal/result summary
-2. update `research_workflow.upsert_experiment` for every finished / failed run
-3. refresh `{PROJ}/researcher/EXPERIMENT_REGISTRY.md`
-4. call `research_workflow.set_experiment_search`
+3. update `research_workflow.upsert_experiment` for every finished / failed run
+4. refresh `{PROJ}/researcher/EXPERIMENT_REGISTRY.md`
+5. call `research_workflow.set_experiment_search`
+6. call `research_workflow.evaluate_experiment_search_decision`
 
 Use these rules for `experiment_search`:
 
 - keep `status: "running"` while remote runs or post-processing are still in flight
 - set `multi_seed_status` and `plot_pack_status` honestly
-- move to `status: "ready_for_analysis"` only when evaluation summary and plot pack paths both exist and multi-seed / plot-pack work is complete
+- synchronize `EXPERIMENT_SEARCH.json`, the experiment ledger, and result summaries before asking the workflow to decide
+- do not manually promote the project to analysis-ready from file presence alone
 
-Do not mark the project analysis-ready just because the training process exited. The workflow should advance only after the result bundle is durable enough for Analyzer.
+Do not mark the project analysis-ready just because the training process exited or a plot pack exists. The workflow should advance only after `evaluate_experiment_search_decision` writes `analysis_gate.decision = "ready_for_analysis"`.
 
 If `research_workflow.evaluate_experiment_search_decision` recommends:
 
+- `ready_for_analysis` — use the shared `workflow-handoff-signal` skill for `experiment -> analyze`
+- `continue_search` or `continue_tuning` — route the bounded next search/repair run to Coder; this is the normal outcome when no retained primary-metric gain exists yet
 - `reconcile_runtime` — finish the runtime reconciliation first
 - `repair_implementation` — hand back to Coder / Researcher with the recorded failure evidence
 - `require_multi_seed` — schedule the multi-seed validation pass, do not over-interpret a single run
 - `require_ablation` — request the missing ablation rather than claiming the innovation is validated
 - `innovation_invalidated` — stop tuning this envelope and route back to Researcher/Planner for rollback or reflection
+
+The gate is Karpathy-led:
+
+- `execution_reviewer` is primary and must approve a retained `keep`, `advance`, or `promote` trial with positive primary-metric delta
+- lower-is-better metrics such as EER, error, loss, latency, or NLL count as positive only when the candidate is lower than the baseline
+- `novelty_reviewer` and `paper_readiness_reviewer` are auxiliary; `ready_for_analysis` needs execution approval plus at least 2 of 3 reviewers approving
+- PaperGuru/PaperNexus writing prompts may shape later writing/review quality, but they do not replace this experiment gate
 
 ### 7. Report
 
@@ -168,4 +179,4 @@ When finished, output a status summary:
 - current baseline comparison status
 - whether there were errors or warnings
 - whether the experiment ledger, experiment registry, and `experiment_search` state were updated
-- whether the workflow is now ready to advance from EXPERIMENT to ANALYZE
+- whether `analysis_gate.decision` is `ready_for_analysis`, `continue_search`, `continue_tuning`, or blocked on repair/reconcile evidence

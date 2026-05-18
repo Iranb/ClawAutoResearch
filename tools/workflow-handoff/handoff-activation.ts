@@ -17,6 +17,7 @@ import {
   normalizeOrchestrationState,
   serializeOrchestrationState,
 } from "../workflow-guard-state/execution-state";
+import { STAGE_REQUIREMENTS } from "../workflow-guard-policies/role-policy";
 import {
   applyWorkflowControlContractToManifest,
   buildWorkflowControlContract,
@@ -109,6 +110,51 @@ async function completeRuntimeQueueForActivatedHandoff(params: {
 
 function getIntentPayload(intent: WorkflowHandoffIntent): Record<string, unknown> {
   return asRecord(intent.payload) ?? {};
+}
+
+function getNextTransitionCandidateForActivatedStage(params: {
+  stage: string | null;
+  payload: Record<string, unknown>;
+  fallback: string | null;
+}): string | null {
+  const stage = normalizeStage(params.stage);
+  if (stage) {
+    const nextStage = STAGE_REQUIREMENTS[stage]?.nextStage ?? null;
+    if (nextStage && nextStage !== stage) {
+      return nextStage;
+    }
+  }
+  return readString(params.payload.nextTransitionCandidate) ?? params.fallback;
+}
+
+function getNextOwnerForTransition(stage: string | null): string | null {
+  const normalized = normalizeStage(stage);
+  return normalized ? STAGE_REQUIREMENTS[normalized]?.owner ?? null : null;
+}
+
+function isCandidateOnlyTransitionBlocker(params: {
+  reason: string | null;
+  stage: string | null;
+  nextTransitionCandidate: string | null;
+}): boolean {
+  const reason = readString(params.reason);
+  const stage = normalizeStage(params.stage);
+  const nextTransitionCandidate = normalizeStage(params.nextTransitionCandidate);
+  if (!reason || !stage || !nextTransitionCandidate) {
+    return false;
+  }
+  const expectedNext = STAGE_REQUIREMENTS[stage]?.nextStage ?? null;
+  if (!expectedNext || normalizeStage(expectedNext) !== nextTransitionCandidate) {
+    return false;
+  }
+  const marker = `orchestration_state.next_transition_candidate should be ${expectedNext} while current_stage=${stage}`;
+  if (!reason.includes(marker)) {
+    return false;
+  }
+  const signal = reason
+    .replace(/^Waiting for [^:]+ to satisfy:\s*/iu, "")
+    .trim();
+  return signal.startsWith(marker) && !/[;\n]/u.test(signal);
 }
 
 function applyWorkflowControlForHandoff(params: {
@@ -349,10 +395,27 @@ export async function claimAndActivateWorkflowHandoffForAgent(params: {
     readString(payload.nextAction) ?? claimedIntent.command ?? readString(manifest.next_action);
   const resumeAction =
     readString(payload.resumeAction) ?? nextAction ?? readString(manifest.resume_action);
-  const blockingReason =
+  const activatedNextTransitionCandidate =
+    getNextTransitionCandidateForActivatedStage({
+      stage: stageAfter,
+      payload,
+      fallback: orchestration.nextTransitionCandidate,
+    });
+  const activatedNextOwner =
+    getNextOwnerForTransition(activatedNextTransitionCandidate) ??
+    readString(payload.nextOwner) ??
+    orchestration.nextOwner;
+  const rawBlockingReason =
     readString(payload.blockingReason) ??
     claimedIntent.blockerSummary ??
     readString(manifest.blocking_reason);
+  const blockingReason = isCandidateOnlyTransitionBlocker({
+    reason: rawBlockingReason,
+    stage: stageAfter,
+    nextTransitionCandidate: activatedNextTransitionCandidate,
+  })
+    ? null
+    : rawBlockingReason;
   const nextMicroStage = normalizeStage(payload.nextMicroStage);
 
   if (params.beforeActivateHook) {
@@ -436,12 +499,8 @@ export async function claimAndActivateWorkflowHandoffForAgent(params: {
     ownerActivationDeadline: null,
     rollbackTargetOwner: null,
     lastHandoffError: null,
-    nextOwner:
-      readString(payload.nextOwner) ??
-      orchestration.nextOwner,
-    nextTransitionCandidate:
-      readString(payload.nextTransitionCandidate) ??
-      orchestration.nextTransitionCandidate,
+    nextOwner: activatedNextOwner,
+    nextTransitionCandidate: activatedNextTransitionCandidate,
     blockingReason,
     lastUpdatedAt: nowIso(),
   });

@@ -899,6 +899,7 @@ export async function buildWorkflowSnapshotFromProjectState(
     experimentLedger: projectState.experimentLedger,
     gpuMonitor: experimentGpuMonitor.state,
   });
+  const experimentNextCandidateGuidance = experimentSearch.nextCandidateGuidance;
   const innovationReflectionDue = isInnovationReflectionDue({
     state: innovationReflection,
     ledger: projectState.experimentLedger,
@@ -1475,6 +1476,28 @@ export async function buildWorkflowSnapshotFromProjectState(
       experimentSearch.failureClusterIds.length > 0
         ? experimentSearch.failureClusterIds
         : experimentSearchDecision.failureClusters.map((cluster) => cluster.clusterId),
+    experimentSearchNextCandidateMetricName:
+      experimentNextCandidateGuidance?.primaryMetricName ?? null,
+    experimentSearchNextCandidateMetricDirection:
+      experimentNextCandidateGuidance?.primaryMetricDirection ?? null,
+    experimentSearchNextCandidateMinimumImprovement:
+      experimentNextCandidateGuidance?.primaryMetricMinimumImprovement ?? null,
+    experimentSearchNextCandidatePaperContributionMetric:
+      experimentNextCandidateGuidance?.paperContributionMetric ?? null,
+    experimentSearchNextCandidateRequiredProperties:
+      experimentNextCandidateGuidance?.requiredProperties ?? [],
+    experimentSearchNextCandidateRecommendedFocus:
+      experimentNextCandidateGuidance?.recommendedFocus ?? [],
+    experimentSearchNextCandidateBlockerBasis:
+      experimentNextCandidateGuidance?.blockerBasis ?? [],
+    experimentSearchNextCandidateInnovationAnchors:
+      experimentNextCandidateGuidance?.innovationAnchorPoints ?? [],
+    experimentSearchNextCandidateAvoidExperimentIds:
+      experimentNextCandidateGuidance?.avoidExperimentIds ?? [],
+    experimentSearchNextCandidateAvoidOneChangeSignatures:
+      experimentNextCandidateGuidance?.avoidOneChangeSignatures ?? [],
+    experimentSearchNextCandidateAvoidFailureClusterIds:
+      experimentNextCandidateGuidance?.avoidFailureClusterIds ?? [],
     experimentSearchEvidenceCleanlinessStatus:
       experimentSearch.evidenceCleanlinessStatus,
     experimentSearchBaselineDatasetCoverageStatus:

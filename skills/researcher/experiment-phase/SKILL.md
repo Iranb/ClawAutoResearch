@@ -297,16 +297,14 @@ After pilot or experiment completion, update `{PROJ}/TRACK_REGISTRY.json` with o
 - `park` — interesting but not currently budget-worthy
 - `kill` — falsified or low-value
 
-Also update `{PROJ}/PROJECT_MANIFEST.json`:
-- `current_stage: "experiment"`
-- `current_micro_stage: "track_decision_made"`
-- `budget.gpu_hours_used`
-- `experiment_memory.last_ledger_update_at`
-- `experiment_memory.last_completed_experiment_id` / `last_failed_experiment_id`
-- `experiment_memory.best_known_config_ref`
-- `experiment_memory.papernexus_sync_status`
-- `innovation_reflection.status` when new experiment evidence changes future ideation
-- `updated_at`
+Also update experiment evidence through workflow tools:
+
+- upsert the final ledger entries with metrics, result paths, and retained/discarded decision evidence
+- call `research_workflow.set_experiment_search` so `EXPERIMENT_SEARCH.json`, ledger state, and result summaries are synchronized
+- update budget and experiment-memory projections through the relevant workflow setter/materializer, not by hand-editing stage/owner/action fields
+- mark `innovation_reflection.status` pending through workflow state when new experiment evidence changes future ideation
+
+Do not set `current_stage`, `current_micro_stage`, `owner_agent`, or `next_action` manually. Those are mirrors of canonical `workflow_control`.
 
 If a PaperNexus corpus exists for the project, mark the relevant completed experiments with `papernexusSync.status: "pending"` until they are mirrored into the graph or enhancement overlay.
 
@@ -316,13 +314,20 @@ Once a completed or failed run materially changes the next-idea search space, tr
 - the next serious idea proposal must refresh `/innovation-reflection`
 - do not let Researcher overwrite `IDEA_REPORT.md` with a fresh innovation angle until the reflection packet has been regenerated
 
-## Phase 7: Analysis
+## Phase 7: Analysis Gate
 
-```
-/analyze-results
-```
+After runtime and search evidence are synchronized, call `research_workflow.evaluate_experiment_search_decision`.
 
-Produces (written by Analyzer Agent to its own folder):
+Only dispatch analysis when the returned `analysis_gate.decision` is `ready_for_analysis`.
+
+The current gate is Karpathy-led:
+
+- `execution_reviewer` is primary and must approve a retained `keep`, `advance`, or `promote` trial with positive primary-metric delta
+- lower-is-better metrics such as EER, error, loss, latency, or NLL count as improvement only when the candidate is lower than baseline
+- `novelty_reviewer` and `paper_readiness_reviewer` are auxiliary; analysis readiness requires execution approval plus at least 2 of 3 reviewers approving
+- no retained primary-metric gain means `continue_search` / `continue_tuning`, usually routed to Coder, rather than an analysis handoff
+
+When the gate passes, `/analyze-results` produces, written by Analyzer Agent to its own folder:
 - `{PROJ}/analyzer/NARRATIVE_REPORT.md`
 - `{PROJ}/analyzer/TRACK_VERDICTS.md`
 - `{PROJ}/analyzer/figures/`
@@ -358,6 +363,6 @@ Graph-backed `EXPERIMENT_MEMORY_PACKET.json` is the distilled bridge into later 
 
 ## Stage Closeout
 
-When experiment execution is durably reconciled and the track decision is to proceed into ANALYZE, Researcher should use the shared `workflow-handoff-signal` skill and call `research_workflow.prepare_stage_handoff` for `experiment -> analyze`.
+When experiment execution is durably reconciled and `analysis_gate.decision = "ready_for_analysis"`, Researcher should use the shared `workflow-handoff-signal` skill and call `research_workflow.prepare_stage_handoff` for `experiment -> analyze`.
 
-Do not hand off if more experiments or a bounded relaunch are still required, the right action is `restart-idea`, or artifacts / ledger state are still out of sync.
+Do not hand off if more experiments or a bounded relaunch are still required, the gate says `continue_search` / `continue_tuning`, the right action is `restart-idea`, or artifacts / ledger state are still out of sync.

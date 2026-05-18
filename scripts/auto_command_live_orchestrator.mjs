@@ -507,6 +507,16 @@ function workflowProgressFingerprint(manifest) {
   });
 }
 
+function hasWorkflowProgressShape(manifest) {
+  return Boolean(
+    readString(manifest?.current_stage) ||
+      readString(manifest?.owner_agent) ||
+      readString(manifest?.next_action) ||
+      readString(manifest?.workflow_status) ||
+      readString(manifest?.status)
+  );
+}
+
 function normalizedRuntimeEntries(store) {
   return Array.isArray(store?.entries) ? store.entries : [];
 }
@@ -908,6 +918,13 @@ export async function waitForProgress(params) {
   );
   while (Date.now() - startedAt < params.timeoutMs) {
     latestManifest = await readManifest(params.projectRoot);
+    if (
+      hasWorkflowProgressShape(params.baselineManifest) &&
+      !hasWorkflowProgressShape(latestManifest)
+    ) {
+      await sleep(params.pollMs);
+      continue;
+    }
     const currentStage = String(latestManifest.current_stage ?? "");
     const currentOwner = String(latestManifest.owner_agent ?? "");
     const pdfExists = await pathExists(

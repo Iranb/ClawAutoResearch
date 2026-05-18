@@ -23,6 +23,11 @@ import {
   type StageCompletion,
 } from "./workflow-stage-completion";
 
+const GRAPH_BUILD_DECISION_RELATIVE_PATH = path.join(
+  "graph",
+  "GRAPH_BUILD_DECISION.json"
+);
+
 export type WorkflowControlReconcilePolicy = {
   allowProjectionRepair?: boolean;
   staleRuntimeAgeMs?: number;
@@ -208,6 +213,42 @@ function withResolvedStageSignals(params: {
   };
 }
 
+async function recoverSemanticCompletionFromSetup(params: {
+  projectRoot: string;
+  stage: string;
+  diagnostics: WorkflowControlReconcileDiagnostic[];
+}): Promise<StageCompletion | null> {
+  if (normalizeStage(params.stage) !== "setup") {
+    return null;
+  }
+  const graphDecision = asRecord(
+    await readJsonIfExists(
+      path.join(params.projectRoot, GRAPH_BUILD_DECISION_RELATIVE_PATH)
+    )
+  );
+  if (!graphDecision) {
+    return null;
+  }
+  const graphCompletion = await resolveWorkflowStageCompletion({
+    projectRoot: params.projectRoot,
+    stage: "graph_build",
+  });
+  if (
+    graphCompletion.stage !== "graph_build" ||
+    graphCompletion.completionStatus === "complete" ||
+    !graphCompletion.blockingReason
+  ) {
+    return null;
+  }
+  params.diagnostics.push({
+    kind: "semantic_stage_recovered",
+    message:
+      "Recovered graph_build as canonical stage from graph decision evidence while setup projection was stale.",
+    path: GRAPH_BUILD_DECISION_RELATIVE_PATH,
+  });
+  return graphCompletion;
+}
+
 export async function reconcileWorkflowControl(params: {
   projectRoot: string;
   policy?: WorkflowControlReconcilePolicy;
@@ -231,10 +272,16 @@ export async function reconcileWorkflowControl(params: {
   const existingControl = normalizeWorkflowControlContract(manifest.workflow_control);
   const existingControlForStage =
     normalizeStage(existingControl?.stage) === stage ? existingControl : null;
-  const resolvedStageCompletion = await resolveWorkflowStageCompletion({
-    projectRoot,
-    stage,
-  });
+  const resolvedStageCompletion =
+    (await recoverSemanticCompletionFromSetup({
+      projectRoot,
+      stage,
+      diagnostics,
+    })) ??
+    (await resolveWorkflowStageCompletion({
+      projectRoot,
+      stage,
+    }));
   const stageCompletion = params.stageSignalResolver
     ? withResolvedStageSignals({
         completion: resolvedStageCompletion,

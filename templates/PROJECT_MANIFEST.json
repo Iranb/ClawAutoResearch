@@ -168,6 +168,10 @@
   "benchmark_protocol": {
     "status": "missing",
     "benchmark_family": null,
+    "primary_metric": null,
+    "metric_direction": null,
+    "minimum_improvement": null,
+    "paper_contribution_metric": null,
     "protocol_lock_path": "researcher/BENCHMARK_PROTOCOL.json",
     "official_eval_recipe": null,
     "locked": false,

@@ -200,6 +200,6 @@ Avoid:
 
 When the review packet is complete:
 
-- update `{PROJ}/PROJECT_MANIFEST.json.current_micro_stage` to reflect that the literature review packet is ready
+- reconcile the literature-review evidence through the relevant workflow materializer/setter or rerun `auto_iterator_tick`; do not hand-edit mirrored stage fields
 - make sure `/graph-build` and `/frontier-mapping` read this packet next
 - if a later stage discovers missing baselines or evaluation mismatches, return here and refresh the packet instead of patching ad hoc notes elsewhere
