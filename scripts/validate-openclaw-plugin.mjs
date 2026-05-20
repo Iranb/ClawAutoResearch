@@ -73,8 +73,35 @@ function hasCompatibleFloor(range, requiredVersion) {
   return false;
 }
 
+function uniqueSorted(values) {
+  return [...new Set(values.filter(Boolean))].sort();
+}
+
+function stringArray(value) {
+  return Array.isArray(value)
+    ? value.filter((entry) => typeof entry === "string" && entry.trim())
+    : [];
+}
+
 function finding(code, message, filePath) {
   return { code, message, path: filePath ?? null };
+}
+
+async function pathExists(filePath) {
+  try {
+    await fs.access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function readTextIfExists(filePath) {
+  try {
+    return await fs.readFile(filePath, "utf8");
+  } catch {
+    return null;
+  }
 }
 
 function validatePackageContract(packageJson, packagePath) {
@@ -138,13 +165,13 @@ function validatePackageContract(packageJson, packagePath) {
   return findings;
 }
 
-function validateManifestContract(packageJson, manifest, manifestPath) {
+function validateManifestContract(packageJson, manifest, manifestPath, sourceRegistration) {
   const findings = [];
   const contracts = asObject(manifest.contracts);
   const toolMetadata = asObject(manifest.toolMetadata);
   const configSchema = asObject(manifest.configSchema);
   const openclawPackage = asObject(packageJson.openclaw);
-  const tools = Array.isArray(contracts?.tools) ? contracts.tools : [];
+  const tools = stringArray(contracts?.tools);
 
   if (!manifest.id || manifest.id !== openclawPackage?.pluginId) {
     findings.push(
@@ -177,6 +204,43 @@ function validateManifestContract(packageJson, manifest, manifestPath) {
     }
   }
 
+  if (sourceRegistration?.status === "validated") {
+    if (sourceRegistration.entry?.id && sourceRegistration.entry.id !== manifest.id) {
+      findings.push(
+        finding(
+          "plugin_entry_id_mismatch",
+          "OpenClaw plugin entry id must match openclaw.plugin.json id.",
+          manifestPath
+        )
+      );
+    }
+
+    const registeredTools = sourceRegistration.registeredTools;
+    const manifestTools = uniqueSorted(tools);
+    for (const toolName of registeredTools) {
+      if (!manifestTools.includes(toolName)) {
+        findings.push(
+          finding(
+            "registered_plugin_tool_missing_manifest_contract",
+            `openclaw.plugin.json contracts.tools must include registered tool ${toolName}.`,
+            manifestPath
+          )
+        );
+      }
+    }
+    for (const toolName of manifestTools) {
+      if (!registeredTools.includes(toolName)) {
+        findings.push(
+          finding(
+            "plugin_tool_contract_not_registered",
+            `openclaw.plugin.json contracts.tools declares ${toolName}, but the plugin source does not register it.`,
+            manifestPath
+          )
+        );
+      }
+    }
+  }
+
   if (configSchema?.type !== "object" || !asObject(configSchema.properties)) {
     findings.push(
       finding(
@@ -198,6 +262,104 @@ function validateManifestContract(packageJson, manifest, manifestPath) {
   }
 
   return findings;
+}
+
+async function collectSourceRegistrationContract(repoRoot) {
+  const entryPath = path.join(repoRoot, "index.ts");
+  const entrySource = await readTextIfExists(entryPath);
+  if (!entrySource) {
+    return {
+      status: "skipped",
+      reason: "index.ts not found",
+      registeredTools: [],
+      registeredCommands: [],
+      registeredServices: [],
+      registeredHooks: [],
+      registeredInteractiveHandlers: [],
+      entry: null,
+    };
+  }
+
+  const sourceFiles = [
+    entryPath,
+    path.join(repoRoot, "tools", "register-memory-tools.ts"),
+    path.join(repoRoot, "tools", "register-workflow-tools.ts"),
+    path.join(repoRoot, "tools", "register-auto-workflow-tools.ts"),
+  ];
+  const registeredTools = [];
+  const registeredCommands = [];
+  const registeredServices = [];
+  const registeredHooks = [];
+  const registeredInteractiveHandlers = [];
+
+  if (
+    !/register\s*(?::\s*\w+|\()/.test(entrySource) &&
+    !/export\s+function\s+registerOpenClawResearchPlugin/.test(entrySource)
+  ) {
+    return {
+      status: "failed",
+      reason: "plugin entry does not expose a register function",
+      registeredTools: [],
+      registeredCommands: [],
+      registeredServices: [],
+      registeredHooks: [],
+      registeredInteractiveHandlers: [],
+      entry: {
+        id: entrySource.match(/\bid\s*:\s*"([^"]+)"/)?.[1] ?? null,
+        name: entrySource.match(/\bname\s*:\s*"([^"]+)"/)?.[1] ?? null,
+        description: entrySource.match(/\bdescription\s*:\s*"([^"]+)"/)?.[1] ?? null,
+      },
+    };
+  }
+
+  for (const sourceFile of sourceFiles) {
+    const source = await readTextIfExists(sourceFile);
+    if (!source) {
+      continue;
+    }
+
+    for (const match of source.matchAll(/\{\s*name\s*:\s*"([^"]+)"\s*,\s*optional\s*:/g)) {
+      registeredTools.push(match[1]);
+    }
+
+    const loopToolPattern =
+      /for\s*\(\s*const\s+(\w+)\s+of\s+\[([^\]]+)\][\s\S]*?registerTool[\s\S]*?\{\s*name\s*:\s*\1\s*,\s*optional\s*:/g;
+    for (const match of source.matchAll(loopToolPattern)) {
+      registeredTools.push(
+        ...stringArray(
+          [...match[2].matchAll(/"([^"]+)"/g)].map((entry) => entry[1])
+        )
+      );
+    }
+
+    if (/registerCommand\s*\(/.test(source)) {
+      registeredCommands.push(path.relative(repoRoot, sourceFile));
+    }
+    if (/registerService\s*\(/.test(source)) {
+      registeredServices.push(path.relative(repoRoot, sourceFile));
+    }
+    if (/\.on\s*\(/.test(source)) {
+      registeredHooks.push(path.relative(repoRoot, sourceFile));
+    }
+    if (/registerInteractiveHandler\s*\(/.test(source)) {
+      registeredInteractiveHandlers.push(path.relative(repoRoot, sourceFile));
+    }
+  }
+
+  return {
+    status: "validated",
+    reason: null,
+    registeredTools: uniqueSorted(registeredTools),
+    registeredCommands: uniqueSorted(registeredCommands),
+    registeredServices: uniqueSorted(registeredServices),
+    registeredHooks: uniqueSorted(registeredHooks),
+    registeredInteractiveHandlers: uniqueSorted(registeredInteractiveHandlers),
+    entry: {
+      id: entrySource.match(/\bid\s*:\s*"([^"]+)"/)?.[1] ?? null,
+      name: entrySource.match(/\bname\s*:\s*"([^"]+)"/)?.[1] ?? null,
+      description: entrySource.match(/\bdescription\s*:\s*"([^"]+)"/)?.[1] ?? null,
+    },
+  };
 }
 
 async function maybeRunOpenClawCliValidate({ repoRoot, enabled }) {
@@ -243,14 +405,25 @@ export async function validateOpenClawPluginRepository({
   const manifestPath = path.join(repoRoot, "openclaw.plugin.json");
   const packageJson = await readJsonFile(packagePath);
   const manifest = await readJsonFile(manifestPath);
+  const sourceRegistration = await collectSourceRegistrationContract(repoRoot);
   const cliValidation = await maybeRunOpenClawCliValidate({
     repoRoot,
     enabled: withOpenClawCli,
   });
   const findings = [
     ...validatePackageContract(packageJson, packagePath),
-    ...validateManifestContract(packageJson, manifest, manifestPath),
+    ...validateManifestContract(packageJson, manifest, manifestPath, sourceRegistration),
   ];
+
+  if (sourceRegistration.status === "failed") {
+    findings.push(
+      finding(
+        "plugin_source_registration_failed",
+        sourceRegistration.reason,
+        path.join(repoRoot, "index.ts")
+      )
+    );
+  }
 
   if (cliValidation.status === "failed") {
     findings.push(
@@ -269,6 +442,7 @@ export async function validateOpenClawPluginRepository({
     requiredNodeFloor: REQUIRED_NODE_FLOOR,
     requiredOpenClawFloor: REQUIRED_OPENCLAW_FLOOR,
     requiredTools: [...REQUIRED_PLUGIN_TOOLS],
+    sourceRegistration,
     openclawCli: cliValidation,
   };
 }
@@ -280,6 +454,7 @@ export function formatOpenClawPluginValidationReport(result) {
       `node_floor=>=${result.requiredNodeFloor}`,
       `openclaw_floor=>=${result.requiredOpenClawFloor}`,
       `required_tools=${result.requiredTools.join(",")}`,
+      `source_tools=${result.sourceRegistration.registeredTools.join(",") || result.sourceRegistration.status}`,
       `openclaw_cli=${result.openclawCli.status}`,
     ].join(" ");
   }
