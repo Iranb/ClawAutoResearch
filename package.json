@@ -14,7 +14,7 @@
     "./openclaw.plugin.json": "./openclaw.plugin.json"
   },
   "scripts": {
-    "build": "node scripts/validate-openclaw-plugin.mjs && tsc && node scripts/prepare-dist-runtime.mjs && node scripts/verify-dist-runtime.mjs",
+    "build": "node scripts/validate-openclaw-plugin.mjs && tsc && node scripts/prepare-dist-runtime.mjs && node scripts/verify-dist-runtime.mjs && node scripts/smoke-openclaw-plugin-runtime.mjs",
     "dashboard:dev": "npm --prefix apps/workflow-dashboard run dev",
     "dashboard:build": "npm --prefix apps/workflow-dashboard run build",
     "dashboard:test": "npm --prefix apps/workflow-dashboard run test",
@@ -24,6 +24,7 @@
     "prepare": "npm run build",
     "lint": "eslint index.ts tools/",
     "plugin:validate": "node scripts/validate-openclaw-plugin.mjs",
+    "plugin:smoke": "node scripts/smoke-openclaw-plugin-runtime.mjs",
     "check:source-hygiene": "node scripts/check_source_hygiene.mjs",
     "test": "node --test $(find tests -name '*.test.mjs' -type f | sort)",
     "test:changed:list": "node scripts/select_changed_tests.mjs --list",
