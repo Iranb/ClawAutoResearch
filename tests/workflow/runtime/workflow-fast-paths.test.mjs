@@ -873,6 +873,8 @@ test("ensureWorkflowProjectRoot bootstraps survey projects onto the survey_revie
   );
   assert.equal(manifest.current_stage, "survey_review");
   assert.equal(manifest.owner_agent, "researcher");
+  assert.equal(manifest.workflow_control.stage, "survey_review");
+  assert.equal(manifest.workflow_control.owner, "researcher");
   assert.equal(manifest.survey_review.topic, "Graph reasoning survey");
   assert.equal(manifest.survey_review.status, "searching");
   assert.equal(manifest.writing_contract.paper_mode, "survey");
@@ -888,6 +890,67 @@ test("ensureWorkflowProjectRoot bootstraps survey projects onto the survey_revie
     "conclusion",
   ]);
   assert.match(manifest.next_action, /^\/survey-pipeline\b/);
+});
+
+test("ensureWorkflowProjectRoot survey bootstrap preserves non-resettable canonical stage", async (t) => {
+  const workspaceRoot = await makeTempWorkspace();
+  const projectsRoot = path.join(workspaceRoot, "projects");
+  const projectRoot = path.join(projectsRoot, "existing-survey");
+
+  t.after(async () => {
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  });
+
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "existing-survey",
+    title: "Existing survey",
+    current_stage: "setup",
+    owner_agent: "researcher",
+    workflow_control: {
+      schema_version: 1,
+      contract_id: "existing-survey-control",
+      reconciled_at: "2026-05-19T05:38:00.000Z",
+      stage: "write",
+      owner: "academic_writer",
+      next_action: "/write-paper",
+      status: "waiting",
+      blocking_reason: "writer packet pending",
+      completion: {
+        status: "incomplete",
+        source: "write_package_completion",
+        reason: "writer packet pending",
+      },
+      runtime_state: "idle",
+      queue_key: null,
+      session_key: null,
+    },
+  });
+
+  await ensureWorkflowProjectRoot({
+    policy: {
+      projectsRoot,
+      enableChannelProjectBindings: true,
+    },
+    workspaceDir: workspaceRoot,
+    projectRoot,
+    projectId: "existing-survey",
+    sessionKey: "agent:researcher:discord:group:survey-room",
+    messageChannel: "discord",
+    topic: "Graph reasoning survey",
+    workflowLine: "survey",
+  });
+
+  const manifest = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "PROJECT_MANIFEST.json"), "utf8")
+  );
+  assert.equal(manifest.current_stage, "write");
+  assert.equal(manifest.owner_agent, "academic_writer");
+  assert.equal(manifest.workflow_control.stage, "write");
+  assert.equal(manifest.workflow_control.owner, "academic_writer");
+  assert.equal(manifest.survey_review.topic, "Graph reasoning survey");
+  assert.equal(manifest.workflow_line, "survey");
+  assert.equal(manifest.paper_type, "survey");
+  assert.equal(manifest.writing_contract.paper_mode, "survey");
 });
 
 test("ensureWorkflowProjectRoot fails fast when projectsRoot is missing and workspace fallback is disabled", async (t) => {

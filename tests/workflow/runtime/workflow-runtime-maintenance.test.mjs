@@ -2739,6 +2739,10 @@ test("runWorkflowRuntimeMaintenancePass routes terminal PaperNexus retry failure
   await makeProject(projectRoot, "gamma");
   const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
   const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.workflow_control = {
+    stage: "graph_build",
+    owner: "orchestrator",
+  };
   manifest.paper_ingestion = {
     retry_status: "completed_with_failures",
     retryable_failed_papers: [{ source_key: "paper-1", title: "Failed paper" }],
@@ -2751,10 +2755,12 @@ test("runWorkflowRuntimeMaintenancePass routes terminal PaperNexus retry failure
   });
 
   const handoffs = await readWorkflowHandoffIntentStore(projectRoot);
-  assert.equal(
-    handoffs.intents.some((intent) => intent.reason === "paper_ingestion_failed"),
-    true
+  const handoff = handoffs.intents.find(
+    (intent) => intent.reason === "paper_ingestion_failed"
   );
+  assert.ok(handoff);
+  assert.equal(handoff.stage, "graph_build");
+  assert.equal(handoff.fromRole, "orchestrator");
 });
 
 test("runWorkflowRuntimeMaintenancePass marks PaperNexus requests without runtime linkage as needs-repair", async (t) => {

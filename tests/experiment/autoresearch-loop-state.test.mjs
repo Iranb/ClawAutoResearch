@@ -10,6 +10,7 @@ import {
   hydrateAutoResearchLoopState,
   recordAutoResearchAdvanceDecision,
 } from "../../tools/autoresearch-loop-state.ts";
+import { buildWorkflowControlContract } from "../../tools/workflow-control-contract.ts";
 
 async function writeJson(targetPath, value) {
   await fs.mkdir(path.dirname(targetPath), { recursive: true });
@@ -142,6 +143,55 @@ test("unified loop state treats below-threshold metric gains as continue tuning"
   assert.equal(state.trial_history[0].metric_delta, 0.02);
   assert.equal(state.trial_history[0].decision.outcome, "discard");
   assert.equal(canAdvance(state, "analyze").allowed, false);
+});
+
+test("unified loop state hydrates phase and owner from canonical workflow_control before stale mirrors", async (t) => {
+  const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-loop-canonical-"));
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "loop-canonical",
+    current_stage: "experiment",
+    owner_agent: "researcher",
+    workflow_control: buildWorkflowControlContract({
+      contractId: "wcc-loop-canonical",
+      reconciledAt: "2026-05-19T18:16:00.000Z",
+      stage: "analysis",
+      owner: "analyzer",
+      nextAction: "/analyze-results",
+      status: "blocked",
+      blockingReason: "analysis_artifacts_missing",
+      completionStatus: "incomplete",
+      completionSource: "test",
+      completionReason: "canonical loop state fixture",
+    }),
+  });
+  await writeJson(path.join(projectRoot, "researcher", "AUTORESEARCH_LOOP_STATE.json"), {
+    phase: "plan",
+    owner: "orchestrator",
+  });
+
+  const state = await hydrateAutoResearchLoopState({ projectRoot });
+  assert.equal(state.phase, "analysis");
+  assert.equal(state.owner, "analyzer");
+
+  const fallbackRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-loop-existing-"));
+  t.after(async () => {
+    await fs.rm(fallbackRoot, { recursive: true, force: true });
+  });
+  await writeJson(path.join(fallbackRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "loop-existing",
+  });
+  await writeJson(path.join(fallbackRoot, "researcher", "AUTORESEARCH_LOOP_STATE.json"), {
+    phase: "write",
+    owner: "academic_writer",
+  });
+
+  const fallbackState = await hydrateAutoResearchLoopState({ projectRoot: fallbackRoot });
+  assert.equal(fallbackState.phase, "write");
+  assert.equal(fallbackState.owner, "academic_writer");
 });
 
 test("plan advancement requires Idea-Catalyst bridge fragments in the unified state", async (t) => {

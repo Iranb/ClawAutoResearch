@@ -8,6 +8,7 @@ import {
   materializeLiteratureResearchControllerArtifacts,
   writeLiteratureResearchControllerRunReceipt,
 } from "../../tools/literature-discovery/controller-contract.ts";
+import { buildWorkflowControlContract } from "../../tools/workflow-control-contract.ts";
 
 async function writeJson(filePath, value) {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
@@ -22,6 +23,18 @@ test("literature research controller materializes closed-loop artifacts", async 
     project_id: "controller-demo",
     current_stage: "review",
     owner_agent: "researcher",
+    workflow_control: buildWorkflowControlContract({
+      contractId: "controller-demo-canonical",
+      reconciledAt: "2026-04-28T00:00:00.000Z",
+      stage: "graph_build",
+      owner: "orchestrator",
+      nextAction: "/graph-build",
+      status: "ready",
+      completionStatus: "incomplete",
+      completionSource: "unit_test",
+      completionReason: "canonical controller fixture",
+      runtimeState: "idle",
+    }),
     research_program: {
       goal: "Generalized category discovery with robust consistency regularization",
       baseline_reference: "FixMatch",
@@ -63,6 +76,8 @@ test("literature research controller materializes closed-loop artifacts", async 
   });
 
   assert.equal(controller.project_id, "controller-demo");
+  assert.equal(controller.need_assessment.current_state.stage, "graph_build");
+  assert.equal(controller.need_assessment.current_state.owner_agent, "orchestrator");
   assert.equal(controller.need_assessment.current_state.source_backed_graph_claim, true);
   assert.equal(controller.coverage_report.closed_loop_contract.paper_ingestion_required, false);
   assert.ok(
@@ -91,6 +106,11 @@ test("literature research controller materializes closed-loop artifacts", async 
       .catch(() => false),
     true
   );
+  const persistedNeedAssessment = JSON.parse(
+    await fs.readFile(controller.artifact_paths.need_assessment_path, "utf8")
+  );
+  assert.equal(persistedNeedAssessment.current_state.stage, "graph_build");
+  assert.equal(persistedNeedAssessment.current_state.owner_agent, "orchestrator");
 });
 
 test("literature controller citation report extracts bounded snowballing candidates from source index metadata", async (t) => {

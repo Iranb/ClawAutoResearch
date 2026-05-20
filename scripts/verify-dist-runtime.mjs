@@ -4,6 +4,8 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 
 const RUNTIME_EXTENSIONS = [".js", ".mjs", ".cjs", ".json", ".node"];
+const CONFLICT_COPY_RUNTIME_ARTIFACT_PATTERN =
+  / [0-9]+\.(?:[cm]?js|d\.[cm]?ts)(?:\.map)?$/;
 const REQUIRED_TEMPLATE_FILES = [
   "PROJECT_MANIFEST.json",
   "TRACK_REGISTRY.json",
@@ -55,6 +57,10 @@ async function fileExists(filePath) {
   }
 }
 
+function isConflictCopyRuntimeArtifact(filePath) {
+  return CONFLICT_COPY_RUNTIME_ARTIFACT_PATTERN.test(path.basename(filePath));
+}
+
 async function resolveRelativeSpecifier(filePath, specifier) {
   const basePath = path.resolve(path.dirname(filePath), specifier);
 
@@ -95,6 +101,16 @@ function collectRelativeSpecifiers(contents) {
 }
 
 export async function verifyDistRuntime({ distRoot = path.join(process.cwd(), "dist") } = {}) {
+  const conflictArtifacts = await walkFiles(
+    distRoot,
+    isConflictCopyRuntimeArtifact
+  );
+  if (conflictArtifacts.length > 0) {
+    throw new Error(
+      `ignored iCloud conflict artifacts in dist: ${conflictArtifacts.join(", ")}`
+    );
+  }
+
   const runtimeFiles = await walkFiles(
     distRoot,
     (entryPath) =>

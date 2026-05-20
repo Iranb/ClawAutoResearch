@@ -14,7 +14,7 @@
     "./openclaw.plugin.json": "./openclaw.plugin.json"
   },
   "scripts": {
-    "build": "tsc && node scripts/prepare-dist-runtime.mjs && node scripts/verify-dist-runtime.mjs",
+    "build": "node scripts/validate-openclaw-plugin.mjs && tsc && node scripts/prepare-dist-runtime.mjs && node scripts/verify-dist-runtime.mjs",
     "dashboard:dev": "npm --prefix apps/workflow-dashboard run dev",
     "dashboard:build": "npm --prefix apps/workflow-dashboard run build",
     "dashboard:test": "npm --prefix apps/workflow-dashboard run test",
@@ -23,6 +23,8 @@
     "docs:preview": "vitepress preview docs",
     "prepare": "npm run build",
     "lint": "eslint index.ts tools/",
+    "plugin:validate": "node scripts/validate-openclaw-plugin.mjs",
+    "check:source-hygiene": "node scripts/check_source_hygiene.mjs",
     "test": "node --test $(find tests -name '*.test.mjs' -type f | sort)",
     "test:changed:list": "node scripts/select_changed_tests.mjs --list",
     "test:changed": "node scripts/select_changed_tests.mjs --run",
@@ -117,7 +119,7 @@
     "vitepress": "^1.6.3"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.3.24"
+    "openclaw": ">=2026.5.18"
   },
   "peerDependenciesMeta": {
     "openclaw": {
@@ -125,7 +127,7 @@
     }
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=22.19.0"
   },
   "openclaw": {
     "extensions": [

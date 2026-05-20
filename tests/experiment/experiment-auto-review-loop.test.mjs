@@ -23,6 +23,7 @@ import {
   maybeLaunchAutoStageForProject,
 } from "../../tools/register-workflow-service.ts";
 import { defaultAutoGateConfig } from "../../tools/workflow-auto-gate.ts";
+import { buildWorkflowControlContract } from "../../tools/workflow-control-contract.ts";
 import { runWorkflowAutoIterator } from "../../tools/workflow-guard.ts";
 
 test.beforeEach(async () => {
@@ -644,6 +645,46 @@ test("research_workflow experiment review actions persist durable reviewed-auto 
   );
   assert.equal(stateFile.cross_reviewer_status, "ready");
   assert.equal(stateFile.cross_reviewer_verdict, "revise");
+});
+
+test("experiment review packet defaults basis stage to canonical workflow_control before stale mirror", async (t) => {
+  const { projectRoot } = await makeExperimentProject();
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.current_stage = "experiment";
+  manifest.workflow_control = buildWorkflowControlContract({
+    contractId: "wcc-experiment-review-basis",
+    reconciledAt: "2026-05-19T18:47:00.000Z",
+    stage: "frontier_mapping",
+    owner: "researcher",
+    nextAction: "/frontier-mapping",
+    status: "blocked",
+    blockingReason: "experiment_review_packet_pending",
+    completionStatus: "incomplete",
+    completionSource: "test",
+    completionReason: "canonical experiment review fixture",
+  });
+  await writeJson(manifestPath, manifest);
+
+  process.env.OPENCLAW_PROJECT = projectRoot;
+  const tool = createResearchWorkflowTool({
+    workspaceDir: projectRoot,
+  });
+  await executeWorkflowTool(tool, {
+    action: "materialize_experiment_review_state",
+  });
+
+  const packet = JSON.parse(
+    await fs.readFile(
+      path.join(projectRoot, "planner", "EXPERIMENT_REVIEW_PACKET.json"),
+      "utf8"
+    )
+  );
+  assert.equal(packet.basis_stage, "frontier_mapping");
 });
 
 test("experiment review materializer reconciles reviewer artifacts and launch decision into durable state", async (t) => {

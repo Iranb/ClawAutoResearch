@@ -1506,15 +1506,15 @@ function summarizeLane(name, value) {
     qualityScore100: value.harness?.qualityScore100 ?? value.harness?.scorecard?.quality_score?.score_100 ?? null,
     claimStrengthCap: value.harness?.claimStrengthCap ?? value.harness?.scorecard?.verdict?.claim_strength_cap ?? null,
     finalStage:
-      finalManifest?.current_stage ?? workflowControl?.stage ?? null,
+      workflowControl?.stage ?? finalManifest?.current_stage ?? null,
     finalOwner:
-      finalManifest?.owner_agent ?? workflowControl?.owner ?? null,
+      workflowControl?.owner ?? finalManifest?.owner_agent ?? null,
     nextAction:
-      finalManifest?.next_action ?? workflowControl?.nextAction ?? workflowControl?.next_action ?? null,
+      workflowControl?.nextAction ?? workflowControl?.next_action ?? finalManifest?.next_action ?? null,
     blockingReason:
-      finalManifest?.blocking_reason ??
       workflowControl?.blockingReason ??
       workflowControl?.blocking_reason ??
+      finalManifest?.blocking_reason ??
       null,
     workflowControl: workflowControl
       ? {
@@ -1804,12 +1804,13 @@ function summarizeLiteratureRequisition(manifest, sourceIndexEvidence) {
 }
 
 function summarizeResearchHarnessLane(lane, manifest, scorecard, artifacts = {}) {
+  const workflowControl = readRecord(manifest?.workflow_control);
   return {
     lane: lane.lane,
     projectRoot: lane.projectRoot,
     finalVerdict: lane.finalVerdict,
-    finalStage: lane.finalStage ?? manifest?.current_stage ?? null,
-    finalOwner: lane.finalOwner ?? manifest?.owner_agent ?? null,
+    finalStage: workflowControl?.stage ?? lane.finalStage ?? manifest?.current_stage ?? null,
+    finalOwner: workflowControl?.owner ?? lane.finalOwner ?? manifest?.owner_agent ?? null,
     topic: {
       status:
         readManifestStageStatus(manifest, "topic_search") ??
@@ -2269,7 +2270,7 @@ export function buildAutoWorkflowTransportParityScorecard(params) {
   };
 }
 
-function summarizePayload(payload) {
+export function summarizePayload(payload) {
   const result = payload?.result ?? {};
   const lanes = [
     summarizeLane("experiment", result.experiment),

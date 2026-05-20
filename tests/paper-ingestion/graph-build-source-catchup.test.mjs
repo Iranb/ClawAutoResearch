@@ -97,6 +97,7 @@ function makeBootstrapFetch(markdown) {
 async function startFakeRemoteDiscoveryMcpServer(options = {}) {
   const requests = [];
   const importWorkflowPayloads = [...(options.importWorkflowPayloads ?? [])];
+  const agentMaterialsPayloadOverrides = options.agentMaterialsPayloadOverrides ?? {};
   const server = http.createServer(async (request, response) => {
     const bodyChunks = [];
     for await (const chunk of request) {
@@ -114,7 +115,137 @@ async function startFakeRemoteDiscoveryMcpServer(options = {}) {
     const toolName = body?.params?.name;
     const args = body?.params?.arguments ?? {};
     let textPayload;
-    if (toolName === "literature_discovery") {
+    if (toolName === "agent_materials") {
+      const operation = args.operation;
+      if (Object.prototype.hasOwnProperty.call(agentMaterialsPayloadOverrides, operation)) {
+        textPayload = agentMaterialsPayloadOverrides[operation];
+      } else if (operation === "source_discovery_plan") {
+        textPayload = {
+          contractVersion: "papernexus-agent-materials-v1",
+          operation: "source_discovery_plan",
+          run_id: "agent-materials-plan-001",
+          corpus: args.corpus,
+          target_problem: args.targetProblem,
+          target_queries: [
+            `${args.targetProblem} closest prior work`,
+            "robust memory autoresearch agent evidence graph",
+          ],
+          near_source_queries: ["memory consolidation agent planning"],
+          far_source_queries: ["cognitive control memory stability"],
+          source_domain_queries: [
+            {
+              domain: "Cognitive Science",
+              layer: "far_source",
+              role: "far_source_story",
+              query: "Cognitive Science robust memory autoresearch agent evidence graph",
+            },
+          ],
+          import_requisitions: [
+            {
+              requisition_id: "req:material-memory",
+              title: "Material Memory Planning Paper",
+              identifiers: { arxivId: "2502.00002" },
+              expected_role: "near_source_method",
+              source_hints: ["https://arxiv.org/pdf/2502.00002.pdf"],
+            },
+          ],
+          generatedAt: "2026-04-24T09:59:00.000Z",
+        };
+      } else if (operation === "research_material_pack") {
+        textPayload = {
+          contractVersion: "papernexus-agent-materials-v1",
+          operation: "research_material_pack",
+          run_id: "agent-materials-plan-001",
+          corpus: args.corpus,
+          target_problem: args.targetProblem,
+          source_discovery: {
+            target_queries: ["robust memory autoresearch agent evidence graph"],
+            source_domain_queries: [
+              {
+                domain: "Cognitive Science",
+                layer: "far_source",
+                role: "far_source_story",
+                query: "Cognitive Science robust memory autoresearch agent evidence graph",
+              },
+            ],
+            import_requisitions: [],
+          },
+          groups: [
+            {
+              role: "near_source_method",
+              items: [
+                {
+                  material_id: "material:memory-planning",
+                  paper_id: "paper:memory-planning",
+                  title: "Material Memory Planning Paper",
+                  status: "resolved_source",
+                  availability: { markdown: true, source: true, graph_context: true },
+                  materials: {
+                    source_spans: [
+                      {
+                        source_path: "/srv/papernexus/corpora/GCD/sources/memory.md",
+                        text: "Memory planning source-backed excerpt.",
+                      },
+                    ],
+                  },
+                  sources: [
+                    {
+                      source_key: "memory-md",
+                      source_path: "/srv/papernexus/corpora/GCD/sources/memory.md",
+                      kind: "markdown",
+                      active_in_graph: true,
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+          missing_materials: [],
+          import_requisitions: [],
+          generatedAt: "2026-04-24T09:59:00.000Z",
+        };
+      } else if (operation === "import_requisition_pack") {
+        textPayload = {
+          contractVersion: "papernexus-agent-materials-v1",
+          operation: "import_requisition_pack",
+          run_id: "agent-materials-plan-001",
+          corpus: args.corpus,
+          target_problem: args.targetProblem,
+          import_requisitions: [
+            {
+              requisition_id: "req:material-memory",
+              title: "Material Memory Planning Paper",
+              identifiers: { arxivId: "2502.00002" },
+              expected_role: "near_source_method",
+              source_hints: ["https://arxiv.org/pdf/2502.00002.pdf"],
+            },
+          ],
+          generated_queries: {
+            target: ["robust memory autoresearch agent evidence graph"],
+            near_source: ["memory consolidation agent planning"],
+            far_source: ["cognitive control memory stability"],
+            source_domains: [
+              {
+                domain: "Cognitive Science",
+                query: "Cognitive Science robust memory autoresearch agent evidence graph",
+              },
+            ],
+          },
+          generatedAt: "2026-04-24T09:59:00.000Z",
+        };
+      } else {
+        response.writeHead(200, { "Content-Type": "application/json" });
+        response.end(JSON.stringify({
+          jsonrpc: "2.0",
+          id: body?.id ?? 1,
+          error: {
+            code: -32012,
+            message: `unexpected agent_materials operation ${operation}`,
+          },
+        }));
+        return;
+      }
+    } else if (toolName === "literature_discovery") {
       if (options.literatureDiscoveryDelayMs) {
         await new Promise((resolve) =>
           setTimeout(resolve, options.literatureDiscoveryDelayMs)
@@ -647,19 +778,35 @@ test("graph-build source catch-up delegates missing research and import to remot
   assert.equal(result.requestId, "remote-literature-discovery-source-catchup-demo");
   assert.match(result.batchManifestPath, /PAPERNEXUS_LITERATURE_DISCOVERY\.json$/);
 
-  assert.equal(server.requests.length, 2);
-  assert.equal(server.requests[0].authorization, "Bearer remote-test-token");
-  assert.equal(server.requests[0].body.params.name, "literature_discovery");
-  assert.equal(server.requests[0].body.params.arguments.operation, "ingest");
-  assert.equal(server.requests[0].body.params.arguments.corpus, "GCD");
-  assert.equal(server.requests[0].body.params.arguments.preferMarkdown, true);
-  assert.equal(server.requests[0].body.params.arguments.generateArxivMarkdownSources, true);
-  assert.equal(server.requests[0].body.params.arguments.processImports, true);
-  assert.equal(server.requests[0].body.params.arguments.providerRequestMaxConcurrent, 2);
-  assert.equal(server.requests[0].body.params.arguments.discoveryRequestCache, true);
-  assert.match(server.requests[0].body.params.arguments.topic, /robust memory/i);
-  assert.equal(server.requests[1].body.params.name, "import_workflow");
-  assert.deepEqual(server.requests[1].body.params.arguments.taskIds, ["task-remote-1"]);
+  assert.equal(
+    server.requests.filter((entry) => entry.body.params.name === "agent_materials").length,
+    3
+  );
+  const discoveryRequest = server.requests.find(
+    (entry) => entry.body.params.name === "literature_discovery"
+  );
+  assert.ok(discoveryRequest);
+  assert.equal(discoveryRequest.authorization, "Bearer remote-test-token");
+  assert.equal(discoveryRequest.body.params.arguments.operation, "ingest");
+  assert.equal(discoveryRequest.body.params.arguments.corpus, "GCD");
+  assert.equal(discoveryRequest.body.params.arguments.preferMarkdown, true);
+  assert.equal(discoveryRequest.body.params.arguments.generateArxivMarkdownSources, true);
+  assert.equal(discoveryRequest.body.params.arguments.processImports, true);
+  assert.equal(discoveryRequest.body.params.arguments.providerRequestMaxConcurrent, 2);
+  assert.equal(discoveryRequest.body.params.arguments.discoveryRequestCache, true);
+  assert.match(discoveryRequest.body.params.arguments.topic, /robust memory/i);
+  assert.match(discoveryRequest.body.params.arguments.topic, /source discovery plan queries/i);
+  assert.match(discoveryRequest.body.params.arguments.topic, /Cognitive Science/i);
+  assert.equal(discoveryRequest.body.params.arguments.seedPapers.length, 1);
+  assert.equal(
+    discoveryRequest.body.params.arguments.seedPapers[0].title,
+    "Material Memory Planning Paper"
+  );
+  const importWorkflowRequest = server.requests.find(
+    (entry) => entry.body.params.name === "import_workflow"
+  );
+  assert.ok(importWorkflowRequest);
+  assert.deepEqual(importWorkflowRequest.body.params.arguments.taskIds, ["task-remote-1"]);
 
   const sourceIndex = JSON.parse(
     await fs.readFile(path.join(projectRoot, "researcher", "PAPER_SOURCE_INDEX.json"), "utf8")
@@ -709,6 +856,30 @@ test("graph-build source catch-up delegates missing research and import to remot
   assert.equal(
     satisfactionReport.remote_literature_discovery.artifact_path,
     result.batchManifestPath
+  );
+  assert.equal(satisfactionReport.papernexus_agent_materials.available, true);
+  assert.equal(
+    satisfactionReport.cited_evidence.papernexus_agent_materials.bundle,
+    "researcher/papernexus/AGENT_MATERIALS_BUNDLE.json"
+  );
+  const agentMaterialsBundle = JSON.parse(
+    await fs.readFile(
+      path.join(projectRoot, "researcher", "papernexus", "AGENT_MATERIALS_BUNDLE.json"),
+      "utf8"
+    )
+  );
+  assert.equal(agentMaterialsBundle.kind, "papernexus_agent_materials_bundle");
+  assert.equal(agentMaterialsBundle.source_discovery_plan.operation, "source_discovery_plan");
+  assert.equal(agentMaterialsBundle.research_material_pack.operation, "research_material_pack");
+  assert.equal(agentMaterialsBundle.import_requisition_pack.operation, "import_requisition_pack");
+  await assert.rejects(
+    fs.access(path.join(projectRoot, "researcher", "papernexus", "SOURCE_DISCOVERY_PLAN.json"))
+  );
+  await assert.rejects(
+    fs.access(path.join(projectRoot, "researcher", "papernexus", "AGENT_MATERIALS_PACK.json"))
+  );
+  await assert.rejects(
+    fs.access(path.join(projectRoot, "researcher", "papernexus", "IMPORT_REQUISITION_PACK.json"))
   );
   const discoveryArtifact = JSON.parse(
     await fs.readFile(
@@ -762,6 +933,88 @@ test("graph-build source catch-up delegates missing research and import to remot
   assert.equal(receipt.task_summary.remaining, 1);
 });
 
+test("graph-build source catch-up treats partial PaperNexus agent materials as unavailable", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  const previousToken = process.env.PAPERNEXUS_TEST_TOKEN;
+  const server = await startFakeRemoteDiscoveryMcpServer({
+    agentMaterialsPayloadOverrides: {
+      research_material_pack: "not-json-material-pack",
+    },
+  });
+  t.after(async () => {
+    if (previousToken === undefined) {
+      delete process.env.PAPERNEXUS_TEST_TOKEN;
+    } else {
+      process.env.PAPERNEXUS_TEST_TOKEN = previousToken;
+    }
+    await server.close();
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+  process.env.PAPERNEXUS_TEST_TOKEN = "remote-test-token";
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "source-catchup-demo",
+    current_stage: "graph_build",
+    owner_agent: "researcher",
+    research_program: {
+      goal: "Use PaperNexus to find source-backed papers about robust memory in autoresearch agents.",
+    },
+  });
+
+  const result = await maybeMaterializeGraphBuildPaperSources({
+    projectRoot,
+    projectId: "source-catchup-demo",
+    workflowPolicy: {
+      papernexusAccessMode: "remote_mcp",
+      papernexusSharedCorpus: "GCD",
+      papernexusMcpUrl: server.url,
+      papernexusApiTokenSource: "env",
+      papernexusApiTokenEnv: "PAPERNEXUS_TEST_TOKEN",
+    },
+    now: "2026-04-24T10:00:00.000Z",
+    fetchImpl: makeFetch("# Unused\n\n## Abstract\n\n" + "unused ".repeat(200)),
+  });
+
+  assert.equal(result.queued, true);
+  assert.equal(
+    server.requests.filter((entry) => entry.body.params.name === "agent_materials").length,
+    2
+  );
+  const discoveryRequest = server.requests.find(
+    (entry) => entry.body.params.name === "literature_discovery"
+  );
+  assert.ok(discoveryRequest);
+  assert.doesNotMatch(
+    discoveryRequest.body.params.arguments.topic,
+    /source discovery plan queries/i
+  );
+  assert.equal((discoveryRequest.body.params.arguments.seedPapers ?? []).length, 0);
+  await assert.rejects(
+    fs.access(path.join(projectRoot, "researcher", "papernexus", "AGENT_MATERIALS_BUNDLE.json"))
+  );
+
+  const manifest = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "PROJECT_MANIFEST.json"), "utf8")
+  );
+  const satisfactionReport = JSON.parse(
+    await fs.readFile(
+      path.join(
+        projectRoot,
+        manifest.paper_ingestion.queued_requests[0].validation_report_path
+      ),
+      "utf8"
+    )
+  );
+  assert.equal(satisfactionReport.papernexus_agent_materials.available, false);
+  assert.match(
+    satisfactionReport.papernexus_agent_materials.error,
+    /research_material_pack returned an unreadable payload/
+  );
+  assert.equal(
+    satisfactionReport.cited_evidence.papernexus_agent_materials.bundle,
+    null
+  );
+});
+
 test("graph-build source catch-up honors manifest remote_mcp config without local fallback", async (t) => {
   const projectRoot = await makeProjectRoot();
   const server = await startFakeRemoteDiscoveryMcpServer();
@@ -795,7 +1048,10 @@ test("graph-build source catch-up honors manifest remote_mcp config without loca
     server.requests.filter((entry) => entry.body.params.name === "literature_discovery").length,
     1
   );
-  assert.equal(server.requests[0].body.params.arguments.corpus, "GCD");
+  const discoveryRequest = server.requests.find(
+    (entry) => entry.body.params.name === "literature_discovery"
+  );
+  assert.equal(discoveryRequest.body.params.arguments.corpus, "GCD");
 
   const receipt = JSON.parse(
     await fs.readFile(path.join(projectRoot, "graph", "PAPERNEXUS_GRAPH_BUILD_RECEIPT.json"), "utf8")

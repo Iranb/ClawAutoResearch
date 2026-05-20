@@ -17,6 +17,7 @@ import {
   clearBackgroundWorkflowQueueForTests,
   clearBackgroundWorkflowRunRegistryForTests,
   drainQueuedBackgroundWorkflowRuns,
+  recordBackgroundWorkflowRun,
 } from "../../../tools/workflow-fast-paths.ts";
 import {
   readWorkflowRuntimeQueueStore,
@@ -37,6 +38,7 @@ import {
 } from "../../../tools/workflow-team/team-round.ts";
 import {
   createWorkflowCoordinatorService,
+  deriveAutoDispatchDiagnosticsPatch,
   deriveWorkflowCoordinatorStatusUpdate,
   maybeAdvanceAutoCodeReviewForProject,
   listWorkflowCoordinatorProjects,
@@ -73,6 +75,7 @@ import { readWorkflowArtifactReceiptStore } from "../../../tools/workflow-handof
 import { readWorkflowHooksStateStore } from "../../../tools/workflow-hooks/state.ts";
 import { recordWorkflowNotificationChannelForProject } from "../../../tools/workflow-notification-channels.ts";
 import { readWorkflowDiagnosticEvents } from "../../../tools/workflow-diagnostics.ts";
+import { buildWorkflowControlContract } from "../../../tools/workflow-control-contract.ts";
 
 async function makeProjectsRoot() {
   return fs.mkdtemp(path.join(os.tmpdir(), "openclaw-research-workflow-service-"));
@@ -563,6 +566,82 @@ test("listWorkflowCoordinatorProjects falls back to directory scan when PROJECTS
   ]);
 });
 
+test("listWorkflowCoordinatorProjects directory scan prefers canonical workflow control stage", async (t) => {
+  const projectsRoot = await makeProjectsRoot();
+  const staleDoneRoot = path.join(projectsRoot, "stale-done");
+  const canonicalActiveRoot = path.join(projectsRoot, "canonical-active");
+
+  await writeJson(path.join(staleDoneRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "stale-done",
+    current_stage: "graph_build",
+    workflow_control: {
+      schema_version: 1,
+      contract_id: "stale-done-control",
+      reconciled_at: "2026-05-19T05:23:00.000Z",
+      stage: "done",
+      owner: "orchestrator",
+      next_action: null,
+      status: "ready",
+      blocking_reason: null,
+      completion: {
+        status: "complete",
+        source: "final_scorecard",
+        reason: null,
+      },
+      runtime_state: "idle",
+      queue_key: null,
+      session_key: null,
+    },
+  });
+  await writeJson(path.join(canonicalActiveRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "canonical-active",
+    current_stage: "setup",
+    workflow_control: {
+      schema_version: 1,
+      contract_id: "canonical-active-control",
+      reconciled_at: "2026-05-19T05:23:00.000Z",
+      stage: "analysis",
+      owner: "analyzer",
+      next_action: "/analysis-phase",
+      status: "waiting",
+      blocking_reason: null,
+      completion: {
+        status: "incomplete",
+        source: "analysis_completion",
+        reason: "analysis packet pending",
+      },
+      runtime_state: "idle",
+      queue_key: null,
+      session_key: null,
+    },
+  });
+
+  t.after(async () => {
+    await fs.rm(projectsRoot, { recursive: true, force: true });
+  });
+
+  await writeJson(path.join(projectsRoot, "PROJECTS_STATE.json"), {
+    updated_at: "2026-05-10T00:00:00.000Z",
+    projects: [],
+  });
+
+  const projects = await listWorkflowCoordinatorProjects({
+    projectsRoot,
+    maxProjects: 5,
+  });
+
+  assert.deepEqual(projects, [
+    {
+      projectId: "canonical-active",
+      projectRoot: canonicalActiveRoot,
+      source: "scan",
+      stage: "analysis",
+      updatedAt: null,
+      channelKey: null,
+    },
+  ]);
+});
+
 test("runWorkflowCoordinatorPass invokes auto iterator in service mode", async (t) => {
   const projectsRoot = await makeProjectsRoot();
   const alphaRoot = await makeProject(projectsRoot, "alpha", "graph_build");
@@ -901,6 +980,10 @@ test("maybeLaunchIdleResearchForProject preserves queued runtime-recovery launch
   assert.equal(launch.queued, true);
   assert.equal(launch.reason, "queued");
   assert.equal(typeof launch.queueKey, "string");
+  assert.equal(launch.ownerRuntimeStatus?.status, "queued");
+  assert.equal(launch.ownerRuntimeStatus?.runtimeState, "queued");
+  assert.equal(launch.ownerRuntimeStatus?.owner, "researcher");
+  assert.equal(launch.ownerRuntimeStatus?.queueKey, launch.queueKey);
 
   const status = deriveWorkflowCoordinatorStatusUpdate({
     projectId: "alpha",
@@ -2264,6 +2347,239 @@ test("maybeLaunchAutoStageForProject reclaims stale orphan owner sessions before
   );
 });
 
+test("maybeLaunchAutoStageForProject reports queued owner runtime when researcher service pool is full", async (t) => {
+  const projectsRoot = await makeProjectsRoot();
+  const projectRoot = path.join(projectsRoot, "alpha");
+  const runs = [];
+  t.after(async () => {
+    await fs.rm(projectsRoot, { recursive: true, force: true });
+  });
+  await fs.mkdir(projectRoot, { recursive: true });
+  await recordDiscordNotificationTarget(projectRoot, "alpha");
+
+  await recordBackgroundWorkflowRun({
+    ownerAgent: "researcher",
+    channelKey: "discord:group:paper-lab",
+    requesterSessionKey: "agent:researcher:discord:group:paper-lab",
+    backgroundSessionKey: "agent:researcher:discord:group:paper-lab:bg-1",
+    runId: "active-stage-run-1",
+    queueKey: "active-research-queue-1",
+    kind: "research_pipeline",
+    family: "research",
+    projectId: "alpha",
+    projectRoot,
+    projectsRoot,
+  });
+  await recordBackgroundWorkflowRun({
+    ownerAgent: "researcher",
+    channelKey: "discord:group:paper-lab",
+    requesterSessionKey: "agent:researcher:discord:group:paper-lab",
+    backgroundSessionKey: "agent:researcher:discord:group:paper-lab:bg-2",
+    runId: "active-stage-run-2",
+    queueKey: "active-research-queue-2",
+    kind: "research_pipeline",
+    family: "research",
+    projectId: "alpha",
+    projectRoot,
+    projectsRoot,
+  });
+
+  const launch = await maybeLaunchAutoStageForProject({
+    workflowRuntime: {
+      async run(params) {
+        runs.push(params);
+        return { runId: `stage-run-${runs.length}` };
+      },
+      async waitForRun() {
+        return { status: "timeout" };
+      },
+    },
+    workflowPolicy: {
+      autoMode: "conservative",
+      autoGate: defaultAutoGateConfig(),
+      enableChannelProjectBindings: true,
+      projectsRoot,
+      heartbeatBackgroundChecks: true,
+      agentContactCooldownSeconds: 300,
+      enableWorkflowMailbox: true,
+    },
+    projectRoot,
+    projectId: "alpha",
+    autoIteratorResult: {
+      gateBlocking: false,
+      stageAfter: "experiment",
+      recommendedActions: [
+        {
+          kind: "drive_stage",
+          owner: "researcher",
+          stage: "experiment",
+          summary: "Run one bounded experiment-search pass.",
+          command: "/run-experiments",
+          mailboxMessageId: null,
+          cooldownRemainingSeconds: 0,
+          blocking: false,
+        },
+      ],
+    },
+    launchedStageKeys: new Map(),
+    deps: {
+      listChannelProjectBindingsForWorkflow() {
+        return {
+          enabled: true,
+          storePath: projectsRoot,
+          bindings: [
+            {
+              channelKey: "discord:group:paper-lab",
+              projectRoot,
+              projectId: "alpha",
+              messageChannel: "discord",
+              sessionKeySample: "agent:researcher:discord:group:paper-lab",
+              sessionId: null,
+              boundAt: "2026-03-25T00:00:00.000Z",
+              updatedAt: "2026-03-25T00:05:00.000Z",
+              boundByAgent: "researcher",
+              notes: null,
+            },
+          ],
+        };
+      },
+    },
+  });
+
+  assert.equal(launch.launched, false);
+  assert.equal(launch.reason, "session_pool_full");
+  assert.equal(launch.ownerRuntimeStatus.status, "queued");
+  assert.equal(launch.ownerRuntimeStatus.queueKey, launch.launchKey);
+  assert.equal(launch.ownerRuntimeStatus.runtimeState, "queued");
+  assert.notEqual(
+    launch.ownerRuntimeStatus.reason,
+    "owner_runtime_dispatch_unavailable"
+  );
+  assert.equal(runs.length, 0);
+
+  const queue = await readWorkflowRuntimeQueueStore(projectRoot);
+  assert.equal(queue.entries.length, 1);
+  assert.equal(queue.entries[0].queueKey, launch.launchKey);
+  assert.equal(queue.entries[0].status, "queued");
+  assert.equal(queue.entries[0].dispatchPayload?.toRole, "researcher");
+});
+
+test("maybeLaunchAutoStageForProject exposes owner runtime status while action cooldown is active", async (t) => {
+  const projectsRoot = await makeProjectsRoot();
+  const projectRoot = path.join(projectsRoot, "alpha");
+  const runs = [];
+  t.after(async () => {
+    await fs.rm(projectsRoot, { recursive: true, force: true });
+  });
+  await fs.mkdir(projectRoot, { recursive: true });
+  await recordDiscordNotificationTarget(projectRoot, "alpha");
+  const now = new Date().toISOString();
+  const sessionKey =
+    "agent:researcher:discord:group:paper-lab:subagent:experiment";
+  await writeWorkflowRuntimeSessionsStore({
+    projectRoot,
+    projectId: "alpha",
+    entries: [
+      {
+        sessionKey,
+        sessionId: "session-active",
+        runtime: "subagent",
+        role: "researcher",
+        agentId: "researcher",
+        ownerAgent: "researcher",
+        family: "research",
+        kind: "workflow_stage_dispatch",
+        channelKey: "discord:group:paper-lab",
+        requesterSessionKey: "agent:researcher:discord:group:paper-lab",
+        projectId: "alpha",
+        projectRoot,
+        parentSessionKey: "agent:researcher:discord:group:paper-lab",
+        threadBindingKey: null,
+        depth: 1,
+        status: "active",
+        runId: "run-active",
+        queueKey: null,
+        startedAt: now,
+        lastHeartbeatAt: now,
+        lastAnnounceAt: null,
+        lastCheckedAt: now,
+        lastFinishedAt: null,
+        lastError: null,
+      },
+    ],
+  });
+
+  const launch = await maybeLaunchAutoStageForProject({
+    workflowRuntime: {
+      async run(params) {
+        runs.push(params);
+        return { runId: `stage-run-${runs.length}` };
+      },
+    },
+    workflowPolicy: {
+      autoMode: "conservative",
+      autoGate: defaultAutoGateConfig(),
+      enableChannelProjectBindings: true,
+      projectsRoot,
+      heartbeatBackgroundChecks: true,
+      agentContactCooldownSeconds: 300,
+      enableWorkflowMailbox: true,
+    },
+    projectRoot,
+    projectId: "alpha",
+    autoIteratorResult: {
+      gateBlocking: false,
+      stageAfter: "experiment",
+      recommendedActions: [
+        {
+          kind: "drive_stage",
+          owner: "researcher",
+          stage: "experiment",
+          summary: "Run one bounded experiment-search pass.",
+          command: "/run-experiments",
+          mailboxMessageId: null,
+          cooldownRemainingSeconds: 42,
+          blocking: false,
+        },
+      ],
+    },
+    launchedStageKeys: new Map(),
+    deps: {
+      listChannelProjectBindingsForWorkflow() {
+        return {
+          enabled: true,
+          storePath: projectsRoot,
+          bindings: [
+            {
+              channelKey: "discord:group:paper-lab",
+              projectRoot,
+              projectId: "alpha",
+              messageChannel: "discord",
+              sessionKeySample: "agent:researcher:discord:group:paper-lab",
+              sessionId: null,
+              boundAt: "2026-03-25T00:00:00.000Z",
+              updatedAt: "2026-03-25T00:05:00.000Z",
+              boundByAgent: "researcher",
+              notes: null,
+            },
+          ],
+        };
+      },
+    },
+  });
+
+  assert.equal(launch.launched, false);
+  assert.equal(launch.reason, "cooldown_active");
+  assert.equal(launch.ownerRuntimeStatus.status, "active");
+  assert.equal(launch.ownerRuntimeStatus.runtimeState, "active");
+  assert.equal(launch.ownerRuntimeStatus.sessionKey, sessionKey);
+  assert.equal(
+    launch.launchKey,
+    `${projectRoot}::experiment::researcher::/run-experiments`
+  );
+  assert.equal(runs.length, 0);
+});
+
 test("maybeLaunchAutoStageForProject honors configured experiment monitor cooldowns", async (t) => {
   const projectsRoot = await makeProjectsRoot();
   const projectRoot = path.join(projectsRoot, "alpha");
@@ -2438,6 +2754,12 @@ test("maybeLaunchAutoStageForProject defaults experiment monitor cooldown to fiv
 
   assert.equal(launch.launched, false);
   assert.equal(launch.reason, "already_launched");
+  assert.equal(launch.ownerRuntimeStatus.status, "blocked");
+  assert.equal(launch.ownerRuntimeStatus.runtimeState, "idle");
+  assert.equal(
+    launch.ownerRuntimeStatus.reason,
+    "owner_runtime_dispatch_unavailable"
+  );
   assert.equal(runs.length, 0);
 });
 
@@ -2575,6 +2897,11 @@ test("maybeLaunchAutoZoteroSyncForProject starts a non-blocking researcher conti
 
   assert.equal(launch.launched, true);
   assert.equal(launch.trigger, "auto_graph_refresh");
+  assert.equal(launch.ownerRuntimeStatus?.status, "started");
+  assert.equal(launch.ownerRuntimeStatus?.runtimeState, "active");
+  assert.equal(launch.ownerRuntimeStatus?.owner, "researcher");
+  assert.equal(launch.ownerRuntimeStatus?.runId, launch.runId);
+  assert.equal(launch.ownerRuntimeStatus?.sessionKey, launch.sessionKey);
   assert.equal(runs.length, 1);
   assert.match(runs[0].message ?? "", /\/zotero-sync/i);
   assert.match(runs[0].extraSystemPrompt ?? "", /Workflow coordinator soft Zotero sync trigger/i);
@@ -2631,6 +2958,10 @@ test("maybeLaunchAutoZoteroSyncForProject queues non-blocking work when gateway 
   assert.equal(launch.queued, true);
   assert.equal(launch.reason, "queued");
   assert.equal(launch.trigger, "auto_graph_refresh");
+  assert.equal(launch.ownerRuntimeStatus?.status, "queued");
+  assert.equal(launch.ownerRuntimeStatus?.runtimeState, "queued");
+  assert.equal(launch.ownerRuntimeStatus?.owner, "researcher");
+  assert.equal(launch.ownerRuntimeStatus?.queueKey, launch.queueKey);
 });
 
 test("maybeLaunchAutoZoteroSyncForProject does not report unqueued runtime failures as queued", async (t) => {
@@ -2688,6 +3019,8 @@ test("maybeLaunchAutoZoteroSyncForProject does not report unqueued runtime failu
   assert.equal(launch.queued, false);
   assert.equal(launch.reason, "runtime_unavailable");
   assert.equal(launch.trigger, "auto_graph_refresh");
+  assert.notEqual(launch.ownerRuntimeStatus?.status, "queued");
+  assert.equal(launch.ownerRuntimeStatus?.runtimeState, "degraded");
   assert.match(launch.summary ?? "", /zotero runner crashed/i);
 });
 
@@ -2806,6 +3139,11 @@ test("maybeLaunchPaperIngestionWorkerForProject starts queued PaperNexus uploads
   );
   assert.equal(launch.launched, true);
   assert.equal(launch.reason, "started");
+  assert.equal(launch.ownerRuntimeStatus?.status, "started");
+  assert.equal(launch.ownerRuntimeStatus?.runtimeState, "active");
+  assert.equal(launch.ownerRuntimeStatus?.owner, "researcher");
+  assert.equal(launch.ownerRuntimeStatus?.runId, launch.runId);
+  assert.equal(launch.ownerRuntimeStatus?.sessionKey, launch.sessionKey);
   assert.equal(runs.length, 0);
   assert.equal(manifest.paper_ingestion.runtime_status, "waiting_graph");
   assert.equal(manifest.paper_ingestion.queued_requests[0].status, "completed");
@@ -2940,6 +3278,9 @@ test("maybeLaunchPaperIngestionWorkerForProject surfaces unqueued runtime failur
   assert.equal(launch.launched, false);
   assert.equal(launch.queued, false);
   assert.equal(launch.reason, "runtime_unavailable");
+  assert.notEqual(launch.ownerRuntimeStatus?.status, "queued");
+  assert.equal(launch.ownerRuntimeStatus?.status, "failed");
+  assert.equal(launch.ownerRuntimeStatus?.runtimeState, "degraded");
   assert.match(launch.summary ?? "", /PaperNexus worker runtime crashed/i);
 
   const status = deriveWorkflowCoordinatorStatusUpdate({
@@ -3072,7 +3413,7 @@ test("maybeLaunchPaperIngestionWorkerForProject lets the control-plane advance l
           advanced: true,
           reason: "launched_or_polled",
           requestId: "req-lit-1",
-          status: "running",
+          status: "queued",
           startedAt: "2026-04-02T00:01:00.000Z",
           attemptCount: 1,
           runId: "pn-run-1",
@@ -3102,11 +3443,14 @@ test("maybeLaunchPaperIngestionWorkerForProject lets the control-plane advance l
   assert.equal(calls.length, 1);
   assert.equal(calls[0].projectRoot, projectRoot);
   assert.equal(calls[0].projectId, "alpha");
-  assert.equal(launch.launched, true);
-  assert.equal(launch.queued, false);
-  assert.equal(launch.reason, "started");
+  assert.equal(launch.launched, false);
+  assert.equal(launch.queued, true);
+  assert.equal(launch.reason, "queued");
   assert.equal(launch.runId, "pn-run-1");
   assert.equal(launch.queueKey, "req-lit-1");
+  assert.equal(launch.ownerRuntimeStatus?.status, "queued");
+  assert.equal(launch.ownerRuntimeStatus?.runtimeState, "queued");
+  assert.equal(launch.ownerRuntimeStatus?.queueKey, "req-lit-1");
 });
 
 test("maybeLaunchAutoStageForProject keeps the researcher service session pool isolated per project", async (t) => {
@@ -4787,6 +5131,80 @@ test("maybeAdvanceSurveyBriefRefinementForProject launches a survey brief refine
   assert.equal(runtimeCalls.length, 4);
 });
 
+test("maybeAdvanceSurveyBriefRefinementForProject uses canonical stage when iterator stage is missing", async (t) => {
+  const projectRoot = await makeProject(await makeProjectsRoot(), "alpha", "experiment");
+  const runtimeCalls = [];
+
+  t.after(async () => {
+    await fs.rm(path.dirname(projectRoot), { recursive: true, force: true });
+  });
+
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "alpha",
+    current_stage: "experiment",
+    workflow_control: buildWorkflowControlContract({
+      contractId: "wcc-survey-brief-refinement",
+      reconciledAt: "2026-05-19T19:46:00.000Z",
+      stage: "survey_review",
+      owner: "researcher",
+      nextAction: "/survey-review",
+      status: "blocked",
+      blockingReason: "survey_brief_refinement_pending",
+      completionStatus: "incomplete",
+      completionSource: "test",
+      completionReason: "canonical survey brief refinement fixture",
+    }),
+    survey_review: {
+      status: "synthesizing",
+      current_phase: "taxonomy_refinement",
+      topic: "Generalized Category Discovery",
+      survey_brief_path: "researcher/SURVEY_BRIEF.md",
+      diagnostics_path: "researcher/SURVEY_GATE_DIAGNOSTICS.json",
+      literature_review_path: "researcher/LITERATURE_REVIEW.md",
+      sota_matrix_path: "researcher/SOTA_MATRIX.md",
+      gap_synthesis_path: "researcher/GAP_SYNTHESIS.md",
+      gate_ready: false,
+      gate_blocking_issues: [
+        "Strengthen the taxonomy/theme sections so the survey is organized by method families instead of a flat bibliography.",
+      ],
+    },
+  });
+  await fs.mkdir(path.join(projectRoot, "researcher"), { recursive: true });
+  await fs.writeFile(path.join(projectRoot, "researcher", "SURVEY_BRIEF.md"), "# Survey Brief\n", "utf8");
+  await fs.writeFile(path.join(projectRoot, "researcher", "SURVEY_GATE_DIAGNOSTICS.json"), "{}\n", "utf8");
+  await fs.writeFile(path.join(projectRoot, "researcher", "LITERATURE_REVIEW.md"), "# Literature Review\n", "utf8");
+  await fs.writeFile(path.join(projectRoot, "researcher", "SOTA_MATRIX.md"), "# SOTA Matrix\n", "utf8");
+  await fs.writeFile(path.join(projectRoot, "researcher", "GAP_SYNTHESIS.md"), "# Gap Synthesis\n", "utf8");
+
+  const result = await maybeAdvanceSurveyBriefRefinementForProject({
+    workflowRuntime: {
+      async run(params) {
+        runtimeCalls.push(params);
+        return { runId: `survey-brief-panel-${runtimeCalls.length}` };
+      },
+    },
+    workflowPolicy: {
+      autoMode: "aggressive",
+      autoGate: {
+        ...defaultAutoGateConfig(),
+        enabled: true,
+      },
+      enableChannelProjectBindings: true,
+      projectsRoot: path.dirname(projectRoot),
+      heartbeatBackgroundChecks: true,
+      agentContactCooldownSeconds: 300,
+      enableWorkflowMailbox: true,
+    },
+    projectRoot,
+    projectId: "alpha",
+    autoIteratorResult: {},
+  });
+
+  assert.equal(result.launched, true);
+  assert.equal(result.discussionId, "survey-brief-refinement");
+  assert.equal(runtimeCalls.length, 4);
+});
+
 test("maybeDispatchAutoModeMitigationForProject blocks mitigation when project binding is missing", async (t) => {
   const projectsRoot = await makeProjectsRoot();
   const projectRoot = path.join(projectsRoot, "alpha");
@@ -4949,6 +5367,175 @@ test("maybeDispatchAutoModeMitigationForProject routes the remediation plan to t
   assert.equal(dispatch.sessionKey, "agent:academic_writer:discord:group:paper-lab");
   assert.equal(runs.length, 1);
   assert.match(runs[0].message, /bounded remediation pass/i);
+});
+
+test("maybeDispatchAutoModeMitigationForProject reports queued owner runtime when researcher service pool is full", async (t) => {
+  const projectsRoot = await makeProjectsRoot();
+  const projectRoot = path.join(projectsRoot, "alpha");
+  const runs = [];
+  t.after(async () => {
+    await fs.rm(projectsRoot, { recursive: true, force: true });
+  });
+  await fs.mkdir(projectRoot, { recursive: true });
+  await recordDiscordNotificationTarget(projectRoot, "alpha");
+
+  await recordBackgroundWorkflowRun({
+    ownerAgent: "researcher",
+    channelKey: "discord:group:paper-lab",
+    requesterSessionKey: "agent:researcher:discord:group:paper-lab",
+    backgroundSessionKey: "agent:researcher:discord:group:paper-lab:bg-1",
+    runId: "active-mitigation-run-1",
+    queueKey: "active-research-queue-1",
+    kind: "research_pipeline",
+    family: "research",
+    projectId: "alpha",
+    projectRoot,
+    projectsRoot,
+  });
+  await recordBackgroundWorkflowRun({
+    ownerAgent: "researcher",
+    channelKey: "discord:group:paper-lab",
+    requesterSessionKey: "agent:researcher:discord:group:paper-lab",
+    backgroundSessionKey: "agent:researcher:discord:group:paper-lab:bg-2",
+    runId: "active-mitigation-run-2",
+    queueKey: "active-research-queue-2",
+    kind: "research_pipeline",
+    family: "research",
+    projectId: "alpha",
+    projectRoot,
+    projectsRoot,
+  });
+
+  const dispatch = await maybeDispatchAutoModeMitigationForProject({
+    workflowRuntime: {
+      async run(params) {
+        runs.push(params);
+        return { runId: `mitigation-run-${runs.length}` };
+      },
+    },
+    workflowPolicy: {
+      autoMode: "aggressive",
+      autoGate: defaultAutoGateConfig(),
+      enableChannelProjectBindings: true,
+      projectsRoot,
+      heartbeatBackgroundChecks: true,
+      agentContactCooldownSeconds: 300,
+      enableWorkflowMailbox: true,
+    },
+    projectRoot,
+    projectId: "alpha",
+    autoIteratorResult: {
+      stageAfter: "analysis",
+      nextAction: "/analyze-results",
+      ownerAfter: "researcher",
+    },
+    discussionAttempt: {
+      launched: false,
+      reason: "updated",
+      projectId: "alpha",
+      projectRoot,
+      fingerprint: "risk-fingerprint-queued",
+      stage: "analysis",
+      riskLevel: "severe",
+      status: "needs_changes",
+      reviewCount: 2,
+      roundsStarted: 1,
+      recommendedOwner: "researcher",
+      actionItems: ["Run a bounded mitigation pass before retrying the handoff."],
+      blockers: ["Risk discussion requires a mitigation owner turn."],
+      summary: "Run mitigation before retrying the analyzer handoff.",
+      roundId: "round-queued",
+      packetPath: path.join(
+        projectRoot,
+        "reviewer",
+        "auto-mode-discussion",
+        "AUTO_MODE_DISCUSSION_PACKET.md"
+      ),
+      resolved: false,
+    },
+    launchedMitigationKeys: new Map(),
+    deps: {
+      listChannelProjectBindingsForWorkflow() {
+        return {
+          enabled: true,
+          storePath: projectsRoot,
+          bindings: [
+            {
+              channelKey: "discord:group:paper-lab",
+              projectRoot,
+              projectId: "alpha",
+              messageChannel: "discord",
+              sessionKeySample: "agent:researcher:discord:group:paper-lab",
+              sessionId: null,
+              boundAt: "2026-03-25T00:00:00.000Z",
+              updatedAt: "2026-03-25T00:05:00.000Z",
+              boundByAgent: "researcher",
+              notes: null,
+            },
+          ],
+        };
+      },
+    },
+  });
+
+  assert.equal(dispatch.launched, false);
+  assert.equal(dispatch.reason, "session_pool_full");
+  assert.equal(dispatch.owner, "researcher");
+  assert.equal(dispatch.ownerRuntimeStatus.status, "queued");
+  assert.equal(dispatch.ownerRuntimeStatus.runtimeState, "queued");
+  assert.equal(dispatch.ownerRuntimeStatus.queueKey, dispatch.queueKey);
+  assert.equal(dispatch.ownerRuntimeStatus.reason, "auto_mode_mitigation_queued");
+  assert.equal(runs.length, 0);
+
+  const queue = await readWorkflowRuntimeQueueStore(projectRoot);
+  assert.equal(queue.entries.length, 1);
+  assert.equal(queue.entries[0].queueKey, dispatch.queueKey);
+  assert.equal(queue.entries[0].kind, "workflow_mitigation_dispatch");
+  assert.equal(queue.entries[0].status, "queued");
+  assert.equal(queue.entries[0].dispatchPayload?.toRole, "researcher");
+
+  const visibleStatus = deriveWorkflowCoordinatorStatusUpdate(
+    buildVisibleStatusParams({
+      stageAfter: "analysis",
+      autoModeDiscussion: {
+        launched: false,
+        reason: "updated",
+        projectId: "alpha",
+        projectRoot,
+        fingerprint: "risk-fingerprint-queued",
+        stage: "analysis",
+        riskLevel: "severe",
+        status: "needs_changes",
+        reviewCount: 2,
+        roundsStarted: 1,
+        recommendedOwner: "researcher",
+        actionItems: ["Run a bounded mitigation pass before retrying the handoff."],
+        blockers: ["Risk discussion requires a mitigation owner turn."],
+        summary: "Run mitigation before retrying the analyzer handoff.",
+        roundId: "round-queued",
+        packetPath: "reviewer/auto-mode-discussion/AUTO_MODE_DISCUSSION_PACKET.md",
+        resolved: false,
+      },
+      autoMitigationDispatch: dispatch,
+      autoStageLaunch: {
+        launched: false,
+        reason: "risk_discussion_pending",
+        projectId: "alpha",
+        projectRoot,
+        stage: "analysis",
+        owner: "researcher",
+        sessionKey: null,
+        runId: null,
+        dispatchStrategy: null,
+        launchKey: null,
+        error: null,
+        reusedServiceSession: false,
+        activeResearcherSessionsInChannel: null,
+      },
+    })
+  );
+  assert.equal(visibleStatus?.status, "queued");
+  assert.match(visibleStatus?.summary ?? "", /Queued the mitigation pass/i);
 });
 
 test("maybeDispatchAutoModeMitigationForProject does not block another project on the same channel", async (t) => {
@@ -5577,6 +6164,346 @@ test("deriveWorkflowCoordinatorStatusUpdate surfaces runtime reconciliation wait
   assert.equal(status?.status, "waiting");
   assert.match(status?.summary ?? "", /active owner session/i);
   assert.match(status?.summary ?? "", /repeating dispatch/i);
+});
+
+test("deriveWorkflowCoordinatorStatusUpdate surfaces blocked owner runtime behind duplicate waits", () => {
+  const status = deriveWorkflowCoordinatorStatusUpdate({
+    projectId: "alpha",
+    projectRoot: "/tmp/projects/alpha",
+    stageAfter: "experiment",
+    autoGateReview: {
+      launched: false,
+      reason: "not_submit_gate",
+      projectId: "alpha",
+      projectRoot: "/tmp/projects/alpha",
+      gateId: null,
+      stage: "experiment",
+      status: null,
+      reviewCount: 0,
+      approved: false,
+    },
+    autoModeDiscussion: {
+      launched: false,
+      reason: "stable",
+      projectId: "alpha",
+      projectRoot: "/tmp/projects/alpha",
+      fingerprint: null,
+      stage: "experiment",
+      riskLevel: null,
+      status: null,
+      reviewCount: 0,
+      roundsStarted: 0,
+      recommendedOwner: null,
+      actionItems: [],
+      blockers: [],
+      summary: null,
+      roundId: null,
+      packetPath: null,
+      resolved: false,
+    },
+    autoMitigationDispatch: {
+      launched: false,
+      reason: "not_needed",
+      projectId: "alpha",
+      projectRoot: "/tmp/projects/alpha",
+      fingerprint: null,
+      stage: "experiment",
+      owner: null,
+      sessionKey: null,
+      runId: null,
+      dispatchStrategy: null,
+      error: null,
+    },
+    autoStageLaunch: {
+      launched: false,
+      reason: "already_launched",
+      projectId: "alpha",
+      projectRoot: "/tmp/projects/alpha",
+      stage: "experiment",
+      owner: "researcher",
+      sessionKey: null,
+      runId: null,
+      dispatchStrategy: null,
+      launchKey: "/tmp/projects/alpha::experiment::researcher::/run-experiments",
+      error: null,
+      reusedServiceSession: false,
+      activeResearcherSessionsInChannel: null,
+      ownerRuntimeStatus: {
+        status: "blocked",
+        stage: "experiment",
+        owner: "researcher",
+        nextAction: "/run-experiments",
+        runtimeState: "idle",
+        queueKey: null,
+        sessionKey: null,
+        runId: null,
+        reason: "owner_runtime_dispatch_unavailable",
+        error: null,
+        didDispatch: false,
+      },
+    },
+    idleResearchLaunch: {
+      launched: false,
+      reason: "idle_research_not_due",
+      projectId: "alpha",
+      projectRoot: "/tmp/projects/alpha",
+      topic: null,
+      sessionKey: null,
+      runId: null,
+      dueKey: null,
+      summary: null,
+      reusedIdleSession: false,
+      activeResearcherSessionsInChannel: null,
+    },
+  });
+
+  assert.equal(status?.status, "blocked");
+  assert.match(status?.summary ?? "", /owner runtime/i);
+  assert.match(status?.summary ?? "", /owner_runtime_dispatch_unavailable/i);
+  assert.match(status?.dedupeKey ?? "", /owner_runtime_dispatch_unavailable/);
+});
+
+test("deriveAutoDispatchDiagnosticsPatch surfaces blocked owner runtime behind duplicate waits", () => {
+  const patch = deriveAutoDispatchDiagnosticsPatch({
+    autoIteratorResult: {
+      stageAfter: "experiment",
+      ownerAfter: "researcher",
+      effectiveAutoMode: "conservative",
+      autoModeRiskFingerprint: "risk:fingerprint",
+      gateBlocking: false,
+      gateReason: null,
+      missingStageSignals: [],
+      blockingReason: null,
+      nextAction: "/run-experiments",
+    },
+    autoStageAttempt: {
+      launched: false,
+      reason: "already_launched",
+      projectId: "alpha",
+      projectRoot: "/tmp/projects/alpha",
+      stage: "experiment",
+      owner: "researcher",
+      sessionKey: null,
+      runId: null,
+      dispatchStrategy: null,
+      launchKey: "/tmp/projects/alpha::experiment::researcher::/run-experiments",
+      error: null,
+      reusedServiceSession: false,
+      activeResearcherSessionsInChannel: null,
+      ownerRuntimeStatus: {
+        status: "blocked",
+        stage: "experiment",
+        owner: "researcher",
+        nextAction: "/run-experiments",
+        runtimeState: "idle",
+        queueKey: null,
+        sessionKey: null,
+        runId: null,
+        reason: "owner_runtime_dispatch_unavailable",
+        error: null,
+        didDispatch: false,
+      },
+    },
+  });
+
+  assert.equal(patch.status, "blocked");
+  assert.equal(patch.blockingLayer, "runtime");
+  assert.equal(patch.blockingReason, "owner_runtime_dispatch_unavailable");
+  assert.equal(patch.blockingSummary, "owner_runtime_dispatch_unavailable");
+  assert.equal(patch.runtimeSessionHealth, "owner_runtime_dispatch_unavailable");
+});
+
+test("deriveAutoDispatchDiagnosticsPatch preserves hook blocker reason over duplicate waits", () => {
+  const patch = deriveAutoDispatchDiagnosticsPatch({
+    autoIteratorResult: {
+      stageAfter: "write",
+      ownerAfter: "academic_writer",
+      effectiveAutoMode: "conservative",
+      autoModeRiskFingerprint: "risk:fingerprint",
+      gateBlocking: false,
+      gateReason: null,
+      missingStageSignals: [],
+      blockingReason: null,
+      nextAction: "/submit-ready",
+    },
+    autoStageAttempt: {
+      launched: false,
+      reason: "already_launched",
+      projectId: "alpha",
+      projectRoot: "/tmp/projects/alpha",
+      stage: "write",
+      owner: "academic_writer",
+      sessionKey: null,
+      runId: null,
+      dispatchStrategy: null,
+      launchKey: "/tmp/projects/alpha::write::academic_writer::/submit-ready",
+      error: null,
+      reusedServiceSession: false,
+      activeResearcherSessionsInChannel: null,
+      ownerRuntimeStatus: null,
+    },
+    beforeStageHandoffHooks: {
+      launched: false,
+      reason: "blocked",
+      projectId: "alpha",
+      projectRoot: "/tmp/projects/alpha",
+      hookPoint: "before_stage_handoff",
+      stage: "write",
+      status: "revise_requested",
+      hookCount: 1,
+      approved: false,
+      aggregateVerdict: "revise",
+      blockingReason: "hook_requires_review",
+      aggregateRevisionPacketPath:
+        "reviewer/file-audits/_aggregate/write-before_stage_handoff/AGGREGATE_REVISION_PACKET.md",
+    },
+  });
+
+  assert.equal(patch.status, "blocked");
+  assert.equal(patch.blockingLayer, "hook");
+  assert.equal(patch.blockingReason, "hook_requires_review");
+  assert.equal(patch.blockingSummary, "hook_requires_review");
+  assert.equal(patch.activeHookPoint, "before_stage_handoff");
+  assert.equal(patch.aggregateHookVerdict, "revise");
+});
+
+test("deriveAutoDispatchDiagnosticsPatch keeps hook reason when runtime blocker overlaps", () => {
+  const patch = deriveAutoDispatchDiagnosticsPatch({
+    autoIteratorResult: {
+      stageAfter: "write",
+      ownerAfter: "academic_writer",
+      effectiveAutoMode: "conservative",
+      autoModeRiskFingerprint: "risk:fingerprint",
+      gateBlocking: false,
+      gateReason: null,
+      missingStageSignals: [],
+      blockingReason: null,
+      nextAction: "/submit-ready",
+    },
+    autoStageAttempt: {
+      launched: false,
+      reason: "already_launched",
+      projectId: "alpha",
+      projectRoot: "/tmp/projects/alpha",
+      stage: "write",
+      owner: "academic_writer",
+      sessionKey: null,
+      runId: null,
+      dispatchStrategy: null,
+      launchKey: "/tmp/projects/alpha::write::academic_writer::/submit-ready",
+      error: null,
+      reusedServiceSession: false,
+      activeResearcherSessionsInChannel: null,
+      ownerRuntimeStatus: {
+        status: "blocked",
+        stage: "write",
+        owner: "academic_writer",
+        nextAction: "/submit-ready",
+        runtimeState: "idle",
+        queueKey: null,
+        sessionKey: null,
+        runId: null,
+        reason: "owner_runtime_dispatch_unavailable",
+        error: null,
+        didDispatch: false,
+      },
+    },
+    beforeStageHandoffHooks: {
+      launched: false,
+      reason: "blocked",
+      projectId: "alpha",
+      projectRoot: "/tmp/projects/alpha",
+      hookPoint: "before_stage_handoff",
+      stage: "write",
+      status: "revise_requested",
+      hookCount: 1,
+      approved: false,
+      aggregateVerdict: "revise",
+      blockingReason: "hook_requires_review",
+      aggregateRevisionPacketPath:
+        "reviewer/file-audits/_aggregate/write-before_stage_handoff/AGGREGATE_REVISION_PACKET.md",
+    },
+  });
+
+  assert.equal(patch.status, "blocked");
+  assert.equal(patch.blockingLayer, "hook");
+  assert.equal(patch.blockingReason, "hook_requires_review");
+  assert.equal(patch.blockingSummary, "hook_requires_review");
+  assert.equal(patch.runtimeSessionHealth, "owner_runtime_dispatch_unavailable");
+});
+
+test("deriveAutoDispatchDiagnosticsPatch preserves gate blocker reason over launch reason", () => {
+  const patch = deriveAutoDispatchDiagnosticsPatch({
+    autoIteratorResult: {
+      stageAfter: "submit",
+      ownerAfter: "reviewer",
+      effectiveAutoMode: "conservative",
+      autoModeRiskFingerprint: null,
+      gateBlocking: true,
+      gateReason: "human_confirmation_pending",
+      missingStageSignals: [],
+      blockingReason: "submit_gate_pending",
+      nextAction: "/submit-paper",
+    },
+    autoStageAttempt: {
+      launched: false,
+      reason: "gate_blocked",
+      projectId: "alpha",
+      projectRoot: "/tmp/projects/alpha",
+      stage: "submit",
+      owner: null,
+      sessionKey: null,
+      runId: null,
+      dispatchStrategy: null,
+      launchKey: null,
+      error: null,
+      reusedServiceSession: false,
+      activeResearcherSessionsInChannel: null,
+      ownerRuntimeStatus: null,
+    },
+  });
+
+  assert.equal(patch.status, "waiting");
+  assert.equal(patch.blockingLayer, "runtime");
+  assert.equal(patch.blockingReason, "human_confirmation_pending");
+  assert.equal(patch.blockingSummary, "human_confirmation_pending");
+});
+
+test("deriveAutoDispatchDiagnosticsPatch preserves missing signal reason over no-action reason", () => {
+  const patch = deriveAutoDispatchDiagnosticsPatch({
+    autoIteratorResult: {
+      stageAfter: "write",
+      ownerAfter: "academic_writer",
+      effectiveAutoMode: "conservative",
+      autoModeRiskFingerprint: null,
+      gateBlocking: false,
+      gateReason: null,
+      missingStageSignals: ["write_package_missing"],
+      blockingReason: "write_package_incomplete",
+      nextAction: "/write-paper",
+    },
+    autoStageAttempt: {
+      launched: false,
+      reason: "no_drive_stage_action",
+      projectId: "alpha",
+      projectRoot: "/tmp/projects/alpha",
+      stage: "write",
+      owner: null,
+      sessionKey: null,
+      runId: null,
+      dispatchStrategy: null,
+      launchKey: null,
+      error: null,
+      reusedServiceSession: false,
+      activeResearcherSessionsInChannel: null,
+      ownerRuntimeStatus: null,
+    },
+  });
+
+  assert.equal(patch.status, "waiting");
+  assert.equal(patch.blockingLayer, "signals");
+  assert.equal(patch.blockingReason, "write_package_missing");
+  assert.equal(patch.blockingSummary, "write_package_missing");
 });
 
 test("deriveWorkflowCoordinatorStatusUpdate surfaces missing auto-stage runtime as blocked", () => {

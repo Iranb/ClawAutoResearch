@@ -39,10 +39,19 @@ import { getWritePackageValidationErrors } from "./workflow-guard-writing/write-
 import { collectExecutionProofReceipts } from "./workflow-execution-proof";
 import { evaluateExperimentSearchDecision } from "./workflow-experiment-decision";
 import {
+  buildExperimentReviewCommand,
+  resolveExperimentReviewNextOwner,
+} from "./workflow-auto-experiment-review";
+import {
+  normalizeAutonomousExecutionState,
+  normalizeExperimentReviewState,
+} from "./workflow-guard-state/experiment-review";
+import {
   DEFAULT_GRAPH_BUILD_DECISION_PATH,
   DEFAULT_IDEA_CATALYST_CONTRACT_PATH,
   LITERATURE_REQUISITION_SATISFACTION_AUTHORITY,
 } from "./workflow-authority-registry";
+import { normalizeWorkflowControlContract } from "./workflow-control-contract.js";
 import { readGraphBuildDecision } from "./graph-build-decision";
 import { readIdeaCatalystContract } from "./idea-catalyst/contract";
 import { readWorkflowHooksStateStore } from "./workflow-hooks/state";
@@ -504,6 +513,78 @@ function hasActiveExperimentRuntime(
       (status && ACTIVE_EXPERIMENT_RUNTIME_STATUSES.has(status)) ||
         (stage && ACTIVE_EXPERIMENT_RUNTIME_STATUSES.has(stage))
     );
+  });
+}
+
+function hasAnyExperimentExecutionRecord(
+  ledger: Record<string, unknown> | null
+): boolean {
+  if (!ledger) {
+    return false;
+  }
+  return [
+    ...recordList(ledger.experiments),
+    ...recordList(ledger.trial_history),
+    ...recordList(ledger.trialHistory),
+    ...recordList(ledger.trials),
+  ].length > 0;
+}
+
+const REVIEWED_AUTO_PRELAUNCH_SEARCH_STATUSES = new Set([
+  "missing",
+  "not_started",
+  "pending",
+  "planning",
+]);
+
+function resolveReviewedAutoPrelaunchCompletion(params: {
+  manifest: Record<string, unknown>;
+  experimentSearch: Record<string, unknown>;
+  experimentLedger: Record<string, unknown> | null;
+}): StageCompletion | null {
+  const autonomousExecution = normalizeAutonomousExecutionState(
+    params.manifest.autonomous_execution
+  );
+  if (autonomousExecution.experimentLaunchMode !== "reviewed_auto") {
+    return null;
+  }
+  const searchStatus =
+    normalizeStage(params.experimentSearch.status) ?? "missing";
+  if (!REVIEWED_AUTO_PRELAUNCH_SEARCH_STATUSES.has(searchStatus)) {
+    return null;
+  }
+  if (
+    hasActiveExperimentRuntime(params.experimentLedger) ||
+    hasAnyExperimentExecutionRecord(params.experimentLedger)
+  ) {
+    return null;
+  }
+  const reviewState = normalizeExperimentReviewState(
+    params.manifest.experiment_review_state
+  );
+  const owner = resolveExperimentReviewNextOwner({
+    state: reviewState,
+    autonomousExecution,
+    hasActiveRuns: false,
+    readyForAnalysis: false,
+  });
+  if (!owner) {
+    return null;
+  }
+  return completion({
+    stage: "experiment",
+    completionStatus: "incomplete",
+    owner,
+    nextAction:
+      buildExperimentReviewCommand({
+        owner,
+        state: reviewState,
+      }) ?? "/experiment-phase",
+    blockingReason:
+      owner === "coder"
+        ? "reviewed_auto_launch_approved"
+        : "reviewed_auto_prelaunch_review_pending",
+    contractSource: "experiment_completion",
   });
 }
 
@@ -1570,6 +1651,15 @@ export async function resolveExperimentCompletion(
     experimentLedger,
     manifest,
   });
+  const reviewedAutoPrelaunchCompletion =
+    resolveReviewedAutoPrelaunchCompletion({
+      manifest,
+      experimentSearch,
+      experimentLedger,
+    });
+  if (reviewedAutoPrelaunchCompletion) {
+    return reviewedAutoPrelaunchCompletion;
+  }
 
   if (hasActiveExperimentRuntime(experimentLedger)) {
     return completion({
@@ -1809,7 +1899,7 @@ export async function resolveRuntimeOwnership(
     readWorkflowRuntimeSessionsStore(projectRoot),
   ]);
   const activeSessions = sessionsStore.entries.filter((entry) => {
-    if (!["active", "idle"].includes(entry.status)) {
+    if (entry.status !== "active") {
       return false;
     }
     if (!matchesProjectRoot(entry.projectRoot, projectRoot)) {
@@ -2343,6 +2433,10 @@ export async function resolveWritingCompletion(
     (await readJsonIfExists<Record<string, unknown>>(
       path.join(projectRoot, "PROJECT_MANIFEST.json")
     )) ?? {};
+  const workflowControl = normalizeWorkflowControlContract(manifest.workflow_control);
+  const currentOwner = normalizeStage(
+    workflowControl?.owner ?? manifest.owner_agent ?? manifest.ownerAgent
+  );
   const paperReady = await nonEmptyText("academic_writer/paper/main.tex", projectRoot);
   const qualityBlocker = paperQcBlocks(manifest);
   const promotionGateBlocker = await resolveExperimentPromotionGateBlocker(
@@ -2415,7 +2509,7 @@ export async function resolveWritingCompletion(
     stage === "write" &&
     !surveyWorkflow &&
     !writerSupportConfigured &&
-    normalizeStage(manifest.owner_agent ?? manifest.ownerAgent) !== "academic_writer" &&
+    currentOwner !== "academic_writer" &&
     !asRecord(manifest.experiment_search ?? manifest.experimentSearch) &&
     !paperReady &&
     !writePackageConfigured(normalizeWritePackageState(manifest.write_package))

@@ -267,8 +267,28 @@ test("research_workflow materialize_workflow_final_scorecard writes derived term
 
   await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
     project_id: "final-scorecard-tool",
-    current_stage: "done",
-    owner_agent: "orchestrator",
+    current_stage: "write",
+    owner_agent: "academic_writer",
+    next_action: "/paper-phase",
+    blocking_reason: "stale_write_projection",
+    workflow_control: {
+      schema_version: 1,
+      contract_id: "wfctl_done_fixture",
+      reconciled_at: "2026-04-25T00:00:00.000Z",
+      stage: "done",
+      owner: "orchestrator",
+      next_action: "Archive final workflow package.",
+      status: "ready",
+      blocking_reason: null,
+      completion: {
+        status: "complete",
+        source: "done_completion",
+        reason: null,
+      },
+      runtime_state: "idle",
+      queue_key: null,
+      session_key: null,
+    },
     paper_qc: {
       status: "ready",
       compile_status: "pass",
@@ -339,6 +359,31 @@ test("research_workflow materialize_workflow_final_scorecard writes derived term
   assert.equal(result.scorecard.canonical.stage, "done");
   assert.equal(result.scorecard.chain.done.completion_status, "complete");
   assert.equal(result.scorecard.paperguru.status, "ready");
+  assert.equal(result.scorecard.input_manifest_projection.matches_canonical, false);
+  assert.deepEqual(result.scorecard.input_manifest_projection.mismatches, [
+    {
+      field: "current_stage",
+      projection: "write",
+      canonical: "done",
+    },
+    {
+      field: "owner_agent",
+      projection: "academic_writer",
+      canonical: "orchestrator",
+    },
+    {
+      field: "next_action",
+      projection: "/paper-phase",
+      canonical: "Archive final workflow package.",
+    },
+    {
+      field: "blocking_reason",
+      projection: "stale_write_projection",
+      canonical: null,
+    },
+  ]);
+  assert.equal(result.scorecard.manifest_projection.matches_canonical, true);
+  assert.deepEqual(result.scorecard.manifest_projection.mismatches, []);
   assert.deepEqual(result.scorecard.blockers, []);
 
   const manifest = JSON.parse(
@@ -5977,6 +6022,24 @@ test("research_workflow diagnose_track_evidence reports canonical graph evidence
     current_stage: "idea",
     current_micro_stage: "judging",
     owner_agent: "researcher",
+    workflow_control: {
+      schema_version: 1,
+      contract_id: "demo-project-control",
+      reconciled_at: "2026-05-19T05:34:00.000Z",
+      stage: "analysis",
+      owner: "analyzer",
+      next_action: "/analysis-phase",
+      status: "waiting",
+      blocking_reason: null,
+      completion: {
+        status: "incomplete",
+        source: "analysis_completion",
+        reason: "analysis packet pending",
+      },
+      runtime_state: "idle",
+      queue_key: null,
+      session_key: null,
+    },
     idle_research: { enabled: false },
     innovation_reflection: {
       status: "fresh",
@@ -6027,7 +6090,8 @@ test("research_workflow diagnose_track_evidence reports canonical graph evidence
     action: "diagnose_track_evidence",
   });
 
-  assert.equal(diagnosis.currentStage, "idea");
+  assert.equal(diagnosis.currentStage, "analysis");
+  assert.equal(diagnosis.ownerAgent, "analyzer");
   assert.deepEqual(diagnosis.missingGraphBackedInnovationEvidenceTrackIds, []);
   assert.equal(diagnosis.registryDeclaredActiveTracks, 1);
   assert.equal(diagnosis.researchProgramActiveTrackCount, 1);

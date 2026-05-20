@@ -1245,6 +1245,130 @@ test("research_workflow materialize_papernexus_packet_contracts builds idea cont
   );
 });
 
+test("research_workflow materialize_papernexus_packet_contracts consumes PaperNexus agent material bundle evidence", async (t) => {
+  const projectRoot = await makeProjectRoot();
+  await fs.rm(path.join(projectRoot, "researcher", "papernexus"), {
+    recursive: true,
+    force: true,
+  });
+  await fs.rm(path.join(projectRoot, "orchestrator", "INNOVATION_PACKET.json"), {
+    force: true,
+  });
+  await fs.rm(
+    path.join(projectRoot, "researcher", "literature-discovery", "LITERATURE_DISCOVERY_PACKET.json"),
+    { force: true }
+  );
+  await writeAuthorityCascadeInputs(projectRoot);
+  await fs.rm(
+    path.join(projectRoot, "researcher", "literature-discovery", "LITERATURE_DISCOVERY_PACKET.json"),
+    { force: true }
+  );
+  await writeJson(
+    path.join(projectRoot, "researcher", "papernexus", "AGENT_MATERIALS_BUNDLE.json"),
+    {
+      contractVersion: "autoresearch-papernexus-agent-materials-bundle-v1",
+      kind: "papernexus_agent_materials_bundle",
+      source_discovery_plan: {
+        operation: "source_discovery_plan",
+        target_queries: ["agent memory planning"],
+      },
+      research_material_pack: {
+        contractVersion: "papernexus-agent-materials-v1",
+        operation: "research_material_pack",
+        run_id: "agent-materials-pack-1",
+        groups: [
+          {
+            role: "near_source_method",
+            items: [
+              {
+                material_id: "material:agent-memory",
+                paper_id: "paper:agent-memory",
+                title: "Agent Memory Planning",
+                status: "resolved_source",
+                availability: { markdown: true, source: true, graph_context: true },
+                layer: "near_source",
+                materials: {
+                  source_spans: [
+                    {
+                      source_path: "researcher/paper_source/md/agent-memory.md",
+                      text: "Agent memory planning provides a source-backed support mechanism.",
+                    },
+                  ],
+                },
+                sources: [
+                  {
+                    source_key: "agent-memory-md",
+                    source_path: "researcher/paper_source/md/agent-memory.md",
+                    kind: "markdown",
+                    active_in_graph: true,
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+        import_requisitions: [],
+        missing_materials: [],
+      },
+      import_requisition_pack: {
+        operation: "import_requisition_pack",
+        import_requisitions: [],
+      },
+    }
+  );
+  await writeJson(
+    path.join(projectRoot, "researcher", "idea-catalyst", "IDEA_FRAGMENTS.json"),
+    {
+      fragments: [
+        {
+          fragment_id: "frag-agent-material-1",
+          source_domain: "Cognitive Science",
+          summary: "Use agent memory planning as a support-preserving mechanism.",
+        },
+      ],
+    }
+  );
+
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  const result = await materializePapernexusPacketContracts({
+    projectRoot,
+    trigger: "agent-material-pack-contract-test",
+    agentId: "researcher",
+  });
+
+  assert.equal(result.state.ideaCatalystContractReady, true);
+  assert.equal(result.state.innovationPacketReady, true);
+  const ideaContract = JSON.parse(
+    await fs.readFile(
+      path.join(projectRoot, DEFAULT_IDEA_CATALYST_CONTRACT_PATH),
+      "utf8"
+    )
+  );
+  assert.equal(ideaContract.supporting_papers.includes("paper:agent-memory"), true);
+  assert.equal(
+    ideaContract.payload_paths.includes("researcher/papernexus/AGENT_MATERIALS_BUNDLE.json"),
+    true
+  );
+  assert.equal(ideaContract.source_spans[0].paper_id, "paper:agent-memory");
+  const innovationPacket = JSON.parse(
+    await fs.readFile(
+      path.join(projectRoot, "orchestrator", "INNOVATION_PACKET.json"),
+      "utf8"
+    )
+  );
+  assert.equal(
+    innovationPacket.supporting_papers.includes("paper:agent-memory"),
+    true
+  );
+  assert.equal(
+    innovationPacket.evidence_paths.includes("researcher/papernexus/AGENT_MATERIALS_BUNDLE.json"),
+    true
+  );
+});
+
 test("stage preflight detects a packet bundle even when split PaperNexus packets are absent", async (t) => {
   const projectRoot = await makeProjectRoot();
   const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");

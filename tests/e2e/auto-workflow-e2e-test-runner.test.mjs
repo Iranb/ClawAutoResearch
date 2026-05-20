@@ -27,6 +27,7 @@ import {
   shouldAutoGenerateLiveProjectId,
   shouldEnableAgentModelSyncWatchdog,
   shouldRestartGatewayAfterAgentModelSync,
+  summarizePayload,
   terminalizeAutoWorkflowE2ERuntimeResidue,
   verifyAgentRuntimeModelConfig,
 } from "../../scripts/run_auto_workflow_e2e_test.mjs";
@@ -543,6 +544,61 @@ test("auto workflow E2E runner builds a compact trace/eval scorecard", () => {
   assert.equal(scorecard.lanes[0].progressedTurnCount, 1);
   assert.equal(scorecard.lanes[0].lastTurn.stage, "idea");
   assert.equal(scorecard.lanes[0].blockingReason, "idea_catalyst_pending");
+});
+
+test("auto workflow E2E runner summarizes lanes from canonical workflow_control before manifest mirrors", () => {
+  const resultSummary = summarizePayload({
+    topic: "SQLite index design",
+    projectId: "sqlite-index-design",
+    lane: "experiment",
+    mode: "live",
+    bootstrapTransport: "discord",
+    conversationId: "gcd-research-lab",
+    projectsRoot: "/tmp/projects",
+    result: {
+      experiment: {
+        transport: "discord",
+        conversationId: "gcd-research-lab",
+        projectRoot: "/tmp/projects/sqlite-index-design",
+        harness: {
+          finalVerdict: "partial",
+        },
+        finalManifest: {
+          current_stage: "setup",
+          owner_agent: "researcher",
+          next_action: "legacy_projection_action",
+          blocking_reason: "legacy_projection_blocker",
+          workflow_control: {
+            stage: "analysis",
+            owner: "analyzer",
+            nextAction: "materialize_analysis_artifacts",
+            blockingReason: "experiment_search_stop_or_analysis_decision_pending",
+            completionStatus: "blocked",
+            runtimeState: "idle",
+            contractSource: "workflow_control",
+          },
+        },
+      },
+    },
+  });
+  const scorecard = buildAutoWorkflowTraceEvalScorecard({
+    generatedAt: "2026-05-19T03:36:00.000Z",
+    status: "partial",
+    command: normalizeAutoWorkflowCommand("/auto-research"),
+    topic: resultSummary.topic,
+    mode: resultSummary.mode,
+    bootstrapTransport: resultSummary.bootstrapTransport,
+    resultSummary,
+  });
+
+  assert.equal(scorecard.lanes[0].finalStage, "analysis");
+  assert.equal(scorecard.lanes[0].finalOwner, "analyzer");
+  assert.equal(scorecard.lanes[0].nextAction, "materialize_analysis_artifacts");
+  assert.equal(
+    scorecard.lanes[0].blockingReason,
+    "experiment_search_stop_or_analysis_decision_pending"
+  );
+  assert.equal(scorecard.lanes[0].workflowControl.stage, "analysis");
 });
 
 test("auto workflow E2E runner builds a PR checklist artifact model", () => {
@@ -1144,6 +1200,46 @@ test("live E2E harness detects local workflow activation without Discord acknowl
   );
 });
 
+test("live E2E harness reads canonical workflow_control for manifest activation", async (t) => {
+  const projectRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "openclaw-research-live-canonical-activation-")
+  );
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+  await fs.writeFile(
+    path.join(projectRoot, "PROJECT_MANIFEST.json"),
+    `${JSON.stringify(
+      {
+        project_id: "activation-project",
+        current_stage: "code",
+        owner_agent: "coder",
+        workflow_control: {
+          stage: "plan",
+          owner: "orchestrator",
+          next_action: "/plan-research",
+        },
+      },
+      null,
+      2
+    )}\n`,
+    "utf8"
+  );
+
+  assert.deepEqual(
+    await readLiveWorkflowActivation({
+      projectRoot,
+      projectId: "activation-project",
+      stage: "plan",
+      owner: "orchestrator",
+    }),
+    {
+      active: true,
+      reason: "manifest_owner_stage_assigned",
+    }
+  );
+});
+
 test("live E2E progress waits treat runtime queue changes as observable progress", async (t) => {
   const projectRoot = await fs.mkdtemp(
     path.join(os.tmpdir(), "openclaw-research-live-runtime-progress-")
@@ -1205,6 +1301,69 @@ test("live E2E progress waits treat runtime queue changes as observable progress
   assert.notEqual(after, before);
   assert.equal(progress.progressed, true);
   assert.equal(progress.reason, "runtime_state_changed");
+});
+
+test("live E2E progress waits compare canonical workflow_control before manifest mirrors", async (t) => {
+  const projectRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "openclaw-research-live-canonical-progress-")
+  );
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  const manifest = {
+    project_id: "canonical-progress-project",
+    current_stage: "graph_build",
+    owner_agent: "researcher",
+    workflow_control: {
+      stage: "graph_build",
+      owner: "researcher",
+      next_action: "/graph-build",
+      blocking_reason: "graph_presence_not_ready",
+    },
+  };
+  await fs.mkdir(path.join(projectRoot, ".openclaw-research"), { recursive: true });
+  await fs.writeFile(
+    path.join(projectRoot, "PROJECT_MANIFEST.json"),
+    `${JSON.stringify(manifest, null, 2)}\n`,
+    "utf8"
+  );
+
+  const delayedCanonicalAdvance = new Promise((resolve, reject) => {
+    setTimeout(() => {
+      fs.writeFile(
+        path.join(projectRoot, "PROJECT_MANIFEST.json"),
+        `${JSON.stringify(
+          {
+            ...manifest,
+            workflow_control: {
+              stage: "analysis",
+              owner: "analyzer",
+              next_action: "/analyze-results",
+              blocking_reason: "experiment_search_stop_or_analysis_decision_pending",
+            },
+          },
+          null,
+          2
+        )}\n`,
+        "utf8"
+      ).then(resolve, reject);
+    }, 100);
+  });
+
+  const progress = await waitForProgress({
+    projectRoot,
+    baselineManifest: manifest,
+    timeoutMs: 2_000,
+    pollMs: 50,
+  });
+  await delayedCanonicalAdvance;
+
+  assert.equal(progress.progressed, true);
+  assert.equal(progress.reason, "stage_or_owner_changed");
+  assert.equal(progress.manifest.current_stage, "graph_build");
+  assert.equal(progress.manifest.workflow_control.stage, "analysis");
+  assert.equal(progress.manifest.workflow_control.owner, "analyzer");
 });
 
 test("live E2E no-progress grace accepts late workflow advancement", async (t) => {
@@ -1570,7 +1729,7 @@ test("research harness scorecard reports literature requisition progress fields"
     await fs.rm(runRoot, { recursive: true, force: true });
   });
 
-  const createLaneProject = async (name, request, sourceIndex = null) => {
+  const createLaneProject = async (name, request, sourceIndex = null, manifestPatch = {}) => {
     const projectRoot = path.join(runRoot, name);
     await fs.mkdir(path.join(projectRoot, "researcher"), { recursive: true });
     await fs.writeFile(
@@ -1580,6 +1739,7 @@ test("research harness scorecard reports literature requisition progress fields"
           project_id: name,
           current_stage: "idea",
           owner_agent: "researcher",
+          ...manifestPatch,
           paper_ingestion: {
             queued_requests: [request],
           },
@@ -1667,6 +1827,26 @@ test("research harness scorecard reports literature requisition progress fields"
     attempt_count: 2,
     validation_status: "invalid",
   });
+  const driftRoot = await createLaneProject(
+    "canonical-drift",
+    {
+      request_id: "req-drift",
+      request_kind: "requisition",
+      trigger_kind: "idea_catalyst_requisition",
+      status: "queued",
+    },
+    null,
+    {
+      current_stage: "setup",
+      owner_agent: "researcher",
+      workflow_control: {
+        stage: "analysis",
+        owner: "analyzer",
+        nextAction: "materialize_analysis_artifacts",
+        blockingReason: "experiment_search_stop_or_analysis_decision_pending",
+      },
+    }
+  );
 
   const scorecard = await buildAutoWorkflowResearchHarnessScorecard({
     status: "fail",
@@ -1679,6 +1859,12 @@ test("research harness scorecard reports literature requisition progress fields"
         { lane: "no-sources", projectRoot: noSourcesRoot },
         { lane: "indexed", projectRoot: indexedRoot },
         { lane: "failed", projectRoot: failedRoot },
+        {
+          lane: "drift",
+          projectRoot: driftRoot,
+          finalStage: "setup",
+          finalOwner: "researcher",
+        },
       ],
     },
   });
@@ -1711,6 +1897,9 @@ test("research harness scorecard reports literature requisition progress fields"
   );
   assert.equal(byLane.failed.status, "failed");
   assert.equal(byLane.failed.attemptCount, 2);
+  const driftLane = scorecard.lanes.find((lane) => lane.lane === "drift");
+  assert.equal(driftLane.finalStage, "analysis");
+  assert.equal(driftLane.finalOwner, "analyzer");
 });
 
 test("live E2E harness treats durable reviewer revision as a terminal real-run outcome", async (t) => {
@@ -1735,8 +1924,13 @@ test("live E2E harness treats durable reviewer revision as a terminal real-run o
   const terminal = await detectLiveSubstantiveRevisionTerminal({
     projectRoot,
     manifest: {
-      current_stage: "write",
-      owner_agent: "academic_writer",
+      current_stage: "idea",
+      owner_agent: "researcher",
+      workflow_control: {
+        stage: "write",
+        owner: "academic_writer",
+        next_action: "/paper-phase",
+      },
       innovation_synthesis_state: { status: "needs_revision" },
     },
     lane: "experiment",
@@ -1744,6 +1938,8 @@ test("live E2E harness treats durable reviewer revision as a terminal real-run o
 
   assert.equal(terminal.terminal, true);
   assert.equal(terminal.reason, "live_reviewer_revision_requested");
+  assert.equal(terminal.details.stage, "write");
+  assert.equal(terminal.details.owner, "academic_writer");
   assert.equal(terminal.details.reviewIssueCount, 1);
   assert.equal(terminal.details.actionItemCount, 1);
   assert.equal(terminal.details.blockingActionItemCount, 1);
@@ -2000,6 +2196,24 @@ test("live no-Discord orchestrator derives handoff commands from the target stag
       },
     }),
     "/monitor-experiment"
+  );
+
+  assert.equal(
+    deriveStageCommand({
+      lane: "experiment",
+      topic: "Generalized Category Discovery",
+      manifest: {
+        current_stage: "idea",
+        next_action: "/idea-phase",
+        workflow_control: {
+          stage: "plan",
+          owner: "orchestrator",
+          next_action: "/plan-research",
+        },
+      },
+      iterator: {},
+    }),
+    "/plan-research"
   );
 });
 

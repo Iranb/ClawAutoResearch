@@ -15,6 +15,12 @@ function readString(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
+function readRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
 export async function buildHandoffDashboard(params: {
   projectRoot: string;
   projectId?: string | null;
@@ -59,6 +65,7 @@ export async function buildHandoffDashboard(params: {
     readWorkflowRuntimeQueueStore(params.projectRoot),
     readWorkflowRuntimeSessionsStore(params.projectRoot),
   ]);
+  const workflowControl = readRecord(manifest.workflow_control);
   const bindingGate =
     params.policy && params.sessionKey
       ? await evaluateChannelProjectBindingGate({
@@ -77,7 +84,9 @@ export async function buildHandoffDashboard(params: {
     projectRoot: params.projectRoot,
     projectId: params.projectId ?? readString(manifest.project_id),
     currentOwner:
-      orchestration.currentOwner ?? readString(manifest.owner_agent),
+      readString(workflowControl?.owner) ??
+      orchestration.currentOwner ??
+      readString(manifest.owner_agent),
     pendingHandoffId: orchestration.pendingHandoffId,
     pendingOwnerCandidate: orchestration.pendingOwnerCandidate,
     pendingStageCandidate: orchestration.pendingStageCandidate,

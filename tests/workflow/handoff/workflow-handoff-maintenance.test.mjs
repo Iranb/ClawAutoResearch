@@ -12,6 +12,9 @@ import {
   upsertWorkflowHandoffIntent,
 } from "../../../tools/workflow-handoff/handoff-store.ts";
 import { runWorkflowHandoffMaintenancePass } from "../../../tools/workflow-handoff/maintenance.ts";
+import {
+  buildWorkflowControlContract,
+} from "../../../tools/workflow-control-contract.ts";
 
 test("failed handoffs use a shorter retry backoff than delivered handoffs", async (t) => {
   const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-handoff-retry-"));
@@ -178,6 +181,62 @@ test("runWorkflowHandoffMaintenancePass supersedes stale stage-owner intents onc
 
   const store = await readWorkflowHandoffIntentStore(projectRoot);
   assert.equal(store.intents[0].status, "superseded");
+});
+
+test("runWorkflowHandoffMaintenancePass preserves handoffs that match canonical stage despite stale mirror", async (t) => {
+  const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-handoff-canonical-stage-"));
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await fs.writeFile(
+    path.join(projectRoot, "PROJECT_MANIFEST.json"),
+    `${JSON.stringify(
+      {
+        project_id: "canonical-stage-demo",
+        current_stage: "code",
+        workflow_control: buildWorkflowControlContract({
+          contractId: "canonical-stage-demo-control",
+          reconciledAt: "2026-05-19T07:59:00.000Z",
+          stage: "plan",
+          owner: "orchestrator",
+          nextAction: "/plan-project",
+          status: "waiting",
+          blockingReason: "plan_handoff_pending",
+          completionStatus: "incomplete",
+          completionSource: "plan_completion",
+          completionReason: "plan_handoff_pending",
+          runtimeState: "queued",
+        }),
+      },
+      null,
+      2
+    )}\n`,
+    "utf8"
+  );
+
+  const created = await upsertWorkflowHandoffIntent({
+    projectRoot,
+    idempotencyKey: "canonical-plan-intent",
+    toRole: "orchestrator",
+    reason: "stage_owner_change",
+    stageBefore: "idea",
+    stageAfter: "plan",
+    deliveryPlan: {
+      channels: ["native_runtime"],
+      maxAttemptsTotal: 4,
+    },
+  });
+
+  const result = await runWorkflowHandoffMaintenancePass({
+    projectRoot,
+    now: new Date("2026-05-19T07:59:30.000Z"),
+  });
+  assert.deepEqual(result.supersededIntentIds, []);
+
+  const store = await readWorkflowHandoffIntentStore(projectRoot);
+  assert.equal(store.intents[0].intentId, created.intent.intentId);
+  assert.equal(store.intents[0].status, "prepared");
 });
 
 test("runWorkflowHandoffMaintenancePass supersedes duplicate active handoffs", async (t) => {

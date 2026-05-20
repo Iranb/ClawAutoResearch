@@ -33,6 +33,9 @@ import {
   reconcileWorkflowControl,
 } from "../workflow-control-reconciler";
 import {
+  normalizeWorkflowControlContract,
+} from "../workflow-control-contract.js";
+import {
   advanceLiteratureDiscoveryRequisition,
   type LiteratureDiscoveryRequisitionAdvanceResult,
 } from "../literature-discovery/requisition-executor";
@@ -296,6 +299,106 @@ const TRANSITION_BOOTSTRAP_PREP_STAGES = new Set([
   "submit",
 ]);
 type StagePreflightResult = Awaited<ReturnType<typeof maybePrepareWorkflowStageContracts>>;
+type AutoIteratorWorkflowStateMirrorMismatch = {
+  stage?: { canonical: string | null; mirror: string | null };
+  owner?: { canonical: string | null; mirror: string | null };
+  nextAction?: { canonical: string | null; mirror: string | null };
+  blockingReason?: { canonical: string | null; mirror: string | null };
+};
+
+type AutoIteratorWorkflowStateSource =
+  | "workflow_control"
+  | "manifest_mirror"
+  | "missing";
+
+type AutoIteratorWorkflowState = {
+  stage: string | null;
+  owner: string | null;
+  nextAction: string | null;
+  blockingReason: string | null;
+  source: AutoIteratorWorkflowStateSource;
+  mirrorMismatch: AutoIteratorWorkflowStateMirrorMismatch | null;
+};
+
+function addMirrorMismatch(
+  mismatch: AutoIteratorWorkflowStateMirrorMismatch,
+  key: keyof AutoIteratorWorkflowStateMirrorMismatch,
+  canonical: string | null,
+  mirror: string | null
+) {
+  if (canonical && mirror && canonical !== mirror) {
+    mismatch[key] = { canonical, mirror };
+  }
+}
+
+function resolveAutoIteratorWorkflowState(
+  manifest: ManifestLike | null | undefined,
+  fallback: Partial<Pick<
+    AutoIteratorWorkflowState,
+    "stage" | "owner" | "nextAction" | "blockingReason"
+  >> = {}
+): AutoIteratorWorkflowState {
+  const record: ManifestLike = manifest ?? {};
+  const workflowControl = normalizeWorkflowControlContract(record.workflow_control);
+  const mirrorStage = normalizeStage(record.current_stage);
+  const mirrorOwner = asString(record.owner_agent);
+  const mirrorNextAction = asString(record.next_action);
+  const mirrorBlockingReason = asString(record.blocking_reason);
+  if (workflowControl) {
+    const stage = normalizeStage(workflowControl.stage) ?? fallback.stage ?? null;
+    const owner = asString(workflowControl.owner) ?? fallback.owner ?? null;
+    const nextAction =
+      asString(workflowControl.next_action) ?? fallback.nextAction ?? null;
+    const blockingReason =
+      asString(workflowControl.blocking_reason) ??
+      fallback.blockingReason ??
+      null;
+    const mismatch: AutoIteratorWorkflowStateMirrorMismatch = {};
+    addMirrorMismatch(mismatch, "stage", stage, mirrorStage);
+    addMirrorMismatch(mismatch, "owner", owner, mirrorOwner);
+    addMirrorMismatch(mismatch, "nextAction", nextAction, mirrorNextAction);
+    addMirrorMismatch(
+      mismatch,
+      "blockingReason",
+      blockingReason,
+      mirrorBlockingReason
+    );
+    return {
+      stage,
+      owner,
+      nextAction,
+      blockingReason,
+      source: "workflow_control",
+      mirrorMismatch:
+        Object.keys(mismatch).length > 0 ? mismatch : null,
+    };
+  }
+  const stage = mirrorStage ?? fallback.stage ?? null;
+  const owner = mirrorOwner ?? fallback.owner ?? null;
+  const nextAction = mirrorNextAction ?? fallback.nextAction ?? null;
+  const blockingReason =
+    mirrorBlockingReason ?? fallback.blockingReason ?? null;
+  return {
+    stage,
+    owner,
+    nextAction,
+    blockingReason,
+    source:
+      stage || owner || nextAction || blockingReason
+        ? "manifest_mirror"
+        : "missing",
+    mirrorMismatch: null,
+  };
+}
+
+function workflowStateDiagnosticDetails(
+  state: AutoIteratorWorkflowState
+): Record<string, unknown> {
+  return {
+    workflowStateSource: state.source,
+    workflowStateMirrorMismatch: state.mirrorMismatch,
+  };
+}
 
 function buildAutoIteratorStageHandoffAcceptanceChecks(params: {
   workflowLine: "experiment" | "survey";
@@ -593,6 +696,143 @@ function canDispatchOwnerStageWithMissingSignals(params: {
     return false;
   }
   return SELF_DRIVEN_RESEARCHER_STAGES.has(params.stage);
+}
+
+type LegacyStageGuidanceCommands = {
+  setupOnboardingCommand: string | null;
+  graphImportRepairCommand: string | null;
+  ideaCatalystRequisitionCommand: string | null;
+  stageRepairCommand: string | null;
+};
+
+type LegacyExperimentGuidanceCommands = {
+  experimentMonitorCommand: string | null;
+  experimentReviewCommand: string | null;
+  prioritizedExperimentCommand: string | null;
+};
+
+function deriveLegacyStageGuidanceCommands(params: {
+  stageAfter: string | null;
+  activeStageSignals: string[];
+  graphRepairRequired: boolean;
+  graphRepairTargetCorpus?: string | null;
+  ideaCatalystState: ReturnType<typeof normalizeIdeaCatalystState>;
+  buildGraphImportRepairGuidance: (
+    sharedCorpus: string | null | undefined
+  ) => string;
+}): LegacyStageGuidanceCommands {
+  const setupOnboardingCommand =
+    params.stageAfter === "setup" &&
+    params.activeStageSignals.some((signal) =>
+      signal.includes("PROJECT_MANIFEST.json.research_program")
+    )
+      ? "Run /project-init to complete the onboarding contract and lock the baseline, primary metric, datasets, success criteria, and Zotero bot/<project-id> path before graph grounding."
+      : null;
+  const graphImportRepairCommand =
+    params.stageAfter === "graph_build" && params.graphRepairRequired
+      ? params.buildGraphImportRepairGuidance(params.graphRepairTargetCorpus)
+      : null;
+  const ideaCatalystRequisitionCommand =
+    params.stageAfter === "idea" &&
+    (params.ideaCatalystState.requisitionRequired ||
+      params.ideaCatalystState.status === "requisition")
+      ? `Satisfy IDEA-CATALYST requisition at {PROJ}/${params.ideaCatalystState.investigationRequisitionPath} by collecting the requested cross-domain papers, scheduling imports with research_workflow.schedule_papernexus_import, then rerunning /graph-build before resuming IDEA.`
+      : null;
+  return {
+    setupOnboardingCommand,
+    graphImportRepairCommand,
+    ideaCatalystRequisitionCommand,
+    stageRepairCommand:
+      graphImportRepairCommand ??
+      ideaCatalystRequisitionCommand ??
+      setupOnboardingCommand,
+  };
+}
+
+function deriveLegacyExperimentGuidanceCommands(params: {
+  stageAfter: string | null;
+  experimentReviewState: Record<string, unknown> | null;
+  reviewedAutoExperimentLaunchEnabled: boolean;
+  shouldMonitorExperiments: boolean;
+  experimentReadyForAnalysis: boolean;
+  experimentReviewOwner: AutoIteratorAction["owner"] | null;
+  buildExperimentReviewCommand: (params: {
+    owner: AutoIteratorAction["owner"] | null;
+    state: Record<string, unknown>;
+  }) => string | null;
+  buildExperimentMonitorCommand: () => string;
+}): LegacyExperimentGuidanceCommands {
+  const experimentReviewCommand =
+    params.stageAfter === "experiment" &&
+    params.experimentReviewState &&
+    params.reviewedAutoExperimentLaunchEnabled &&
+    !params.shouldMonitorExperiments &&
+    !params.experimentReadyForAnalysis
+      ? params.buildExperimentReviewCommand({
+          owner: params.experimentReviewOwner,
+          state: params.experimentReviewState,
+        })
+      : null;
+  const experimentMonitorCommand = params.shouldMonitorExperiments
+    ? params.buildExperimentMonitorCommand()
+    : null;
+  return {
+    experimentMonitorCommand,
+    experimentReviewCommand,
+    prioritizedExperimentCommand: experimentMonitorCommand ?? experimentReviewCommand,
+  };
+}
+
+function deriveBackgroundSyncRecommendedActions(params: {
+  stageAfter: string | null;
+  manifest: ManifestLike;
+  experimentLedger: ExperimentLedgerLike | null;
+  graphImportRepairCommand: string | null;
+}): AutoIteratorAction[] {
+  const actions: AutoIteratorAction[] = [];
+  const paperIngestion = asRecord(params.manifest.paper_ingestion);
+  if (
+    paperIngestion?.refresh_required === true &&
+    (params.stageAfter === "graph_build" ||
+      params.stageAfter === "frontier_mapping" ||
+      params.stageAfter === "idea")
+  ) {
+    actions.push({
+      kind: "background",
+      stage: params.stageAfter,
+      owner: "researcher",
+      summary:
+        "PaperNexus graph catch-up is pending and should refresh brainstorm grounding before novelty-sensitive work.",
+      command:
+        params.graphImportRepairCommand ??
+        "Run /graph-build to verify PAPER_SOURCE_INDEX.json is reflected in the shared global graph, refresh graph readiness metadata, and update the brainstorm bundle (cache-first, without --force) before continuing frontier mapping or ideation. If wrapper-driven graph catch-up still fails, hand the exact non-force command to the user to run manually.",
+      mailboxQueued: false,
+      mailboxMessageId: null,
+      cooldownRemainingSeconds: null,
+      blocking: false,
+    });
+  }
+
+  const experimentMemory = asRecord(params.manifest.experiment_memory);
+  if (
+    params.experimentLedger?.summary?.papernexusSyncRequired === true ||
+    experimentMemory?.papernexus_sync_required === true
+  ) {
+    actions.push({
+      kind: "background",
+      stage: params.stageAfter,
+      owner: "researcher",
+      summary: "Experiment evidence still needs to be synchronized back into PaperNexus.",
+      command:
+        "Refresh PaperNexus nodes or graph overlays for the latest experiments before the next ideation or writing round.",
+      mailboxQueued: false,
+      mailboxMessageId: null,
+      cooldownRemainingSeconds: null,
+      blocking: false,
+    });
+  }
+
+  return actions;
 }
 
 function canonicalExperimentDecisionFromBlocker(params: {
@@ -920,6 +1160,88 @@ type AutoIteratorDeps = {
   }) => Promise<unknown>;
 };
 
+async function maybeRunWritePackageAutoAssemblyPreflight(params: {
+  projectRoot: string;
+  manifest: ManifestLike;
+  stageBefore: string | null;
+  stagePreflight: StagePreflightResult;
+  mode: string;
+  actorRole: AutoIteratorAction["owner"];
+  workflowPolicy: WorkflowGuardPolicy;
+  autoGate: NonNullable<WorkflowGuardPolicy["autoGate"]>;
+  deps: AutoIteratorDeps;
+}): Promise<{
+  manifest: ManifestLike;
+  stagePreflight: StagePreflightResult;
+}> {
+  const writePackageBefore = params.deps.normalizeWritePackageState(
+    params.manifest.write_package
+  );
+  if (
+    params.workflowPolicy.autoMode !== "aggressive" ||
+    (params.stageBefore !== "write" && params.stageBefore !== "submit") ||
+    !(await writePackageNeedsAutoAssembly({
+      projectRoot: params.projectRoot,
+      state: writePackageBefore,
+    }))
+  ) {
+    return {
+      manifest: params.manifest,
+      stagePreflight: params.stagePreflight,
+    };
+  }
+
+  await params.deps.assembleWritePackage({
+    projectRoot: params.projectRoot,
+    mode: "aggressive",
+    trigger: "auto_iterator",
+    agentId: params.actorRole,
+  });
+  const manifest =
+    (await readJsonIfExists<ManifestLike>(
+      path.join(params.projectRoot, "PROJECT_MANIFEST.json")
+    )) ?? params.manifest;
+  const postAssemblyPreflight = await maybePrepareWorkflowStageContracts({
+    projectRoot: params.projectRoot,
+    manifest,
+    stage: params.stageBefore,
+    agentId: params.actorRole,
+    trigger: `auto_iterator:${params.mode}:write_package_assembled`,
+    autoGate: params.autoGate,
+    deps: {
+      materializeIdeationContract: params.deps.materializeIdeationContract,
+      materializePaperStoryState: params.deps.materializePaperStoryState,
+      materializeExperimentReviewState: params.deps.materializeExperimentReviewState,
+      materializeReviewPressurePacket: params.deps.materializeReviewPressurePacket,
+      materializeSurveyReviewState: params.deps.materializeSurveyReviewState,
+      materializeInnovationSynthesisState:
+        params.deps.materializeInnovationSynthesisState,
+      materializeResultsStoryline: params.deps.materializeResultsStoryline,
+      materializeTitleAbstractIntroWorkbench:
+        params.deps.materializeTitleAbstractIntroWorkbench,
+      materializeIdeaCatalystState: params.deps.materializeIdeaCatalystState,
+      materializeLiteratureDiscoveryPacket:
+        params.deps.materializeLiteratureDiscoveryPacket,
+      materializePapernexusPacketContracts:
+        params.deps.materializePapernexusPacketContracts,
+      queueIdeaCatalystRequisition: params.deps.queueIdeaCatalystRequisition,
+      queueLiteratureDiscoveryRequisition:
+        params.deps.queueLiteratureDiscoveryRequisition,
+    },
+  });
+
+  return {
+    manifest: {
+      ...manifest,
+      ...postAssemblyPreflight.manifest,
+    },
+    stagePreflight: mergeStagePreflightResults([
+      params.stagePreflight,
+      postAssemblyPreflight,
+    ]),
+  };
+}
+
 async function finishAutoIteratorAfterRequisitionAdvance(params: {
   projectRoot: string;
   projectId: string | null;
@@ -936,22 +1258,20 @@ async function finishAutoIteratorAfterRequisitionAdvance(params: {
     (await readJsonIfExists<ManifestLike>(
       path.join(params.projectRoot, "PROJECT_MANIFEST.json")
     )) ?? {};
-  const workflowControl = asRecord(manifest.workflow_control);
-  const stageAfter =
-    normalizeStage(workflowControl?.stage) ??
-    normalizeStage(manifest.current_stage) ??
-    params.stageBefore;
+  const workflowState = resolveAutoIteratorWorkflowState(manifest, {
+    stage: params.stageBefore,
+    owner: "researcher",
+    nextAction: "/graph-build",
+    blockingReason: params.advance.summary,
+  });
+  const stageAfter = workflowState.stage ?? params.stageBefore;
   const ownerAfter = params.deps.normalizeRole(
-    workflowControl?.owner ?? manifest.owner_agent ?? "researcher"
+    workflowState.owner ?? "researcher"
   );
   const nextAction =
-    asString(workflowControl?.next_action) ??
-    asString(manifest.next_action) ??
-    "/graph-build";
+    workflowState.nextAction ?? "/graph-build";
   const blockingReason =
-    asString(workflowControl?.blocking_reason) ??
-    asString(manifest.blocking_reason) ??
-    params.advance.summary;
+    workflowState.blockingReason ?? params.advance.summary;
   const missingStageSignals = blockingReason ? [blockingReason] : [];
   let projectsStateUpdated = false;
   if (params.projectId) {
@@ -1046,6 +1366,7 @@ async function finishAutoIteratorAfterRequisitionAdvance(params: {
     sessionKey: null,
     summary: `Auto iterator advanced literature requisition ${params.advance.requestId ?? "unknown"}.`,
     details: {
+      ...workflowStateDiagnosticDetails(workflowState),
       reason: params.advance.reason,
       requestId: params.advance.requestId,
       status: params.advance.status,
@@ -1073,6 +1394,7 @@ async function finishAutoIteratorAfterRequisitionAdvance(params: {
       params.advance.summary ??
       "Advanced a workflow-owned literature discovery requisition and stopped this tick before owner dispatch.",
     details: {
+      ...workflowStateDiagnosticDetails(workflowState),
       requestId: params.advance.requestId,
       status: params.advance.status,
       attemptCount: params.advance.attemptCount,
@@ -1121,12 +1443,11 @@ export async function runWorkflowAutoIteratorImpl(
     readJsonIfExists<TrackRegistryLike>(path.join(projectRoot, "TRACK_REGISTRY.json")),
     deps.loadExperimentLedgerIfExists(projectRoot),
   ]);
-  const rawWorkflowControl = asRecord(manifestRaw?.workflow_control);
-  const rawControlStage =
-    rawWorkflowControl?.schema_version === 1
-      ? normalizeStage(rawWorkflowControl.stage)
-      : null;
-  const rawStageBefore = rawControlStage ?? normalizeStage(manifestRaw?.current_stage);
+  const rawWorkflowControl = normalizeWorkflowControlContract(
+    manifestRaw?.workflow_control
+  );
+  const rawWorkflowState = resolveAutoIteratorWorkflowState(manifestRaw);
+  const rawStageBefore = rawWorkflowState.stage;
   const initialReconcile = await reconcileWorkflowControl({
     projectRoot,
     policy: { allowProjectionRepair: true },
@@ -1135,7 +1456,7 @@ export async function runWorkflowAutoIteratorImpl(
   let manifest = { ...(manifestRaw ?? {}), ...initialReconcile.manifest };
   if (rawStageBefore) {
     manifest.current_stage = rawStageBefore;
-    if (rawWorkflowControl?.schema_version === 1) {
+    if (rawWorkflowControl) {
       manifest.workflow_control = rawWorkflowControl;
     } else {
       delete manifest.workflow_control;
@@ -1148,7 +1469,11 @@ export async function runWorkflowAutoIteratorImpl(
   const projectId = deps.inferProjectId(projectRoot, manifest);
   const mode = asString(params.mode) ?? "manual";
   let stageBefore =
-    rawStageBefore ?? normalizeStage(manifest.current_stage) ?? gateState.currentStage ?? "setup";
+    rawStageBefore ??
+    resolveAutoIteratorWorkflowState(manifest, {
+      stage: gateState.currentStage ?? "setup",
+    }).stage ??
+    "setup";
   if (deps.ensureSurveyWorkflowIdentity) {
     const surveyIdentity = deps.ensureSurveyWorkflowIdentity(manifest);
     if (surveyIdentity.updated) {
@@ -1166,6 +1491,11 @@ export async function runWorkflowAutoIteratorImpl(
         manifest,
       }) ?? stageBefore;
   }
+  const tickStartWorkflowState =
+    rawWorkflowState.source === "workflow_control" &&
+    rawWorkflowState.mirrorMismatch
+      ? rawWorkflowState
+      : resolveAutoIteratorWorkflowState(manifest);
   await appendWorkflowDiagnosticEvent({
     projectRoot,
     projectId,
@@ -1173,9 +1503,10 @@ export async function runWorkflowAutoIteratorImpl(
     action: "tick_started",
     status: "started",
     stage: stageBefore,
-    owner: asString(manifest.owner_agent),
+    owner: tickStartWorkflowState.owner,
     summary: `Auto iterator started for ${stageBefore}.`,
     details: {
+      ...workflowStateDiagnosticDetails(tickStartWorkflowState),
       mode,
       actorRole,
       configuredAutoMode,
@@ -1221,6 +1552,8 @@ export async function runWorkflowAutoIteratorImpl(
       trackRegistry;
     experimentLedger = await deps.loadExperimentLedgerIfExists(projectRoot);
   }
+  const currentStagePreflightWorkflowState =
+    resolveAutoIteratorWorkflowState(manifest);
   await appendWorkflowDiagnosticEvent({
     projectRoot,
     projectId,
@@ -1232,9 +1565,10 @@ export async function runWorkflowAutoIteratorImpl(
         ? "completed"
         : "waiting",
     stage: stageBefore,
-    owner: asString(manifest.owner_agent),
+    owner: currentStagePreflightWorkflowState.owner,
     summary: `Stage preflight prepared ${stageBefore}.`,
     details: {
+      ...workflowStateDiagnosticDetails(currentStagePreflightWorkflowState),
       materializedArtifacts: initialStagePreflight.materializedArtifacts,
       hookEvents: initialStagePreflight.emittedHookEvents,
     },
@@ -1260,7 +1594,9 @@ export async function runWorkflowAutoIteratorImpl(
         configuredAutoMode,
         stageBefore,
         ownerBefore: deps.normalizeRole(
-          manifest.owner_agent ?? deps.stageOwner(stageBefore) ?? "researcher"
+          resolveAutoIteratorWorkflowState(manifest, {
+            owner: deps.stageOwner(stageBefore) ?? "researcher",
+          }).owner ?? "researcher"
         ),
         actorRole,
         stagePreflight,
@@ -1269,58 +1605,21 @@ export async function runWorkflowAutoIteratorImpl(
       });
     }
   }
-  const writePackageBefore = deps.normalizeWritePackageState(manifest.write_package);
   const surveyWorkflow = deps.isSurveyWorkflow(manifest);
-  if (
-    workflowPolicy.autoMode === "aggressive" &&
-    (stageBefore === "write" || stageBefore === "submit") &&
-    (await writePackageNeedsAutoAssembly({
-      projectRoot,
-      state: writePackageBefore,
-    }))
-  ) {
-    await deps.assembleWritePackage({
-      projectRoot,
-      mode: "aggressive",
-      trigger: "auto_iterator",
-      agentId: actorRole,
-    });
-    manifest =
-      (await readJsonIfExists<ManifestLike>(path.join(projectRoot, "PROJECT_MANIFEST.json"))) ??
-      manifest;
-    const postAssemblyPreflight = await maybePrepareWorkflowStageContracts({
+  const writePackageAutoAssemblyPreflight =
+    await maybeRunWritePackageAutoAssemblyPreflight({
       projectRoot,
       manifest,
-      stage: stageBefore,
-      agentId: actorRole,
-      trigger: `auto_iterator:${mode}:write_package_assembled`,
-      autoGate,
-      deps: {
-        materializeIdeationContract: deps.materializeIdeationContract,
-        materializePaperStoryState: deps.materializePaperStoryState,
-        materializeExperimentReviewState: deps.materializeExperimentReviewState,
-        materializeReviewPressurePacket: deps.materializeReviewPressurePacket,
-        materializeSurveyReviewState: deps.materializeSurveyReviewState,
-        materializeInnovationSynthesisState: deps.materializeInnovationSynthesisState,
-        materializeResultsStoryline: deps.materializeResultsStoryline,
-        materializeTitleAbstractIntroWorkbench:
-          deps.materializeTitleAbstractIntroWorkbench,
-        materializeIdeaCatalystState: deps.materializeIdeaCatalystState,
-        materializeLiteratureDiscoveryPacket: deps.materializeLiteratureDiscoveryPacket,
-        materializePapernexusPacketContracts: deps.materializePapernexusPacketContracts,
-        queueIdeaCatalystRequisition: deps.queueIdeaCatalystRequisition,
-        queueLiteratureDiscoveryRequisition: deps.queueLiteratureDiscoveryRequisition,
-      },
-    });
-    stagePreflight = mergeStagePreflightResults([
+      stageBefore,
       stagePreflight,
-      postAssemblyPreflight,
-    ]);
-    manifest = {
-      ...manifest,
-      ...postAssemblyPreflight.manifest,
-    };
-  }
+      mode,
+      actorRole,
+      workflowPolicy,
+      autoGate,
+      deps,
+    });
+  manifest = writePackageAutoAssemblyPreflight.manifest;
+  stagePreflight = writePackageAutoAssemblyPreflight.stagePreflight;
 
   let graphPresenceCheck: GraphPresenceCheckResult | null = null;
   const graphPresenceAcceptedByPreflight = stagePreflight.materializedContracts.some(
@@ -1356,6 +1655,7 @@ export async function runWorkflowAutoIteratorImpl(
     graphPresenceRefreshRequested &&
     remoteGraphRepairWithoutVerifiedReceipt
   ) {
+    const graphRefreshWorkflowState = resolveAutoIteratorWorkflowState(manifest);
     await appendWorkflowDiagnosticEvent({
       projectRoot,
       projectId,
@@ -1363,10 +1663,11 @@ export async function runWorkflowAutoIteratorImpl(
       action: "graph_presence_refresh_skipped",
       status: "blocked",
       stage: stageBefore,
-      owner: asString(manifest.owner_agent),
+      owner: graphRefreshWorkflowState.owner,
       summary:
         "Skipped graph presence refresh because strict remote PaperNexus repair lacks a verified graph build receipt.",
       details: {
+        ...workflowStateDiagnosticDetails(graphRefreshWorkflowState),
         reason: "remote_papernexus_missing_verified_graph_build_receipt",
         receiptPath: DEFAULT_PAPERNEXUS_GRAPH_BUILD_RECEIPT_PATH,
         repairReason: paperIngestionStateForGraphRefresh.repairReason,
@@ -1437,6 +1738,8 @@ export async function runWorkflowAutoIteratorImpl(
             workflowPolicy,
             now,
           });
+      const sourceCatchupWorkflowState =
+        resolveAutoIteratorWorkflowState(manifest);
       await appendWorkflowDiagnosticEvent({
         projectRoot,
         projectId,
@@ -1448,11 +1751,12 @@ export async function runWorkflowAutoIteratorImpl(
             ? "waiting"
             : "waiting",
         stage: stageBefore,
-        owner: asString(manifest.owner_agent),
+        owner: sourceCatchupWorkflowState.owner,
         summary: sourceCatchup.queued
           ? `Queued PaperNexus import for ${sourceCatchup.materializedPaperCount} materialized graph-build source(s).`
           : sourceCatchup.skippedReason ?? "Graph-build source catch-up did not queue work.",
         details: {
+          ...workflowStateDiagnosticDetails(sourceCatchupWorkflowState),
           queued: sourceCatchup.queued,
           attempted: sourceCatchup.attempted,
           skippedReason: sourceCatchup.skippedReason,
@@ -1470,6 +1774,8 @@ export async function runWorkflowAutoIteratorImpl(
           )) ?? manifest;
       }
     } catch (error) {
+      const sourceCatchupWorkflowState =
+        resolveAutoIteratorWorkflowState(manifest);
       await appendWorkflowDiagnosticEvent({
         projectRoot,
         projectId,
@@ -1477,9 +1783,10 @@ export async function runWorkflowAutoIteratorImpl(
         action: "materialize_missing_sources",
         status: "failed",
         stage: stageBefore,
-        owner: asString(manifest.owner_agent),
+        owner: sourceCatchupWorkflowState.owner,
         summary: "Graph-build source catch-up failed before graph presence verification.",
         details: {
+          ...workflowStateDiagnosticDetails(sourceCatchupWorkflowState),
           error: error instanceof Error ? error.message : String(error),
         },
       });
@@ -1599,6 +1906,12 @@ export async function runWorkflowAutoIteratorImpl(
     autoGate,
     now,
   });
+  const autoModeWorkflowState = resolveAutoIteratorWorkflowState(manifest, {
+    stage: stageEffective,
+    owner: canonicalControl.owner,
+    nextAction: canonicalControl.next_action,
+    blockingReason: canonicalControl.blocking_reason,
+  });
   await appendWorkflowDiagnosticEvent({
     projectRoot,
     projectId,
@@ -1611,9 +1924,10 @@ export async function runWorkflowAutoIteratorImpl(
           ? "waiting"
           : "completed",
     stage: stageEffective,
-    owner: asString(manifest.owner_agent),
+    owner: autoModeWorkflowState.owner,
     summary: `Auto mode resolved to ${autoModeEvaluation.effectiveMode} for ${stageEffective}.`,
     details: {
+      ...workflowStateDiagnosticDetails(autoModeWorkflowState),
       configuredAutoMode: autoModeEvaluation.configuredMode,
       effectiveAutoMode: autoModeEvaluation.effectiveMode,
       riskLevel: autoModeEvaluation.riskLevel,
@@ -1741,6 +2055,11 @@ export async function runWorkflowAutoIteratorImpl(
       (await readJsonIfExists<TrackRegistryLike>(path.join(projectRoot, "TRACK_REGISTRY.json"))) ??
       trackRegistry;
     experimentLedger = await deps.loadExperimentLedgerIfExists(projectRoot);
+    const targetStagePreflightWorkflowState =
+      resolveAutoIteratorWorkflowState(manifest, {
+        stage: stageAfter,
+        owner: deps.stageOwner(stageAfter),
+      });
     await appendWorkflowDiagnosticEvent({
       projectRoot,
       projectId,
@@ -1752,9 +2071,10 @@ export async function runWorkflowAutoIteratorImpl(
           ? "completed"
           : "waiting",
       stage: stageAfter,
-      owner: asString(manifest.owner_agent),
+      owner: targetStagePreflightWorkflowState.owner,
       summary: `Prepared target stage ${stageAfter}.`,
       details: {
+        ...workflowStateDiagnosticDetails(targetStagePreflightWorkflowState),
         fromStage: stageEffective,
         materializedArtifacts: targetStagePreflight.materializedArtifacts,
         hookEvents: targetStagePreflight.emittedHookEvents,
@@ -1763,8 +2083,9 @@ export async function runWorkflowAutoIteratorImpl(
   }
 
   const existingOrchestrationState = asRecord(manifest.orchestration_state) ?? {};
-  const manifestOwner = asString(manifest.owner_agent);
-  const manifestStage = normalizeStage(manifest.current_stage);
+  const ownerWorkflowState = resolveAutoIteratorWorkflowState(manifest);
+  const manifestOwner = ownerWorkflowState.owner;
+  const manifestStage = ownerWorkflowState.stage;
   const orchestrationOwner = pickString(existingOrchestrationState, [
     "currentOwner",
     "current_owner",
@@ -1831,20 +2152,16 @@ export async function runWorkflowAutoIteratorImpl(
           readyForAnalysis: Boolean(experimentReadyForAnalysis),
         })
       : null;
-  const experimentReviewCommand =
-    stageAfter === "experiment" &&
-    experimentReviewState &&
-    reviewedAutoExperimentLaunchEnabled &&
-    !shouldMonitorExperiments &&
-    !experimentReadyForAnalysis
-      ? deps.buildExperimentReviewCommand({
-          owner: experimentReviewOwner,
-          state: experimentReviewState,
-        })
-      : null;
-  const experimentMonitorCommand = shouldMonitorExperiments
-    ? deps.buildExperimentMonitorCommand()
-    : null;
+  const legacyExperimentGuidance = deriveLegacyExperimentGuidanceCommands({
+    stageAfter,
+    experimentReviewState,
+    reviewedAutoExperimentLaunchEnabled,
+    shouldMonitorExperiments,
+    experimentReadyForAnalysis: Boolean(experimentReadyForAnalysis),
+    experimentReviewOwner,
+    buildExperimentReviewCommand: deps.buildExperimentReviewCommand,
+    buildExperimentMonitorCommand: deps.buildExperimentMonitorCommand,
+  });
   const activeStageSignals =
     stageAfter === stageEffective
       ? effectiveMissingSignals
@@ -1857,26 +2174,14 @@ export async function runWorkflowAutoIteratorImpl(
             currentStage: stageAfter,
           })
         : [];
-  const setupOnboardingCommand =
-    stageAfter === "setup" &&
-    activeStageSignals.some((signal) =>
-      signal.includes("PROJECT_MANIFEST.json.research_program")
-    )
-      ? "Run /project-init to complete the onboarding contract and lock the baseline, primary metric, datasets, success criteria, and Zotero bot/<project-id> path before graph grounding."
-      : null;
-  const graphImportRepairCommand =
-    stageAfter === "graph_build" && graphContextForActions.repairRequired
-      ? deps.buildGraphImportRepairGuidance(
-          graphContextForActions.repairTargetCorpus
-        )
-      : null;
-  const ideaCatalystStateForActions = normalizeIdeaCatalystState(manifest.idea_catalyst);
-  const ideaCatalystRequisitionCommand =
-    stageAfter === "idea" &&
-    (ideaCatalystStateForActions.requisitionRequired ||
-      ideaCatalystStateForActions.status === "requisition")
-      ? `Satisfy IDEA-CATALYST requisition at {PROJ}/${ideaCatalystStateForActions.investigationRequisitionPath} by collecting the requested cross-domain papers, scheduling imports with research_workflow.schedule_papernexus_import, then rerunning /graph-build before resuming IDEA.`
-      : null;
+  const legacyStageGuidance = deriveLegacyStageGuidanceCommands({
+    stageAfter,
+    activeStageSignals,
+    graphRepairRequired: graphContextForActions.repairRequired,
+    graphRepairTargetCorpus: graphContextForActions.repairTargetCorpus,
+    ideaCatalystState: normalizeIdeaCatalystState(manifest.idea_catalyst),
+    buildGraphImportRepairGuidance: deps.buildGraphImportRepairGuidance,
+  });
   const ownerAfter =
     (stageAfter === stageEffective && !regressed
       ? deps.normalizeRole(canonicalControl.owner)
@@ -1889,16 +2194,15 @@ export async function runWorkflowAutoIteratorImpl(
   const dispatchStageSignals = shouldMonitorExperiments ? [] : activeStageSignals;
   const canonicalNextAction =
     stageAfter === stageEffective ? canonicalControl.next_action : null;
-  const derivedStageRepairCommand =
-    graphImportRepairCommand ?? ideaCatalystRequisitionCommand ?? setupOnboardingCommand;
-  const stageRepairCommand = canonicalNextAction == null ? derivedStageRepairCommand : null;
+  const stageRepairCommand =
+    canonicalNextAction == null ? legacyStageGuidance.stageRepairCommand : null;
   const stageReadinessRepairSummary =
     dispatchStageSignals.length > 0
       ? `Resolve the following readiness signals before handing off ${stageAfter ?? "the current"} stage: ${dispatchStageSignals.join("; ")}.`
       : stageRepairCommand;
   const prioritizedExperimentCommand =
     canonicalNextAction == null
-      ? experimentMonitorCommand ?? experimentReviewCommand ?? null
+      ? legacyExperimentGuidance.prioritizedExperimentCommand
       : null;
   const nextAction = gateEvaluation.blocking
     ? gateEvaluation.reason
@@ -2423,45 +2727,14 @@ export async function runWorkflowAutoIteratorImpl(
     });
   }
 
-  const paperIngestion = asRecord(manifest.paper_ingestion);
-  if (
-    paperIngestion?.refresh_required === true &&
-    (stageAfter === "graph_build" || stageAfter === "frontier_mapping" || stageAfter === "idea")
-  ) {
-    recommendedActions.push({
-      kind: "background",
-      stage: stageAfter,
-      owner: "researcher",
-      summary:
-        "PaperNexus graph catch-up is pending and should refresh brainstorm grounding before novelty-sensitive work.",
-      command:
-        graphImportRepairCommand ??
-        "Run /graph-build to verify PAPER_SOURCE_INDEX.json is reflected in the shared global graph, refresh graph readiness metadata, and update the brainstorm bundle (cache-first, without --force) before continuing frontier mapping or ideation. If wrapper-driven graph catch-up still fails, hand the exact non-force command to the user to run manually.",
-      mailboxQueued: false,
-      mailboxMessageId: null,
-      cooldownRemainingSeconds: null,
-      blocking: false,
-    });
-  }
-
-  const experimentMemory = asRecord(manifest.experiment_memory);
-  if (
-    experimentLedger?.summary?.papernexusSyncRequired === true ||
-    experimentMemory?.papernexus_sync_required === true
-  ) {
-    recommendedActions.push({
-      kind: "background",
-      stage: stageAfter,
-      owner: "researcher",
-      summary: "Experiment evidence still needs to be synchronized back into PaperNexus.",
-      command:
-        "Refresh PaperNexus nodes or graph overlays for the latest experiments before the next ideation or writing round.",
-      mailboxQueued: false,
-      mailboxMessageId: null,
-      cooldownRemainingSeconds: null,
-      blocking: false,
-    });
-  }
+  recommendedActions.push(
+    ...deriveBackgroundSyncRecommendedActions({
+      stageAfter,
+      manifest,
+      experimentLedger,
+      graphImportRepairCommand: legacyStageGuidance.graphImportRepairCommand,
+    })
+  );
 
   let projectsStateUpdated = false;
   if (projectId) {
@@ -2514,6 +2787,12 @@ export async function runWorkflowAutoIteratorImpl(
     }
   }
 
+  const finalWorkflowState = resolveAutoIteratorWorkflowState(manifest, {
+    stage: stageAfter,
+    owner: ownerAfter,
+    nextAction,
+    blockingReason,
+  });
   const result: AutoIteratorResult = {
     projectRoot,
     projectId,
@@ -2572,6 +2851,7 @@ export async function runWorkflowAutoIteratorImpl(
     sessionKey: null,
     summary: `Auto iterator evaluated ${stageBefore} -> ${stageAfter}`,
     details: {
+      ...workflowStateDiagnosticDetails(finalWorkflowState),
       mode,
       stageBefore,
       stageEffective,
@@ -2607,6 +2887,7 @@ export async function runWorkflowAutoIteratorImpl(
     owner: ownerAfter,
     summary: `Auto iterator settled on ${stageAfter} owned by ${ownerAfter ?? "workflow"}.`,
     details: {
+      ...workflowStateDiagnosticDetails(finalWorkflowState),
       stageBefore,
       stageEffective,
       stageAfter,

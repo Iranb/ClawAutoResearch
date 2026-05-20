@@ -13,6 +13,7 @@ import {
   readJsonIfExists,
   writeJsonEnsured,
 } from "./workflow-guard-core/fs";
+import { normalizeWorkflowControlContract } from "./workflow-control-contract.js";
 
 export const AUTORESEARCH_LOOP_STATE_PATH =
   "researcher/AUTORESEARCH_LOOP_STATE.json";
@@ -563,6 +564,7 @@ export async function hydrateAutoResearchLoopState(
   const manifestContract = normalizeArticleEvidenceContract(
     manifestReference.article_evidence_contract
   );
+  const workflowControl = normalizeWorkflowControlContract(manifest.workflow_control);
   const articleEvidenceContract: ArticleEvidenceContract = {
     papers:
       manifestContract.papers.length > 0 ? manifestContract.papers : existingContract.papers,
@@ -585,6 +587,7 @@ export async function hydrateAutoResearchLoopState(
     ),
   };
   const phase =
+    workflowControl?.stage ??
     normalizeStage(manifest.current_stage) ??
     normalizeStage(experimentSearch.status) ??
     normalizeStage(existing.phase) ??
@@ -614,6 +617,7 @@ export async function hydrateAutoResearchLoopState(
     status: normalizeStage(existing.status) ?? "running",
     phase,
     owner:
+      workflowControl?.owner ??
       pickString(manifest, ["owner_agent", "ownerAgent"]) ??
       pickString(existing, ["owner"]) ??
       null,

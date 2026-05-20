@@ -7,6 +7,7 @@ import { execFile as execFileCb } from "node:child_process";
 import { promisify } from "node:util";
 
 import {
+  buildLocalSnapshot,
   dispatchWorkflowCommand,
   loadWorkflowHarnessPluginConfig,
   resolveWorkflowHarnessProjectsRoot,
@@ -95,6 +96,36 @@ test("local workflow harness resolves projects root from plugin config when no C
     }),
     path.resolve(projectsRoot)
   );
+});
+
+test("local workflow harness snapshot prefers canonical workflow control stage", async (t) => {
+  const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "workflow-harness-snapshot-"));
+
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await fs.writeFile(
+    path.join(projectRoot, "PROJECT_MANIFEST.json"),
+    `${JSON.stringify(
+      {
+        project_id: "snapshot-drift",
+        current_stage: "setup",
+        workflow_control: {
+          stage: "analysis",
+          owner: "analyzer",
+        },
+      },
+      null,
+      2
+    )}\n`,
+    "utf8"
+  );
+
+  const snapshot = await buildLocalSnapshot(projectRoot);
+
+  assert.equal(snapshot.projectId, "snapshot-drift");
+  assert.equal(snapshot.currentStage, "analysis");
 });
 
 test("local workflow harness starts /auto-research without discord context", async (t) => {

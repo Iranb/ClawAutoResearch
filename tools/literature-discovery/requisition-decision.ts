@@ -48,6 +48,7 @@ export async function writeLiteratureRequisitionDecisionReport(params: {
   metadataOnlyCount: number;
   evidenceGapClosed: boolean;
   citedEvidence?: Record<string, unknown>;
+  agentMaterials?: Record<string, unknown> | null;
 }): Promise<string> {
   const reportPath = deriveLiteratureDiscoverySatisfactionReportPath({
     requestId: params.requestId,
@@ -75,6 +76,7 @@ export async function writeLiteratureRequisitionDecisionReport(params: {
       remote_report_path: params.remoteReportPath ?? null,
       ...(params.citedEvidence ?? {}),
     },
+    papernexus_agent_materials: params.agentMaterials ?? null,
     remote_literature_discovery: {
       request_id: params.requestId,
       run_id: params.remoteRunId ?? null,

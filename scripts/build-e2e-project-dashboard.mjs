@@ -39,6 +39,10 @@ function normalizeStatus(value, fallback = "unknown") {
   return raw || fallback;
 }
 
+function readString(value) {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
 function finiteNumber(value) {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
@@ -216,6 +220,10 @@ async function buildProjectRecord(projectRoot, projectsRoot) {
   const scorecard = await readJson(scorecardPath, null);
   const trend = (await readJson(trendPath, null)) ?? scorecard?.run_trends ?? null;
   const project = scorecard?.project ?? {};
+  const workflowControl =
+    manifest?.workflow_control && typeof manifest.workflow_control === "object"
+      ? manifest.workflow_control
+      : null;
   const verdict = scorecard?.verdict ?? {};
   const qualityScore = finiteNumber(scorecard?.quality_score?.score_100);
   const failedRequired = countArray(scorecard?.failed_required_checks);
@@ -230,8 +238,16 @@ async function buildProjectRecord(projectRoot, projectsRoot) {
     project_root: projectRoot,
     project_path: relativeArtifactPath(projectsRoot, projectRoot),
     lane: normalizeStatus(project.lane ?? manifest?.lane ?? manifest?.task_type, "unknown"),
-    current_stage: project.current_stage ?? manifest?.current_stage ?? "unknown",
-    owner_agent: project.owner_agent ?? manifest?.owner_agent ?? "unknown",
+    current_stage:
+      readString(workflowControl?.stage) ??
+      readString(project.current_stage) ??
+      readString(manifest?.current_stage) ??
+      "unknown",
+    owner_agent:
+      readString(workflowControl?.owner) ??
+      readString(project.owner_agent) ??
+      readString(manifest?.owner_agent) ??
+      "unknown",
     generated_at: scorecard?.generated_at ?? trend?.generated_at ?? null,
     missing_scorecard: !scorecard,
     final_verdict: normalizeStatus(verdict.final_verdict, scorecard ? "unknown" : "missing"),

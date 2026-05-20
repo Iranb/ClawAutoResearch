@@ -9,6 +9,7 @@ import {
   isWorkflowHandoffActiveStatus,
   isWorkflowHandoffTerminalStatus,
 } from "./handoff-types";
+import { normalizeWorkflowControlContract } from "../workflow-control-contract.js";
 
 export type WorkflowHandoffMaintenanceResult = {
   expiredIntentIds: string[];
@@ -40,8 +41,14 @@ export async function runWorkflowHandoffMaintenancePass(params: {
   } catch {
     manifest = null;
   }
+  const workflowControl = normalizeWorkflowControlContract(
+    manifest?.workflow_control
+  );
   const currentStage =
-    typeof manifest?.current_stage === "string" ? manifest.current_stage.trim() : null;
+    workflowControl?.stage ??
+    (typeof manifest?.current_stage === "string"
+      ? manifest.current_stage.trim()
+      : null);
   const pendingHandoffId =
     manifest?.orchestration_state &&
     typeof manifest.orchestration_state === "object" &&

@@ -25,6 +25,12 @@ test("strict E2E paper gate rejects shallow placeholder content", async (t) => {
     project_id: "content-gate",
     current_stage: "review",
     owner_agent: "reviewer",
+    workflow_control: {
+      stage: "done",
+      owner: "orchestrator",
+      next_action: null,
+      blocking_reason: null,
+    },
     writing_contract: {
       paper_mode: "conference",
     },
@@ -68,6 +74,14 @@ test("strict E2E paper gate rejects shallow placeholder content", async (t) => {
   const scorecard = JSON.parse(await fs.readFile(payload.scorecardPath, "utf8"));
   const progressChart = JSON.parse(await fs.readFile(payload.progressChartPath, "utf8"));
   const copyeditStyleAudit = JSON.parse(await fs.readFile(payload.copyeditStyleAuditPath, "utf8"));
+  const report = await fs.readFile(payload.reportPath, "utf8");
+  const progressNarrative = await fs.readFile(payload.progressNarrativePath, "utf8");
+  assert.equal(scorecard.project.current_stage, "done");
+  assert.equal(scorecard.project.owner_agent, "orchestrator");
+  assert.match(report, /- current_stage: done/);
+  assert.match(report, /- owner_agent: orchestrator/);
+  assert.match(progressNarrative, /- current_stage: done/);
+  assert.match(progressNarrative, /- owner_agent: orchestrator/);
   assert.equal(scorecard.verdict.final_verdict, "fail");
   assert.equal(scorecard.verdict.claim_strength_cap, "blocked");
   assert.equal(scorecard.copyedit_style_audit.status, "partial");

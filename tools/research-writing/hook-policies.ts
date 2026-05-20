@@ -19,6 +19,7 @@ import {
   setFileAuditPolicyForProject,
   sortHookPolicies,
 } from "../workflow-hooks/state.js";
+import { normalizeWorkflowControlContract } from "../workflow-control-contract.js";
 
 const WRITING_HOOK_IDS = new Set([
   "paper-plan-thesis-audit",
@@ -1295,7 +1296,10 @@ export async function materializeWritingHookPolicies(params: {
 }> {
   const manifestPath = path.join(params.projectRoot, "PROJECT_MANIFEST.json");
   const manifest = (await readJsonIfExists<Record<string, unknown>>(manifestPath)) ?? {};
-  const stage = normalizeStage(params.stage ?? manifest.current_stage ?? manifest.currentStage);
+  const workflowControl = normalizeWorkflowControlContract(manifest.workflow_control);
+  const stage = normalizeStage(
+    params.stage ?? workflowControl?.stage ?? manifest.current_stage ?? manifest.currentStage
+  );
   const writingContract = normalizeWritingContractState(manifest.writing_contract);
   const paperMode =
     normalizeWritingMode(params.paperMode) ?? writingContract.paperMode ?? null;

@@ -20,6 +20,7 @@ import {
 import { createPluginRegistrationContext } from "../../../tools/plugin-registration-shared.ts";
 import { registerWorkflowTools } from "../../../tools/register-workflow-tools.ts";
 import { DEFAULT_IDEA_CATALYST_CONTRACT_PATH } from "../../../tools/workflow-authority-registry.ts";
+import { buildWorkflowControlContract } from "../../../tools/workflow-control-contract.ts";
 import { getWorkflowTraceLogPath } from "../../../tools/workflow-trace.ts";
 
 async function writeJson(filePath, value) {
@@ -121,6 +122,35 @@ async function seedGraphCorpus(projectRoot, corpusEntries, corpusName = "shared-
     sourceCount: corpusEntries.length,
   });
 }
+
+test("orchestration state summary validates next transition against canonical workflow control stage", async (t) => {
+  const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "workflow-orchestration-summary-"));
+
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "orchestration-summary-drift",
+    current_stage: "setup",
+    owner_agent: "researcher",
+    workflow_control: {
+      stage: "plan",
+      owner: "orchestrator",
+    },
+    orchestration_state: {
+      status: "ready",
+      current_owner: "orchestrator",
+      next_transition_candidate: "code",
+      retry_budget_remaining: 1,
+    },
+  });
+
+  const summary = await getOrchestrationStateSummary({ projectRoot });
+
+  assert.equal(summary.state.nextTransitionCandidate, "code");
+  assert.deepEqual(summary.validationErrors, []);
+});
 
 async function makeProjectRoot() {
   const projectRoot = await fs.mkdtemp(
@@ -1761,6 +1791,23 @@ test("write-package assembler derives secondary artifacts and marks the package 
 
   await seedWriteProject(projectRoot);
   await seedWritePackageSourceSummaries(projectRoot);
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  await writeJson(manifestPath, {
+    ...manifest,
+    workflow_control: buildWorkflowControlContract({
+      contractId: "write-package-trace-canonical",
+      reconciledAt: "2026-03-26T10:30:00.000Z",
+      stage: "review",
+      owner: "reviewer",
+      nextAction: "/review",
+      status: "ready",
+      completionStatus: "incomplete",
+      completionSource: "unit_test",
+      completionReason: "canonical trace fixture",
+      runtimeState: "idle",
+    }),
+  });
 
   const result = await assembleWritePackage({
     projectRoot,
@@ -1799,6 +1846,20 @@ test("write-package assembler derives secondary artifacts and marks the package 
   assert.deepEqual(manifestPayload.winning_track_ids, ["track-main"]);
   assert.equal(manifestPayload.status, "ready");
   assert.equal(Array.isArray(manifestPayload.section_queue), true);
+  const traceLines = (
+    await fs.readFile(
+      getWorkflowTraceLogPath({ projectRoot, projectId: "demo-project" }),
+      "utf8"
+    )
+  )
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line));
+  const assemblyEvent = traceLines.find(
+    (event) => event.kind === "write_package_assembly"
+  );
+  assert.equal(assemblyEvent.stage, "review");
+  assert.equal(assemblyEvent.owner, "reviewer");
 });
 
 test("research_workflow tool can invoke the write-package assembler explicitly", async (t) => {

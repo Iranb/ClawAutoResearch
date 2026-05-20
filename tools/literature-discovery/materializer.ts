@@ -8,6 +8,7 @@ import { normalizeReviewPressurePacketState } from "../workflow-guard-state/revi
 import { normalizeResearchProgramState } from "../workflow-guard-state/research-program";
 import { readJsonIfExists, readTextIfExists, writeJsonEnsured } from "../workflow-guard-core/fs";
 import { resolveProjectArtifactPath } from "../workflow-guard-core/paths";
+import { normalizeWorkflowControlContract } from "../workflow-control-contract.js";
 import { loadTrackInnovationEvidence } from "../workflow-guard-track-evidence.js";
 
 export const DEFAULT_LITERATURE_DISCOVERY_PACKET_PATH =
@@ -305,11 +306,13 @@ export async function materializeLiteratureDiscoveryPacketImpl(params: {
     (await readJsonIfExists<ManifestLike>(
       resolveProjectArtifactPath(projectRoot, "PROJECT_MANIFEST.json") ?? ""
     )) ?? {};
+  const workflowControl = normalizeWorkflowControlContract(manifest.workflow_control);
   const originStage =
     normalizeStage(
       String(
         params.literatureDiscoveryMaterialization?.origin_stage ??
           params.literatureDiscoveryMaterialization?.originStage ??
+          workflowControl?.stage ??
           manifest.current_stage ??
           ""
       )

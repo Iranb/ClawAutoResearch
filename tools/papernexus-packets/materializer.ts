@@ -53,6 +53,10 @@ import {
   DEFAULT_IDEA_CATALYST_CONTRACT_PATH,
   LITERATURE_REQUISITION_SATISFACTION_AUTHORITY,
 } from "../workflow-authority-registry";
+import {
+  DEFAULT_PAPERNEXUS_AGENT_MATERIALS_BUNDLE_PATH,
+  LEGACY_PAPERNEXUS_AGENT_MATERIALS_PACK_PATH,
+} from "./agent-materials";
 
 export const DEFAULT_MECHANISM_BRIDGE_PACKET_PATH =
   "researcher/papernexus/MECHANISM_BRIDGE_PACKET.json";
@@ -190,6 +194,110 @@ function collectIdeaContractEvidenceFromLiteraturePacket(value: unknown): {
     ref_id: paperEvidenceId(paper),
     evidence_type: "literature_discovery_source",
     path: DEFAULT_LITERATURE_DISCOVERY_PACKET_PATH,
+  }));
+  return { supportingPapers, sourceSpans, evidenceChainRefs };
+}
+
+function isAgentMaterialItemEvidenceBacked(item: Record<string, unknown>): boolean {
+  const availability = asRecord(item.availability) ?? {};
+  const materials = asRecord(item.materials) ?? {};
+  const status = normalizeStage(pickString(item, ["status"]));
+  const sources = readRecordList(item.sources);
+  return Boolean(
+    availability.markdown === true ||
+      availability.pdf === true ||
+      availability.source === true ||
+      availability.chunks === true ||
+      availability.graph_context === true ||
+      Array.isArray(materials.source_spans) ||
+      sources.some((source) => source.active_in_graph !== false) ||
+      status === "in_graph" ||
+      status === "resolved_source" ||
+      status === "submitted_import"
+  );
+}
+
+function unwrapAgentMaterialsPack(value: unknown): Record<string, unknown> | null {
+  const record = asRecord(value);
+  if (!record) {
+    return null;
+  }
+  return (
+    asRecord(record.research_material_pack ?? record.researchMaterialPack) ??
+    asRecord(asRecord(record.operations)?.research_material_pack) ??
+    record
+  );
+}
+
+function collectIdeaContractEvidenceFromAgentMaterialsPack(
+  value: unknown,
+  evidencePath: string | null
+): {
+  supportingPapers: string[];
+  sourceSpans: Record<string, unknown>[];
+  evidenceChainRefs: Record<string, unknown>[];
+} {
+  const pack = unwrapAgentMaterialsPack(value);
+  if (!pack) {
+    return { supportingPapers: [], sourceSpans: [], evidenceChainRefs: [] };
+  }
+  const origin = evidencePath ?? DEFAULT_PAPERNEXUS_AGENT_MATERIALS_BUNDLE_PATH;
+  const items = readRecordList(pack.groups).flatMap((group) =>
+    readRecordList(group.items)
+  );
+  const evidenceItems = items.filter(isAgentMaterialItemEvidenceBacked);
+  const supportingPapers = uniqueStrings(
+    evidenceItems
+      .map((item) =>
+        pickString(item, [
+          "paper_id",
+          "paperId",
+          "canonical_id",
+          "canonicalId",
+          "title",
+        ])
+      )
+      .filter((entry): entry is string => Boolean(entry))
+  );
+  const sourceSpans = evidenceItems.flatMap((item) => {
+    const paperId = pickString(item, [
+      "paper_id",
+      "paperId",
+      "canonical_id",
+      "canonicalId",
+      "title",
+    ]);
+    const title = pickString(item, ["title"]);
+    const materials = asRecord(item.materials) ?? {};
+    const spans = readRecordList(materials.source_spans ?? materials.sourceSpans).map(
+      (span) => ({
+        ...span,
+        paper_id: pickString(span, ["paper_id", "paperId"]) ?? paperId,
+        title: pickString(span, ["title"]) ?? title,
+        evidence_origin: origin,
+      })
+    );
+    if (spans.length > 0) {
+      return spans;
+    }
+    return readRecordList(item.sources).map((source) => ({
+      paper_id: paperId,
+      title,
+      source_path:
+        pickString(source, ["source_path", "sourcePath", "source_key", "sourceKey"]) ??
+        null,
+      source_kind: pickString(source, ["kind", "source_kind", "sourceKind"]) ?? null,
+      evidence_origin: origin,
+    }));
+  });
+  const evidenceChainRefs = evidenceItems.map((item) => ({
+    ref_id:
+      pickString(item, ["material_id", "materialId", "paper_id", "paperId"]) ??
+      pickString(item, ["title"]),
+    evidence_type: "papernexus_agent_material",
+    path: origin,
+    role: pickString(item, ["role"]),
+    layer: pickString(item, ["layer"]),
   }));
   return { supportingPapers, sourceSpans, evidenceChainRefs };
 }
@@ -1209,7 +1317,17 @@ export async function materializePapernexusPacketContracts(params: {
       ]) ?? DEFAULT_IDEA_CATALYST_CONTRACT_PATH
     ) ?? path.join(projectRoot, DEFAULT_IDEA_CATALYST_CONTRACT_PATH);
 
-  const [rawMechanismBridgePacket, rawChallengeInsightPacket, graphStorylinePacket, rawIdeaCatalystPacketBundle, rawInnovationPacket, rawLiteraturePacket, rawLegacyIdeaFragments] =
+  const [
+    rawMechanismBridgePacket,
+    rawChallengeInsightPacket,
+    graphStorylinePacket,
+    rawIdeaCatalystPacketBundle,
+    rawInnovationPacket,
+    rawLiteraturePacket,
+    rawLegacyIdeaFragments,
+    rawAgentMaterialsBundle,
+    rawLegacyAgentMaterialsPack,
+  ] =
     await Promise.all([
       readJsonIfExists<Record<string, unknown>>(mechanismBridgePacketPath),
       readJsonIfExists<Record<string, unknown>>(challengeInsightPacketPath),
@@ -1222,7 +1340,20 @@ export async function materializePapernexusPacketContracts(params: {
       readJsonIfExists<Record<string, unknown>>(
         path.join(projectRoot, DEFAULT_IDEA_CATALYST_FRAGMENTS_PATH)
       ),
+      readJsonIfExists<Record<string, unknown>>(
+        path.join(projectRoot, DEFAULT_PAPERNEXUS_AGENT_MATERIALS_BUNDLE_PATH)
+      ),
+      readJsonIfExists<Record<string, unknown>>(
+        path.join(projectRoot, LEGACY_PAPERNEXUS_AGENT_MATERIALS_PACK_PATH)
+      ),
     ]);
+  const rawAgentMaterials =
+    rawAgentMaterialsBundle ?? rawLegacyAgentMaterialsPack ?? null;
+  const agentMaterialsEvidencePath = rawAgentMaterialsBundle
+    ? DEFAULT_PAPERNEXUS_AGENT_MATERIALS_BUNDLE_PATH
+    : rawLegacyAgentMaterialsPack
+      ? LEGACY_PAPERNEXUS_AGENT_MATERIALS_PACK_PATH
+      : null;
   const graphDecision = await readGraphBuildDecision(projectRoot);
   const acceptedRequisitionReport = await readAcceptedRequisitionSatisfactionReport({
     projectRoot,
@@ -1235,6 +1366,11 @@ export async function materializePapernexusPacketContracts(params: {
     collectIdeaContractEvidenceFromBundle(rawIdeaCatalystPacketBundle);
   const literatureContractEvidence =
     collectIdeaContractEvidenceFromLiteraturePacket(rawLiteraturePacket);
+  const agentMaterialsContractEvidence =
+    collectIdeaContractEvidenceFromAgentMaterialsPack(
+      rawAgentMaterials,
+      agentMaterialsEvidencePath
+    );
   const ideaFragments = [
     ...ideaContractEvidence.ideaFragments,
     ...collectLegacyIdeaFragments(rawLegacyIdeaFragments),
@@ -1242,14 +1378,17 @@ export async function materializePapernexusPacketContracts(params: {
   const supportingPapers = uniqueStrings([
     ...ideaContractEvidence.supportingPapers,
     ...literatureContractEvidence.supportingPapers,
+    ...agentMaterialsContractEvidence.supportingPapers,
   ]);
   const sourceSpans = [
     ...ideaContractEvidence.sourceSpans,
     ...literatureContractEvidence.sourceSpans,
+    ...agentMaterialsContractEvidence.sourceSpans,
   ];
   const evidenceChainRefs = [
     ...ideaContractEvidence.evidenceChainRefs,
     ...literatureContractEvidence.evidenceChainRefs,
+    ...agentMaterialsContractEvidence.evidenceChainRefs,
   ];
   const ideaPayloadReady =
     ideaFragments.length > 0 &&
@@ -1277,6 +1416,7 @@ export async function materializePapernexusPacketContracts(params: {
         ? path.relative(projectRoot, ideaCatalystPacketBundlePath)
         : null,
       rawLegacyIdeaFragments ? DEFAULT_IDEA_CATALYST_FRAGMENTS_PATH : null,
+      agentMaterialsEvidencePath,
     ].filter((entry): entry is string => Boolean(entry)),
     ideaFragments,
     supportingPapers,

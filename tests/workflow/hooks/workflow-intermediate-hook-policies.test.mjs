@@ -6,6 +6,7 @@ import path from "node:path";
 
 import { materializeIntermediateArtifactHookPolicies } from "../../../tools/workflow-intermediate-artifact-hook-policies.ts";
 import { maybePrepareWorkflowStageContracts } from "../../../tools/workflow-guard-runtime/stage-preflight.ts";
+import { buildWorkflowControlContract } from "../../../tools/workflow-control-contract.ts";
 
 async function writeJson(targetPath, value) {
   await fs.mkdir(path.dirname(targetPath), { recursive: true });
@@ -257,6 +258,43 @@ test("materializeIntermediateArtifactHookPolicies generates stage-specific hooks
   });
   assert.ok(idea.generatedHookIds.includes("idea-report-quality-audit"));
   assert.ok(idea.generatedHookIds.includes("idea-audit-quality-audit"));
+});
+
+test("materializeIntermediateArtifactHookPolicies defaults to canonical workflow_control stage", async (t) => {
+  const projectRoot = await makeIntermediateHookProject({
+    stage: "idea",
+    includeRevisionState: true,
+  });
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  const manifest = await readManifest(projectRoot);
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    ...manifest,
+    current_stage: "idea",
+    workflow_control: buildWorkflowControlContract({
+      contractId: "demo-project:submit",
+      reconciledAt: "2026-05-19T09:55:00.000Z",
+      stage: "submit",
+      owner: "academic_writer",
+      nextAction: "/submit-paper",
+      status: "waiting",
+      blockingReason: "revision_cycle_quality_pending",
+      completionStatus: "incomplete",
+      completionSource: "submit_completion",
+      completionReason: "revision_cycle_quality_pending",
+      runtimeState: "idle",
+    }),
+  });
+
+  const result = await materializeIntermediateArtifactHookPolicies({
+    projectRoot,
+  });
+
+  assert.equal(result.stage, "submit");
+  assert.ok(result.generatedHookIds.includes("revision-cycle-quality-audit"));
+  assert.equal(result.generatedHookIds.includes("idea-report-quality-audit"), false);
 });
 
 test("maybePrepareWorkflowStageContracts materializes intermediate artifact hook policies", async (t) => {

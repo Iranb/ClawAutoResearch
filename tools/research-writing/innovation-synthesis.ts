@@ -26,6 +26,7 @@ import {
 import { normalizeResultsStorylineState } from "../workflow-guard-state/results-storyline";
 import { normalizeTitleAbstractIntroWorkbenchState } from "../workflow-guard-state/title-abstract-intro-workbench";
 import { loadTrackInnovationEvidence } from "../workflow-guard-track-evidence.js";
+import { normalizeWorkflowControlContract } from "../workflow-control-contract.js";
 
 const STORY_GAP_SOURCE_DOMAIN_POOL = [
   "Computer Science",
@@ -503,8 +504,11 @@ export async function materializeInnovationSynthesis(params: {
   const currentSearch = normalizeStoryGapSearchRequisitionState(
     manifest.story_gap_search_requisition
   );
+  const workflowControl = normalizeWorkflowControlContract(manifest.workflow_control);
   const stage =
-    normalizeStage(params.stage ?? manifest.current_stage ?? manifest.currentStage) ?? null;
+    normalizeStage(
+      params.stage ?? workflowControl?.stage ?? manifest.current_stage ?? manifest.currentStage
+    ) ?? null;
   const paperStory = normalizePaperStoryState(manifest.paper_story_state);
   const researchProgram = normalizeResearchProgramState(manifest.research_program);
   const writePackage = normalizeWritePackageState(manifest.write_package);

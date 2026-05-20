@@ -21,6 +21,7 @@ import {
   saveAutoModeDiscussionStore,
 } from "../../../tools/workflow-auto-discussion.ts";
 import { listWorkflowNotificationChannelsForProject } from "../../../tools/workflow-notification-channels.ts";
+import { buildWorkflowControlContract } from "../../../tools/workflow-control-contract.ts";
 
 async function makeProjectsRoot() {
   return fs.mkdtemp(path.join(os.tmpdir(), "openclaw-research-workflow-command-"));
@@ -1789,6 +1790,101 @@ test("auto-research command bootstraps topic-only onboarding and starts the back
     captured.backgroundParams.backgroundRun.commandText,
     /AUTO_PROCEED:\s*true/i
   );
+});
+
+test("auto-research command syncs bootstrap registry from canonical workflow_control", async (t) => {
+  const projectsRoot = await makeProjectsRoot();
+
+  t.after(async () => {
+    await fs.rm(projectsRoot, { recursive: true, force: true });
+  });
+
+  const api = makeApi({
+    pluginConfig: {
+      enableChannelProjectBindings: false,
+      projectsRoot,
+    },
+  });
+  const autoResearchCommand = getCommand(
+    createResearchWorkflowCommands(api, {
+      async setResearchProgramState(params) {
+        const manifestPath = path.join(params.projectRoot, "PROJECT_MANIFEST.json");
+        const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+        await fs.writeFile(
+          manifestPath,
+          `${JSON.stringify(
+            {
+              ...manifest,
+              current_stage: "setup",
+              next_action: '/project-init "research goal"',
+              blocking_reason: "stale_bootstrap_blocker",
+              workflow_control: buildWorkflowControlContract({
+                contractId: "registry-canonical-state:graph_build",
+                reconciledAt: "2026-05-19T09:34:00.000Z",
+                stage: "graph_build",
+                owner: "researcher",
+                nextAction: "/graph-build",
+                status: "waiting",
+                blockingReason: "canonical_graph_blocker",
+                completionStatus: "incomplete",
+                completionSource: "graph_build_completion",
+                completionReason: "canonical_graph_blocker",
+                runtimeState: "idle",
+              }),
+            },
+            null,
+            2
+          )}\n`,
+          "utf8"
+        );
+        return { onboardingStatus: "incomplete" };
+      },
+      async setWritingContractState() {
+        return {};
+      },
+      async setGraphGuidedWritingState() {
+        return {};
+      },
+      async startBackgroundWorkflowRun(params) {
+        return {
+          started: true,
+          runId: "bg-run-registry-1",
+          sessionKey: params.agentCtx.sessionKey,
+          projectRoot: params.backgroundRun.projectRoot,
+          projectId: params.backgroundRun.projectId,
+          summary: "Full-auto research pipeline started.",
+        };
+      },
+    }),
+    "auto-research"
+  );
+
+  const result = await autoResearchCommand.handler({
+    channel: "local",
+    isAuthorizedSender: true,
+    commandBody: '/auto-research "registry canonical state"',
+    args: '"registry canonical state"',
+    config: {},
+    from: "local:conversation:registry-canonical",
+    to: undefined,
+    accountId: "default",
+    requestConversationBinding: async () => ({ status: "error" }),
+    detachConversationBinding: async () => ({ removed: false }),
+    getCurrentConversationBinding: async () => null,
+  });
+
+  const projectsState = JSON.parse(
+    await fs.readFile(path.join(projectsRoot, "PROJECTS_STATE.json"), "utf8")
+  );
+
+  assert.match(result.text ?? "", /Full-auto research pipeline started/i);
+  assert.deepEqual(
+    projectsState.projects.map((entry) => entry.id),
+    ["registry-canonical-state"]
+  );
+  assert.equal(projectsState.projects[0].stage, "graph_build");
+  assert.equal(projectsState.projects[0].next_action, "/graph-build");
+  assert.equal(projectsState.projects[0].blocked_by, "canonical_graph_blocker");
 });
 
 test("auto-research command reports queued bootstrap runs instead of claiming started", async (t) => {

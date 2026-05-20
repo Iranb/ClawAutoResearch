@@ -2030,6 +2030,7 @@ async function diagnoseTrackEvidence(projectRoot: string) {
   const trackRegistryPath = resolveProjectArtifactPath(projectRoot, "TRACK_REGISTRY.json");
   const manifest =
     (await readJsonIfExists<Record<string, unknown>>(manifestPath)) ?? {};
+  const workflowControl = normalizeWorkflowControlContract(manifest.workflow_control);
   const trackRegistry =
     (await readJsonIfExists<Record<string, unknown>>(trackRegistryPath)) ?? {};
   const researchProgram =
@@ -2092,9 +2093,9 @@ async function diagnoseTrackEvidence(projectRoot: string) {
     projectRoot,
     manifestPath,
     trackRegistryPath,
-    currentStage: readString(manifest.current_stage) ?? null,
+    currentStage: workflowControl?.stage ?? readString(manifest.current_stage) ?? null,
     currentMicroStage: readString(manifest.current_micro_stage) ?? null,
-    ownerAgent: readString(manifest.owner_agent) ?? null,
+    ownerAgent: workflowControl?.owner ?? readString(manifest.owner_agent) ?? null,
     registryDeclaredActiveTracks: readNumber(trackRegistry.active_tracks) ?? null,
     researchProgramActiveTrackCount: programActiveTrackIds.length,
     programActiveTrackIds,
@@ -2307,6 +2308,43 @@ async function prepareAutoIteratorDispatchPreflight(params: {
     writeRuntimeEvent: false,
   });
   return { queueKey, runtimeReconciliation, ownerRuntimeStatus };
+}
+
+async function projectAutoIteratorTaskOwnerRuntimeStatus(params: {
+  projectRoot: string;
+  projectId?: string | null;
+  stage?: string | null;
+  owner?: string | null;
+  command?: string | null;
+  summary?: string | null;
+  queueKey?: string | null;
+  sessionKey?: string | null;
+  runId?: string | null;
+  result: "started" | "queued" | "blocked" | "failed";
+  reason?: string | null;
+  error?: string | null;
+}): Promise<EnsureWorkflowOwnerRuntimeResult> {
+  return ensureWorkflowOwnerRuntime({
+    projectRoot: params.projectRoot,
+    projectId: params.projectId ?? null,
+    stage: params.stage ?? null,
+    owner: params.owner ?? null,
+    nextAction: params.command ?? null,
+    summary: params.summary ?? null,
+    queueKey: params.queueKey ?? null,
+    writeRuntimeEvent: false,
+    dispatch: async () => ({
+      started: params.result === "started",
+      queued: params.result === "queued",
+      blocked: params.result === "blocked",
+      failed: params.result === "failed",
+      reason: params.reason ?? null,
+      error: params.error ?? null,
+      queueKey: params.queueKey ?? null,
+      sessionKey: params.sessionKey ?? null,
+      runId: params.runId ?? null,
+    }),
+  });
 }
 
 async function resolveBackgroundRunOwnerRuntimeStatus(params: {
@@ -2904,6 +2942,20 @@ export async function maybeDispatchAutoIteratorTask(params: {
         sessionKey: dispatch.sessionKey,
         runId: dispatch.runId,
       });
+      const ownerRuntimeStatus = await projectAutoIteratorTaskOwnerRuntimeStatus({
+        projectRoot: params.snapshot.projectRoot,
+        projectId: params.snapshot.projectId,
+        stage,
+        owner: ownerAfter,
+        command,
+        summary,
+        queueKey: queued.entry.queueKey,
+        sessionKey: dispatch.sessionKey,
+        runId: dispatch.runId,
+        result: "queued",
+        reason: "auto_iterator_same_owner_repair_queued",
+        error: dispatch.error,
+      });
       return {
         ...dispatch,
         blockedByCooldown: false,
@@ -2914,7 +2966,7 @@ export async function maybeDispatchAutoIteratorTask(params: {
         queueKey: queued.entry.queueKey,
         queuePosition: queued.queuePosition,
         runtimeDispatchStatus: dispatchPreflight.runtimeReconciliation,
-        ownerRuntimeStatus: dispatchPreflight.ownerRuntimeStatus,
+        ownerRuntimeStatus,
         dispatchTerminality: terminality,
       };
     }
@@ -2928,6 +2980,21 @@ export async function maybeDispatchAutoIteratorTask(params: {
       runId: dispatch.runId,
     });
     if (!terminality.ok) {
+      const ownerRuntimeStatus = await projectAutoIteratorTaskOwnerRuntimeStatus({
+        projectRoot: params.snapshot.projectRoot,
+        projectId: params.snapshot.projectId,
+        stage,
+        owner: ownerAfter,
+        command,
+        summary,
+        queueKey: dispatchPreflight.queueKey,
+        sessionKey: dispatch.sessionKey,
+        runId: dispatch.runId,
+        result: "blocked",
+        reason: "runtime_dispatch_missing_durable_mapping",
+        error:
+          "Dispatch completed without a durable queue/session/handoff mapping; blocked for runtime recovery.",
+      });
       return {
         ...dispatch,
         dispatched: false,
@@ -2936,12 +3003,26 @@ export async function maybeDispatchAutoIteratorTask(params: {
         owner: ownerAfter,
         sameOwnerRepairDispatch: true,
         runtimeDispatchStatus: dispatchPreflight.runtimeReconciliation,
-        ownerRuntimeStatus: dispatchPreflight.ownerRuntimeStatus,
+        ownerRuntimeStatus,
         dispatchTerminality: terminality,
         error:
           "Dispatch completed without a durable queue/session/handoff mapping; blocked for runtime recovery.",
       };
     }
+    const ownerRuntimeStatus = await projectAutoIteratorTaskOwnerRuntimeStatus({
+      projectRoot: params.snapshot.projectRoot,
+      projectId: params.snapshot.projectId,
+      stage,
+      owner: ownerAfter,
+      command,
+      summary,
+      queueKey: dispatchPreflight.queueKey,
+      sessionKey: dispatch.sessionKey,
+      runId: dispatch.runId,
+      result: "started",
+      reason: "auto_iterator_same_owner_repair_started",
+      error: dispatch.error,
+    });
     return {
       ...dispatch,
       blockedByCooldown: false,
@@ -2949,7 +3030,7 @@ export async function maybeDispatchAutoIteratorTask(params: {
       owner: ownerAfter,
       sameOwnerRepairDispatch: true,
       runtimeDispatchStatus: dispatchPreflight.runtimeReconciliation,
-      ownerRuntimeStatus: dispatchPreflight.ownerRuntimeStatus,
+      ownerRuntimeStatus,
       dispatchTerminality: terminality,
     };
   }
@@ -3271,6 +3352,20 @@ export async function maybeDispatchAutoIteratorTask(params: {
       runId: dispatch.runId,
       handoffIntentId: handoffIntent.intent.intentId,
     });
+    const ownerRuntimeStatus = await projectAutoIteratorTaskOwnerRuntimeStatus({
+      projectRoot: params.snapshot.projectRoot,
+      projectId: params.snapshot.projectId,
+      stage,
+      owner: ownerAfter,
+      command,
+      summary: primaryAction.summary,
+      queueKey: queued.entry.queueKey,
+      sessionKey: dispatch.sessionKey,
+      runId: dispatch.runId,
+      result: "queued",
+      reason: "auto_iterator_handoff_queued",
+      error: dispatch.error,
+    });
     return {
       ...dispatch,
       blockedByCooldown: false,
@@ -3282,7 +3377,7 @@ export async function maybeDispatchAutoIteratorTask(params: {
       queueKey: queued.entry.queueKey,
       queuePosition: queued.queuePosition,
       runtimeDispatchStatus: dispatchPreflight.runtimeReconciliation,
-      ownerRuntimeStatus: dispatchPreflight.ownerRuntimeStatus,
+      ownerRuntimeStatus,
       dispatchTerminality: terminality,
     };
   }
@@ -3300,6 +3395,24 @@ export async function maybeDispatchAutoIteratorTask(params: {
     handoffIntentId: handoffIntent.intent.intentId,
   });
   if (!terminality.ok) {
+    const ownerRuntimeStatus = await projectAutoIteratorTaskOwnerRuntimeStatus({
+      projectRoot: params.snapshot.projectRoot,
+      projectId: params.snapshot.projectId,
+      stage,
+      owner: ownerAfter,
+      command,
+      summary: primaryAction.summary,
+      queueKey:
+        "queueKey" in dispatch && typeof dispatch.queueKey === "string"
+          ? dispatch.queueKey
+          : dispatchPreflight.queueKey,
+      sessionKey: dispatch.sessionKey,
+      runId: dispatch.runId,
+      result: "blocked",
+      reason: "runtime_dispatch_missing_durable_mapping",
+      error:
+        "Dispatch completed without a durable queue/session/handoff mapping; blocked for runtime recovery.",
+    });
     return {
       ...dispatch,
       dispatched: false,
@@ -3309,12 +3422,36 @@ export async function maybeDispatchAutoIteratorTask(params: {
       handoffIntentId: handoffIntent.intent.intentId,
       handoffStatus: deliveryResult?.intent.status ?? handoffIntent.intent.status,
       runtimeDispatchStatus: dispatchPreflight.runtimeReconciliation,
-      ownerRuntimeStatus: dispatchPreflight.ownerRuntimeStatus,
+      ownerRuntimeStatus,
       dispatchTerminality: terminality,
       error:
         "Dispatch completed without a durable queue/session/handoff mapping; blocked for runtime recovery.",
     };
   }
+  const dispatchQueueKey =
+    "queueKey" in dispatch && typeof dispatch.queueKey === "string"
+      ? dispatch.queueKey
+      : dispatchPreflight.queueKey;
+  const dispatchQueued =
+    "queuedFallback" in dispatch && dispatch.queuedFallback === true;
+  const ownerRuntimeStatus = await projectAutoIteratorTaskOwnerRuntimeStatus({
+    projectRoot: params.snapshot.projectRoot,
+    projectId: params.snapshot.projectId,
+    stage,
+    owner: ownerAfter,
+    command,
+    summary: primaryAction.summary,
+    queueKey: dispatchQueueKey,
+    sessionKey: dispatch.sessionKey,
+    runId: dispatch.runId,
+    result: dispatchQueued ? "queued" : dispatch.dispatched ? "started" : "blocked",
+    reason: dispatchQueued
+      ? "auto_iterator_handoff_queued"
+      : dispatch.dispatched
+        ? "auto_iterator_handoff_started"
+        : "handoff_not_delivered",
+    error: dispatch.error,
+  });
   return {
     ...dispatch,
     blockedByCooldown: false,
@@ -3323,7 +3460,7 @@ export async function maybeDispatchAutoIteratorTask(params: {
     handoffIntentId: handoffIntent.intent.intentId,
     handoffStatus: deliveryResult?.intent.status ?? handoffIntent.intent.status,
     runtimeDispatchStatus: dispatchPreflight.runtimeReconciliation,
-    ownerRuntimeStatus: dispatchPreflight.ownerRuntimeStatus,
+    ownerRuntimeStatus,
     dispatchTerminality: terminality,
   };
 }

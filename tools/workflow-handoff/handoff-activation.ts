@@ -436,7 +436,9 @@ export async function claimAndActivateWorkflowHandoffForAgent(params: {
         blockedManifest.workflow_control
       );
       const blockedReason =
-        gate.blockingReason ?? readString(blockedManifest.blocking_reason);
+        gate.blockingReason ??
+        blockedWorkflowControl?.blocking_reason ??
+        readString(blockedManifest.blocking_reason);
       const nextBlockedManifest = applyWorkflowControlForHandoff({
         manifest: blockedManifest,
         contractId:

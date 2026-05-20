@@ -41,6 +41,7 @@ import { fileURLToPath } from "node:url";
 // idea_catalyst, and import_workflow. Ingestion stays hugging-face-paper-pages ->
 // arxiv2md-api -> markxiv -> arxiv2md -> PDF fallback only.
 import { appendWorkflowTraceEvent } from "./workflow-trace";
+import { normalizeWorkflowControlContract } from "./workflow-control-contract.js";
 import {
   clearChannelProjectBinding,
   getChannelProjectBinding,
@@ -5174,14 +5175,15 @@ export async function assembleWritePackage(params: {
   });
 
   const validationErrors = getWritePackageValidationErrors(next);
+  const workflowControl = normalizeWorkflowControlContract(manifest.workflow_control);
   await appendWorkflowTraceEvent({
     projectRoot,
     projectId: inferProjectId(projectRoot, manifest),
     kind: "write_package_assembly",
     action: "assemble_write_package",
     functionName: "assembleWritePackage",
-    stage: normalizeStage(manifest.current_stage),
-    owner: asString(manifest.owner_agent),
+    stage: workflowControl?.stage ?? normalizeStage(manifest.current_stage),
+    owner: workflowControl?.owner ?? asString(manifest.owner_agent),
     agentId: params.agentId ?? null,
     sessionKey: null,
     summary: `write_package assembly ${blockingInputs.length === 0 ? "ready" : "partial"}`,
@@ -7349,12 +7351,13 @@ export async function getOrchestrationStateSummary(params: {
 }> {
   const manifest = await readManifestEnsured(params.projectRoot);
   const state = normalizeOrchestrationState(manifest.orchestration_state);
+  const workflowControl = asRecord(manifest.workflow_control);
+  const currentStage = normalizeStage(
+    asString(workflowControl?.stage) ?? manifest.current_stage
+  );
   return {
     state,
-    validationErrors: getOrchestrationStateValidationErrors(
-      state,
-      normalizeStage(manifest.current_stage)
-    ),
+    validationErrors: getOrchestrationStateValidationErrors(state, currentStage),
   };
 }
 

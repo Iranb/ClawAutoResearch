@@ -14,6 +14,7 @@ import {
   setFileAuditPolicyForProject,
   sortHookPolicies,
 } from "./workflow-hooks/state.js";
+import { normalizeWorkflowControlContract } from "./workflow-control-contract.js";
 
 const INTERMEDIATE_ARTIFACT_HOOK_IDS = new Set([
   "frontier-report-quality-audit",
@@ -504,7 +505,10 @@ export async function materializeIntermediateArtifactHookPolicies(params: {
 }> {
   const manifestPath = path.join(params.projectRoot, "PROJECT_MANIFEST.json");
   const manifest = (await readJsonIfExists<Record<string, unknown>>(manifestPath)) ?? {};
-  const stage = normalizeStage(params.stage ?? manifest.current_stage ?? manifest.currentStage);
+  const workflowControl = normalizeWorkflowControlContract(manifest.workflow_control);
+  const stage = normalizeStage(
+    params.stage ?? workflowControl?.stage ?? manifest.current_stage ?? manifest.currentStage
+  );
   const writingContract = normalizeWritingContractState(manifest.writing_contract);
   const paperMode =
     (typeof params.paperMode === "string"

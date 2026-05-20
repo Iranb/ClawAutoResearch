@@ -133,6 +133,7 @@ import { readJsonIfExists } from "./workflow-guard-core/fs";
 import { normalizeWritingContractState } from "./workflow-guard-state/writing-contract";
 import { normalizeSurveyReviewState } from "./workflow-guard-state/survey-review";
 import { updateAutoDispatchDiagnostics } from "./workflow-auto-dispatch-diagnostics";
+import type { AutoDispatchDiagnosticsState } from "./workflow-guard-state/auto-dispatch-diagnostics";
 import { resolveWorkflowBroadcastSessionKey } from "./workflow-agent-isolation.js";
 import { deriveAutoZoteroSyncCandidate } from "./workflow-zotero-sync";
 import {
@@ -395,6 +396,7 @@ type IdleResearchLaunchAttempt = {
   summary: string | null;
   reusedIdleSession: boolean;
   activeResearcherSessionsInChannel: number | null;
+  ownerRuntimeStatus?: EnsureWorkflowOwnerRuntimeResult | null;
 };
 
 type AutoZoteroSyncAttempt = {
@@ -418,6 +420,7 @@ type AutoZoteroSyncAttempt = {
   zoteroProjectPath: string | null;
   packetPath: string | null;
   markdownPath: string | null;
+  ownerRuntimeStatus?: EnsureWorkflowOwnerRuntimeResult | null;
 };
 
 function classifyAutoZoteroLaunchReason(
@@ -433,6 +436,86 @@ function classifyAutoZoteroLaunchReason(
     return "already_launched";
   }
   return "runtime_unavailable";
+}
+
+function projectAutoZoteroOwnerRuntimeStatus(params: {
+  result: Awaited<ReturnType<typeof startBackgroundWorkflowRun>>;
+  projectRoot: string;
+  projectId: string | null;
+  nextAction?: string | null;
+  reason?: string | null;
+}): EnsureWorkflowOwnerRuntimeResult {
+  const stage = "zotero_sync";
+  const owner = "researcher";
+  const nextAction = params.nextAction ?? "zotero_sync";
+  const queueKey = readString(params.result.queueKey) ?? null;
+  const sessionKey = readString(params.result.sessionKey) ?? null;
+  const runId = readString(params.result.runId) ?? null;
+  const reason = readString(params.reason) ?? readString(params.result.reason);
+
+  if (params.result.queued === true) {
+    return {
+      status: queueKey ? "queued" : "blocked",
+      stage,
+      owner,
+      nextAction,
+      runtimeState: queueKey ? "queued" : "degraded",
+      queueKey,
+      sessionKey,
+      runId,
+      reason: queueKey
+        ? reason ?? "zotero_sync_queued"
+        : "runtime_queue_missing_key",
+      error: null,
+      didDispatch: true,
+    };
+  }
+
+  if (params.result.started === true || sessionKey || runId) {
+    return {
+      status: "started",
+      stage,
+      owner,
+      nextAction,
+      runtimeState: "active",
+      queueKey,
+      sessionKey,
+      runId,
+      reason: reason ?? "zotero_sync_started",
+      error: null,
+      didDispatch: true,
+    };
+  }
+
+  if (params.result.reason === "session_unavailable" && queueKey) {
+    return {
+      status: "active",
+      stage,
+      owner,
+      nextAction,
+      runtimeState: "active",
+      queueKey,
+      sessionKey,
+      runId,
+      reason: reason ?? "zotero_sync_active_duplicate",
+      error: null,
+      didDispatch: false,
+    };
+  }
+
+  return {
+    status: "failed",
+    stage,
+    owner,
+    nextAction,
+    runtimeState: "degraded",
+    queueKey,
+    sessionKey,
+    runId,
+    reason: reason ?? "zotero_sync_runtime_unavailable",
+    error: readString(params.result.summary) ?? null,
+    didDispatch: true,
+  };
 }
 
 type PaperIngestionWorkerAttempt = {
@@ -452,7 +535,79 @@ type PaperIngestionWorkerAttempt = {
   runId: string | null;
   summary: string | null;
   queueKey: string | null;
+  ownerRuntimeStatus?: EnsureWorkflowOwnerRuntimeResult | null;
 };
+
+function projectPaperIngestionWorkerOwnerRuntimeStatus(params: {
+  result: "started" | "queued" | "active" | "blocked" | "failed";
+  projectId: string | null;
+  queueKey: string | null | undefined;
+  sessionKey?: string | null;
+  runId?: string | null;
+  reason?: string | null;
+  summary?: string | null;
+}): EnsureWorkflowOwnerRuntimeResult {
+  const queueKey = readString(params.queueKey) ?? null;
+  const sessionKey = readString(params.sessionKey) ?? null;
+  const runId = readString(params.runId) ?? null;
+  const reason = readString(params.reason);
+  const summary = readString(params.summary);
+  const base = {
+    stage: "paper_ingestion",
+    owner: "researcher",
+    nextAction: "papernexus_ingestion_worker",
+    queueKey,
+    sessionKey,
+    runId,
+    error: params.result === "failed" || params.result === "blocked" ? summary : null,
+  };
+
+  if (params.result === "queued") {
+    return {
+      ...base,
+      status: queueKey ? "queued" : "blocked",
+      runtimeState: queueKey ? "queued" : "degraded",
+      reason: queueKey
+        ? reason ?? "paper_ingestion_worker_queued"
+        : "runtime_queue_missing_key",
+      didDispatch: true,
+    };
+  }
+  if (params.result === "started") {
+    return {
+      ...base,
+      status: "started",
+      runtimeState: "active",
+      reason: reason ?? "paper_ingestion_worker_started",
+      didDispatch: true,
+    };
+  }
+  if (params.result === "active") {
+    return {
+      ...base,
+      status: "active",
+      runtimeState: "active",
+      reason: reason ?? "paper_ingestion_worker_active_duplicate",
+      didDispatch: false,
+    };
+  }
+  if (params.result === "blocked") {
+    return {
+      ...base,
+      status: "blocked",
+      runtimeState: "degraded",
+      reason: reason ?? "paper_ingestion_worker_blocked",
+      didDispatch: true,
+    };
+  }
+  return {
+    ...base,
+    status: "failed",
+    runtimeState: "degraded",
+    reason: reason ?? "paper_ingestion_worker_runtime_unavailable",
+    didDispatch: true,
+  };
+}
 
 type AutoStageLaunchAttempt = {
   launched: boolean;
@@ -629,10 +784,12 @@ type AutoModeMitigationDispatchAttempt = {
   owner: DispatchableWorkflowRole | null;
   sessionKey: string | null;
   runId: string | null;
+  queueKey: string | null;
   dispatchStrategy: string | null;
   error: string | null;
   reusedServiceSession: boolean;
   activeResearcherSessionsInChannel: number | null;
+  ownerRuntimeStatus: EnsureWorkflowOwnerRuntimeResult | null;
 };
 
 type WorkflowCoordinatorVisibleStatusUpdate = {
@@ -1234,14 +1391,16 @@ async function listProjectsFromDirectoryScan(params: {
     if (!manifest) {
       continue;
     }
-    if (readString(manifest.current_stage)?.toLowerCase() === "done") {
+    const workflowControl = normalizeWorkflowControlContract(manifest.workflow_control);
+    const scannedStage = workflowControl?.stage ?? readString(manifest.current_stage);
+    if (scannedStage?.toLowerCase() === "done") {
       continue;
     }
     results.push({
       projectId: readString(manifest.project_id) ?? entry.name,
       projectRoot,
       source: "scan",
-      stage: readString(manifest.current_stage),
+      stage: scannedStage,
       updatedAt: readString(manifest.last_heartbeat_at),
       channelKey: null,
     });
@@ -2497,6 +2656,40 @@ export function deriveWorkflowCoordinatorStatusUpdate(params: {
     params.autoStageLaunch.reason === "runtime_reconciliation_waiting" ||
     params.autoStageLaunch.reason === "session_pool_full"
   ) {
+    const ownerRuntimeStatus = params.autoStageLaunch.ownerRuntimeStatus ?? null;
+    if (
+      ownerRuntimeStatus &&
+      (ownerRuntimeStatus.status === "blocked" ||
+        ownerRuntimeStatus.status === "failed") &&
+      params.autoStageLaunch.reason !== "risk_discussion_pending" &&
+      params.autoStageLaunch.reason !== "runtime_reconciliation_waiting"
+    ) {
+      const stage = params.autoStageLaunch.stage ?? params.stageAfter ?? null;
+      const owner = params.autoStageLaunch.owner ?? ownerRuntimeStatus.owner;
+      const runtimeReason =
+        ownerRuntimeStatus.error ??
+        ownerRuntimeStatus.reason ??
+        "owner_runtime_unavailable";
+      return {
+        status: "blocked",
+        stage,
+        summary:
+          ownerRuntimeStatus.status === "failed"
+            ? `Blocked because owner runtime failed for ${owner ?? "the next owner"} at ${stage ?? "the current stage"}: ${runtimeReason}.`
+            : `Blocked because owner runtime is unavailable for ${owner ?? "the next owner"} at ${stage ?? "the current stage"}: ${runtimeReason}.`,
+        dedupeKey: [
+          "stage-wait",
+          "owner-runtime",
+          params.autoStageLaunch.reason,
+          stage ?? "unknown",
+          owner ?? "unknown-owner",
+          params.autoStageLaunch.launchKey ?? "no-launch-key",
+          ownerRuntimeStatus.reason ??
+            ownerRuntimeStatus.error ??
+            ownerRuntimeStatus.status,
+        ].join(":"),
+      };
+    }
     const summary =
       params.autoStageLaunch.reason === "risk_discussion_pending"
         ? "Waiting for auto-mode risk discussion before handing off the next stage."
@@ -2553,6 +2746,126 @@ export function deriveWorkflowCoordinatorStatusUpdate(params: {
     };
   }
   return null;
+}
+
+export function deriveAutoDispatchDiagnosticsPatch(params: {
+  autoIteratorResult: AutoIteratorResult;
+  autoStageAttempt: AutoStageLaunchAttempt;
+  beforeStageHandoffHooks?: WorkflowHookPointAttempt;
+  artifactHooks?: WorkflowHookPointAttempt;
+}): Partial<AutoDispatchDiagnosticsState> {
+  const ownerRuntimeStatus = params.autoStageAttempt.ownerRuntimeStatus ?? null;
+  const ownerRuntimeBlocked =
+    ownerRuntimeStatus &&
+    (ownerRuntimeStatus.status === "blocked" ||
+      ownerRuntimeStatus.status === "failed") &&
+    params.autoStageAttempt.reason !== "risk_discussion_pending" &&
+    params.autoStageAttempt.reason !== "runtime_reconciliation_waiting";
+  const hookBlocked =
+    params.beforeStageHandoffHooks?.approved === false ||
+    params.artifactHooks?.approved === false;
+  const dispatchDegraded =
+    params.autoStageAttempt.reason === "session_pool_full" ||
+    params.autoStageAttempt.reason === "dispatch_failed";
+  const missingSignals =
+    (params.autoIteratorResult.missingStageSignals?.length ?? 0) > 0;
+  const ownerRuntimeReason =
+    ownerRuntimeStatus?.error ??
+    ownerRuntimeStatus?.reason ??
+    ownerRuntimeStatus?.status ??
+    null;
+  const hookReason =
+    params.beforeStageHandoffHooks?.blockingReason ??
+    params.artifactHooks?.blockingReason ??
+    params.beforeStageHandoffHooks?.aggregateVerdict ??
+    params.artifactHooks?.aggregateVerdict ??
+    params.beforeStageHandoffHooks?.reason ??
+    params.artifactHooks?.reason ??
+    null;
+  const dispatchReason =
+    params.autoStageAttempt.error ?? params.autoStageAttempt.reason ?? null;
+  const gateReason =
+    params.autoIteratorResult.gateReason ??
+    params.autoIteratorResult.blockingReason ??
+    null;
+  const signalReason =
+    params.autoIteratorResult.missingStageSignals?.[0] ??
+    params.autoIteratorResult.blockingReason ??
+    null;
+  return {
+    status: params.autoStageAttempt.launched
+      ? "ready"
+      : hookBlocked
+        ? "blocked"
+        : ownerRuntimeBlocked
+          ? "blocked"
+          : dispatchDegraded
+            ? "degraded"
+            : params.autoIteratorResult.gateBlocking || missingSignals
+              ? "waiting"
+              : "ready",
+    blockingLayer: hookBlocked
+      ? "hook"
+      : ownerRuntimeBlocked
+        ? "runtime"
+        : dispatchDegraded
+          ? "dispatch"
+          : params.autoIteratorResult.gateBlocking
+            ? "runtime"
+            : missingSignals
+              ? "signals"
+              : null,
+    blockingReason: hookBlocked
+      ? hookReason
+      : ownerRuntimeBlocked
+        ? ownerRuntimeReason
+        : dispatchDegraded
+          ? dispatchReason
+          : params.autoIteratorResult.gateBlocking
+            ? gateReason ?? params.autoStageAttempt.reason
+            : missingSignals
+              ? signalReason ?? params.autoStageAttempt.reason
+              : params.autoStageAttempt.reason ??
+                params.autoIteratorResult.blockingReason,
+    blockingSummary: hookBlocked
+      ? hookReason
+      : ownerRuntimeBlocked
+        ? ownerRuntimeReason
+        : dispatchDegraded
+          ? dispatchReason
+          : params.autoIteratorResult.gateBlocking
+            ? gateReason ?? params.autoStageAttempt.error
+            : missingSignals
+              ? signalReason ?? params.autoStageAttempt.error
+              : params.autoStageAttempt.error ??
+                params.autoIteratorResult.blockingReason,
+    stageAfter: params.autoIteratorResult.stageAfter ?? null,
+    ownerAfter: params.autoIteratorResult.ownerAfter ?? null,
+    effectiveAutoMode: params.autoIteratorResult.effectiveAutoMode ?? null,
+    riskFingerprint: params.autoIteratorResult.autoModeRiskFingerprint ?? null,
+    activeHookPoint:
+      params.beforeStageHandoffHooks?.approved === false
+        ? "before_stage_handoff"
+        : params.artifactHooks?.approved === false
+          ? "artifact_materialized"
+          : null,
+    aggregateHookVerdict:
+      params.beforeStageHandoffHooks?.aggregateVerdict ??
+      params.artifactHooks?.aggregateVerdict ??
+      null,
+    runtimeSessionHealth: ownerRuntimeBlocked
+      ? ownerRuntimeReason
+      : params.autoStageAttempt.reason === "session_pool_full"
+        ? "session_pool_full"
+        : params.autoStageAttempt.reason === "dispatch_failed"
+          ? "dispatch_failed"
+          : null,
+    mailboxStatus:
+      params.autoStageAttempt.reason === "gate_blocked"
+        ? "not_dispatched"
+        : null,
+    nextRepairAction: params.autoIteratorResult.nextAction ?? null,
+  };
 }
 
 export async function maybeLaunchIdleResearchForProject(params: {
@@ -2726,6 +3039,21 @@ export async function maybeLaunchIdleResearchForProject(params: {
       });
       if (!launched.started || !launched.runId || !launched.sessionKey) {
         const queued = launched.queued === true;
+        const ownerRuntimeStatus: EnsureWorkflowOwnerRuntimeResult | null = queued
+          ? {
+              status: "queued",
+              stage: null,
+              owner: "researcher",
+              nextAction: `/idle-research ${JSON.stringify(topic)}`,
+              runtimeState: "queued",
+              queueKey: launched.queueKey,
+              sessionKey: null,
+              runId: null,
+              reason: "idle_research_queued",
+              error: null,
+              didDispatch: true,
+            }
+          : null;
         return {
           launched: false,
           queued,
@@ -2748,6 +3076,7 @@ export async function maybeLaunchIdleResearchForProject(params: {
           reusedIdleSession: false,
           activeResearcherSessionsInChannel:
             launched.activeResearcherSessionsInChannel,
+          ownerRuntimeStatus,
         };
       }
       params.launchedDueKeys.set(params.projectRoot, dueKey);
@@ -2846,6 +3175,25 @@ export async function maybeLaunchAutoZoteroSyncForProject(params: {
         workflowRuntime: params.workflowRuntime,
       });
       if (pending.active) {
+        const ownerRuntimeStatus = projectAutoZoteroOwnerRuntimeStatus({
+          result: {
+            started: false,
+            reason: "session_unavailable",
+            runId: null,
+            sessionKey: null,
+            projectRoot: params.projectRoot,
+            projectId: params.projectId,
+            summary:
+              "Background Zotero sync is already running for this project.",
+            reusedIdleSession: false,
+            activeResearcherSessionsInChannel: null,
+            queued: false,
+            queueKey: candidate.dedupeKey,
+          },
+          projectRoot: params.projectRoot,
+          projectId: params.projectId,
+          reason: "zotero_sync_active_duplicate",
+        });
         return {
           launched: false,
           queued: false,
@@ -2861,9 +3209,29 @@ export async function maybeLaunchAutoZoteroSyncForProject(params: {
           zoteroProjectPath: candidate.zoteroProjectPath,
           packetPath: candidate.packetPath,
           markdownPath: candidate.markdownPath,
+          ownerRuntimeStatus,
         };
       }
       if (pending.queued) {
+        const ownerRuntimeStatus = projectAutoZoteroOwnerRuntimeStatus({
+          result: {
+            started: false,
+            reason: "session_unavailable",
+            runId: null,
+            sessionKey: null,
+            projectRoot: params.projectRoot,
+            projectId: params.projectId,
+            summary:
+              "Background Zotero sync is already queued for this project.",
+            reusedIdleSession: false,
+            activeResearcherSessionsInChannel: null,
+            queued: true,
+            queueKey: candidate.dedupeKey,
+          },
+          projectRoot: params.projectRoot,
+          projectId: params.projectId,
+          reason: "zotero_sync_already_queued",
+        });
         return {
           launched: false,
           queued: true,
@@ -2879,6 +3247,7 @@ export async function maybeLaunchAutoZoteroSyncForProject(params: {
           zoteroProjectPath: candidate.zoteroProjectPath,
           packetPath: candidate.packetPath,
           markdownPath: candidate.markdownPath,
+          ownerRuntimeStatus,
         };
       }
 
@@ -2938,6 +3307,16 @@ export async function maybeLaunchAutoZoteroSyncForProject(params: {
           }),
         },
       });
+      const ownerRuntimeStatus = projectAutoZoteroOwnerRuntimeStatus({
+        result: launched,
+        projectRoot: params.projectRoot,
+        projectId: params.projectId,
+        reason: launched.queued
+          ? "zotero_sync_queued"
+          : launched.started
+            ? "zotero_sync_started"
+            : null,
+      });
 
       return {
         launched: launched.started,
@@ -2954,6 +3333,7 @@ export async function maybeLaunchAutoZoteroSyncForProject(params: {
         zoteroProjectPath: candidate.zoteroProjectPath,
         packetPath: candidate.packetPath,
         markdownPath: candidate.markdownPath,
+        ownerRuntimeStatus,
       };
     },
   });
@@ -2994,6 +3374,18 @@ export async function maybeLaunchPaperIngestionWorkerForProject(params: {
         const queued =
           !blocked &&
           (requisitionStatus === "queued" || requisitionStatus === "launching");
+        const ownerRuntimeStatus = projectPaperIngestionWorkerOwnerRuntimeStatus({
+          result: blocked ? "blocked" : queued ? "queued" : "started",
+          projectId: params.projectId,
+          queueKey: requisitionAdvance.requestId,
+          runId: requisitionAdvance.runId,
+          reason: blocked
+            ? "paper_ingestion_requisition_blocked"
+            : queued
+              ? "paper_ingestion_requisition_queued"
+              : "paper_ingestion_requisition_started",
+          summary: requisitionAdvance.summary,
+        });
         return {
           launched: !blocked && !queued,
           queued,
@@ -3004,6 +3396,7 @@ export async function maybeLaunchPaperIngestionWorkerForProject(params: {
           runId: requisitionAdvance.runId,
           summary: requisitionAdvance.summary,
           queueKey: requisitionAdvance.requestId,
+          ownerRuntimeStatus,
         };
       }
 
@@ -3053,6 +3446,7 @@ export async function maybeLaunchPaperIngestionWorkerForProject(params: {
           runId: null,
           summary: null,
           queueKey: null,
+          ownerRuntimeStatus: null,
         };
       }
       const reason: PaperIngestionWorkerAttempt["reason"] = result.started
@@ -3062,8 +3456,34 @@ export async function maybeLaunchPaperIngestionWorkerForProject(params: {
           : result.reason === "session_unavailable"
             ? "already_active"
             : result.reason === "runtime_unavailable"
-              ? "runtime_unavailable"
+            ? "runtime_unavailable"
             : "blocked";
+      const ownerRuntimeStatus = projectPaperIngestionWorkerOwnerRuntimeStatus({
+        result: result.started
+          ? "started"
+          : result.queued
+            ? "queued"
+            : result.reason === "session_unavailable"
+              ? "active"
+              : result.reason === "runtime_unavailable"
+                ? "failed"
+                : "blocked",
+        projectId: params.projectId,
+        queueKey: result.queueKey,
+        sessionKey: result.sessionKey,
+        runId: result.runId,
+        reason:
+          reason === "already_active"
+            ? "paper_ingestion_worker_active_duplicate"
+            : reason === "runtime_unavailable"
+              ? "paper_ingestion_worker_runtime_unavailable"
+              : reason === "blocked"
+                ? "paper_ingestion_worker_blocked"
+                : reason === "queued"
+                  ? "paper_ingestion_worker_queued"
+                  : "paper_ingestion_worker_started",
+        summary: result.summary,
+      });
       return {
         launched: result.started,
         queued: result.queued,
@@ -3074,6 +3494,7 @@ export async function maybeLaunchPaperIngestionWorkerForProject(params: {
         runId: result.runId,
         summary: result.summary,
         queueKey: result.queueKey,
+        ownerRuntimeStatus,
       };
     },
   });
@@ -3618,24 +4039,6 @@ export async function maybeLaunchAutoStageForProject(params: {
           activeResearcherSessionsInChannel: null,
         });
       }
-      if ((action.cooldownRemainingSeconds ?? 0) > 0) {
-        return finalizeAttempt({
-          launched: false,
-          reason: "cooldown_active",
-          projectId: params.projectId,
-          projectRoot: params.projectRoot,
-          stage: action.stage ?? params.autoIteratorResult.stageAfter ?? null,
-          owner: action.owner,
-          sessionKey: null,
-          runId: null,
-          dispatchStrategy: null,
-          launchKey: null,
-          error: null,
-          reusedServiceSession: false,
-          activeResearcherSessionsInChannel: null,
-        });
-      }
-
       const launchKey = buildAutoStageLaunchKey({
         projectRoot: params.projectRoot,
         stage: action.stage ?? params.autoIteratorResult.stageAfter ?? null,
@@ -3647,6 +4050,36 @@ export async function maybeLaunchAutoStageForProject(params: {
         60_000,
         Math.floor((params.workflowPolicy.agentContactCooldownSeconds ?? 300) * 1000)
       );
+      const resolveOwnerRuntimeStatus = () =>
+        ensureWorkflowOwnerRuntime({
+          projectRoot: params.projectRoot,
+          projectId: params.projectId,
+          stage: dispatchStage,
+          owner: action.owner,
+          nextAction: action.command,
+          queueKey: launchKey,
+          staleRuntimeAgeMs,
+          writeRuntimeEvent: false,
+        });
+      if ((action.cooldownRemainingSeconds ?? 0) > 0) {
+        const ownerRuntimeStatus = await resolveOwnerRuntimeStatus();
+        return finalizeAttempt({
+          launched: false,
+          reason: "cooldown_active",
+          projectId: params.projectId,
+          projectRoot: params.projectRoot,
+          stage: action.stage ?? params.autoIteratorResult.stageAfter ?? null,
+          owner: action.owner,
+          sessionKey: null,
+          runId: null,
+          dispatchStrategy: null,
+          launchKey,
+          error: null,
+          reusedServiceSession: false,
+          activeResearcherSessionsInChannel: null,
+          ownerRuntimeStatus,
+        });
+      }
       const runtimeReconciliation = await reconcileWorkflowRuntimeDispatchState({
         projectRoot: params.projectRoot,
         projectId: params.projectId,
@@ -3655,16 +4088,7 @@ export async function maybeLaunchAutoStageForProject(params: {
         queueKey: launchKey,
         staleSessionAgeMs: staleRuntimeAgeMs,
       });
-      const ownerRuntimeStatus = await ensureWorkflowOwnerRuntime({
-        projectRoot: params.projectRoot,
-        projectId: params.projectId,
-        stage: dispatchStage,
-        owner: action.owner,
-        nextAction: action.command,
-        queueKey: launchKey,
-        staleRuntimeAgeMs,
-        writeRuntimeEvent: false,
-      });
+      const ownerRuntimeStatus = await resolveOwnerRuntimeStatus();
       if (runtimeReconciliation.status === "stale_reclaimed") {
         params.launchedStageKeys.delete(params.projectRoot);
       }
@@ -3719,6 +4143,7 @@ export async function maybeLaunchAutoStageForProject(params: {
           error: null,
           reusedServiceSession: false,
           activeResearcherSessionsInChannel: null,
+          ownerRuntimeStatus,
         });
       }
       const pendingQueueState = await hasPendingBackgroundWorkflowQueueKey({
@@ -3744,6 +4169,7 @@ export async function maybeLaunchAutoStageForProject(params: {
             : null,
           reusedServiceSession: false,
           activeResearcherSessionsInChannel: null,
+          ownerRuntimeStatus,
         });
       }
 
@@ -3777,7 +4203,7 @@ export async function maybeLaunchAutoStageForProject(params: {
           projectsRoot: params.workflowPolicy.projectsRoot,
         });
         if (!pooledSessionLease.acquired || !pooledSessionLease.sessionKey) {
-          await enqueueQueuedBackgroundWorkflowRun({
+          const queuedStageHandoff = await enqueueQueuedBackgroundWorkflowRun({
             source: "workflow_auto_stage",
             ownerAgent: action.owner,
             requesterSessionKey: defaultResearcherRequesterSessionKey,
@@ -3820,6 +4246,19 @@ export async function maybeLaunchAutoStageForProject(params: {
                   params.workflowPolicy.autoMode) !== "off",
             },
           });
+          const queuedOwnerRuntimeStatus: EnsureWorkflowOwnerRuntimeResult = {
+            status: "queued",
+            stage: dispatchStage,
+            owner: action.owner,
+            nextAction: action.command ?? null,
+            runtimeState: "queued",
+            queueKey: queuedStageHandoff.entry.queueKey,
+            sessionKey: null,
+            runId: null,
+            reason: "auto_stage_handoff_queued",
+            error: null,
+            didDispatch: true,
+          };
           return finalizeAttempt({
             launched: false,
             reason: "session_pool_full",
@@ -3835,7 +4274,7 @@ export async function maybeLaunchAutoStageForProject(params: {
             reusedServiceSession: false,
             activeResearcherSessionsInChannel:
               pooledSessionLease.activeResearcherSessionsInChannel,
-            ownerRuntimeStatus,
+            ownerRuntimeStatus: queuedOwnerRuntimeStatus,
           });
         }
       }
@@ -4693,8 +5132,10 @@ export async function maybeAdvanceSurveyBriefRefinementForProject(params: {
   const surveyReview = normalizeSurveyReviewState(
     asRecord(manifest.survey_review)
   );
+  const workflowControl = normalizeWorkflowControlContract(manifest.workflow_control);
   const stageAfter =
     normalizeStage(params.autoIteratorResult.stageAfter) ??
+    workflowControl?.stage ??
     normalizeStage(manifest.current_stage);
   if (stageAfter !== "survey_review") {
     return {
@@ -6628,10 +7069,12 @@ export async function maybeDispatchAutoModeMitigationForProject(params: {
           owner: null,
           sessionKey: null,
           runId: null,
+          queueKey: null,
           dispatchStrategy: null,
           error: null,
           reusedServiceSession: false,
           activeResearcherSessionsInChannel: null,
+          ownerRuntimeStatus: null,
         };
       }
       if (!params.workflowRuntime) {
@@ -6645,10 +7088,12 @@ export async function maybeDispatchAutoModeMitigationForProject(params: {
           owner: params.discussionAttempt.recommendedOwner,
           sessionKey: null,
           runId: null,
+          queueKey: null,
           dispatchStrategy: null,
           error: null,
           reusedServiceSession: false,
           activeResearcherSessionsInChannel: null,
+          ownerRuntimeStatus: null,
         };
       }
 
@@ -6680,11 +7125,13 @@ export async function maybeDispatchAutoModeMitigationForProject(params: {
           owner,
           sessionKey: null,
           runId: null,
+          queueKey: null,
           dispatchStrategy: null,
           error:
             "Channel-project bindings are enabled, but this project has no active workflow binding.",
           reusedServiceSession: false,
           activeResearcherSessionsInChannel: null,
+          ownerRuntimeStatus: null,
         };
       }
       const launchKey = buildAutoMitigationLaunchKey({
@@ -6712,10 +7159,12 @@ export async function maybeDispatchAutoModeMitigationForProject(params: {
           owner,
           sessionKey: null,
           runId: null,
+          queueKey: null,
           dispatchStrategy: null,
           error: null,
           reusedServiceSession: false,
           activeResearcherSessionsInChannel: null,
+          ownerRuntimeStatus: null,
         };
       }
 
@@ -6749,7 +7198,7 @@ export async function maybeDispatchAutoModeMitigationForProject(params: {
           projectsRoot: params.workflowPolicy.projectsRoot,
         });
         if (!pooledSessionLease.acquired || !pooledSessionLease.sessionKey) {
-          await enqueueQueuedBackgroundWorkflowRun({
+          const queuedMitigation = await enqueueQueuedBackgroundWorkflowRun({
             source: "workflow_auto_mitigation",
             ownerAgent: owner,
             requesterSessionKey: defaultResearcherRequesterSessionKey,
@@ -6795,6 +7244,24 @@ export async function maybeDispatchAutoModeMitigationForProject(params: {
                   params.workflowPolicy.autoMode) !== "off",
             },
           });
+          const queuedOwnerRuntimeStatus: EnsureWorkflowOwnerRuntimeResult = {
+            status: "queued",
+            stage:
+              params.autoIteratorResult.stageAfter ??
+              params.discussionAttempt.stage ??
+              null,
+            owner,
+            nextAction:
+              params.autoIteratorResult.nextAction ??
+              "Run research_workflow.auto_iterator_tick after the mitigation pass.",
+            runtimeState: "queued",
+            queueKey: queuedMitigation.entry.queueKey,
+            sessionKey: null,
+            runId: null,
+            reason: "auto_mode_mitigation_queued",
+            error: null,
+            didDispatch: true,
+          };
           return {
             launched: false,
             reason: "session_pool_full",
@@ -6805,11 +7272,13 @@ export async function maybeDispatchAutoModeMitigationForProject(params: {
             owner,
             sessionKey: null,
             runId: null,
+            queueKey: queuedMitigation.entry.queueKey,
             dispatchStrategy: null,
             error: `${owner} service session pool is at capacity for this channel (${pooledSessionLease.activeOwnerSessionsInChannel ?? pooledSessionLease.activeResearcherSessionsInChannel ?? 0} active).`,
             reusedServiceSession: false,
             activeResearcherSessionsInChannel:
               pooledSessionLease.activeResearcherSessionsInChannel,
+            ownerRuntimeStatus: queuedOwnerRuntimeStatus,
           };
         }
       }
@@ -6864,11 +7333,13 @@ export async function maybeDispatchAutoModeMitigationForProject(params: {
           owner,
           sessionKey: dispatchLaunch.sessionKey,
           runId: dispatchLaunch.runId,
+          queueKey: null,
           dispatchStrategy: dispatchLaunch.strategy,
           error: dispatchLaunch.error,
           reusedServiceSession: false,
           activeResearcherSessionsInChannel:
             pooledSessionLease?.activeResearcherSessionsInChannel ?? null,
+          ownerRuntimeStatus: null,
         };
       }
 
@@ -6913,11 +7384,13 @@ export async function maybeDispatchAutoModeMitigationForProject(params: {
         owner,
         sessionKey: dispatchLaunch.sessionKey,
         runId: dispatchLaunch.runId,
+        queueKey: null,
         dispatchStrategy: dispatchLaunch.strategy,
         error: null,
         reusedServiceSession: pooledSessionLease?.reusedIdleSession ?? false,
         activeResearcherSessionsInChannel:
           pooledSessionLease?.activeResearcherSessionsInChannel ?? null,
+        ownerRuntimeStatus: null,
       };
     },
   });
@@ -7312,68 +7785,12 @@ export function createWorkflowCoordinatorService(
           discussionRefreshedResults.map((entry, index) =>
             updateAutoDispatchDiagnostics({
               projectRoot: entry.projectRoot,
-              patch: {
-                status:
-                  autoStageAttempts[index]?.launched
-                    ? "ready"
-                    : beforeStageHandoffHookAttempts[index]?.approved === false ||
-                        artifactHookAttempts[index]?.approved === false
-                      ? "blocked"
-                      : autoStageAttempts[index]?.reason === "session_pool_full" ||
-                          autoStageAttempts[index]?.reason === "dispatch_failed"
-                        ? "degraded"
-                        : entry.result.gateBlocking || (entry.result.missingStageSignals?.length ?? 0) > 0
-                          ? "waiting"
-                          : "ready",
-                blockingLayer:
-                  beforeStageHandoffHookAttempts[index]?.approved === false ||
-                  artifactHookAttempts[index]?.approved === false
-                    ? "hook"
-                    : autoStageAttempts[index]?.reason === "session_pool_full" ||
-                        autoStageAttempts[index]?.reason === "dispatch_failed"
-                      ? "dispatch"
-                      : entry.result.gateBlocking
-                        ? "runtime"
-                        : (entry.result.missingStageSignals?.length ?? 0) > 0
-                          ? "signals"
-                          : null,
-                blockingReason:
-                  autoStageAttempts[index]?.reason ??
-                  beforeStageHandoffHookAttempts[index]?.blockingReason ??
-                  artifactHookAttempts[index]?.blockingReason ??
-                  entry.result.gateReason ??
-                  entry.result.blockingReason,
-                blockingSummary:
-                  autoStageAttempts[index]?.error ??
-                  beforeStageHandoffHookAttempts[index]?.blockingReason ??
-                  artifactHookAttempts[index]?.blockingReason ??
-                  entry.result.blockingReason,
-                stageAfter: entry.result.stageAfter ?? null,
-                ownerAfter: entry.result.ownerAfter ?? null,
-                effectiveAutoMode: entry.result.effectiveAutoMode ?? null,
-                riskFingerprint: entry.result.autoModeRiskFingerprint ?? null,
-                activeHookPoint:
-                  beforeStageHandoffHookAttempts[index]?.approved === false
-                    ? "before_stage_handoff"
-                    : artifactHookAttempts[index]?.approved === false
-                      ? "artifact_materialized"
-                      : null,
-                aggregateHookVerdict:
-                  beforeStageHandoffHookAttempts[index]?.aggregateVerdict ??
-                  artifactHookAttempts[index]?.aggregateVerdict ??
-                  null,
-                runtimeSessionHealth:
-                  autoStageAttempts[index]?.reason === "session_pool_full"
-                    ? "session_pool_full"
-                    : autoStageAttempts[index]?.reason === "dispatch_failed"
-                      ? "dispatch_failed"
-                      : null,
-                mailboxStatus:
-                  autoStageAttempts[index]?.reason === "gate_blocked"
-                    ? "not_dispatched"
-                    : null,
-                nextRepairAction: entry.result.nextAction ?? null,
-              },
+              patch: deriveAutoDispatchDiagnosticsPatch({
+                autoIteratorResult: entry.result,
+                autoStageAttempt: autoStageAttempts[index],
+                beforeStageHandoffHooks: beforeStageHandoffHookAttempts[index],
+                artifactHooks: artifactHookAttempts[index],
+              }),
             })
           )
         );

@@ -60,6 +60,7 @@ import { createWorkflowExecutionRuntimeFromApi } from "./workflow-execution-runt
 import { shouldUseChannelProjectBindingForWorkflow } from "./workflow-message-channels.js";
 import { recordWorkflowNotificationChannelForProject } from "./workflow-notification-channels.js";
 import { syncProjectsStateEntry } from "./workflow-project-registry";
+import { normalizeWorkflowControlContract } from "./workflow-control-contract.js";
 
 // Import types and utilities from decoupled modules
 import {
@@ -1903,14 +1904,19 @@ async function syncBootstrapProjectRegistryEntry(params: {
     (await readJsonIfExists<Record<string, unknown>>(
       path.join(params.projectRoot, "PROJECT_MANIFEST.json")
     )) ?? {};
+  const workflowControl = normalizeWorkflowControlContract(manifest.workflow_control);
   await syncProjectsStateEntry({
     projectRoot: params.projectRoot,
     projectId: params.projectId,
     manifest,
     trackRegistry: null,
-    stage: readString(manifest.current_stage) ?? "setup",
-    nextAction: readString(manifest.next_action) ?? "/project-init \"research goal\"",
-    blockingReason: readString(manifest.blocking_reason) ?? null,
+    stage: workflowControl?.stage ?? readString(manifest.current_stage) ?? "setup",
+    nextAction:
+      workflowControl?.next_action ??
+      readString(manifest.next_action) ??
+      "/project-init \"research goal\"",
+    blockingReason:
+      workflowControl?.blocking_reason ?? readString(manifest.blocking_reason) ?? null,
     getActiveTracks: () => [],
   });
 }

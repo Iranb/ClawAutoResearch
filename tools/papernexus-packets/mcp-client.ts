@@ -11,6 +11,7 @@ export type PapernexusMcpToolName =
   | "research_briefing"
   | "idea_catalyst"
   | "literature_discovery"
+  | "agent_materials"
   | "import_workflow"
   | "refresh_paper_graph"
   | "paper_index"

@@ -35,6 +35,7 @@ import {
   normalizeExperimentInnerLoopContract,
   normalizeExperimentOuterLoopPolicy,
 } from "../workflow-experiment-loop";
+import { normalizeWorkflowControlContract } from "../workflow-control-contract.js";
 
 type MaterializerDeps = {
   readManifestEnsured: (projectRoot: string) => Promise<Record<string, unknown>>;
@@ -368,6 +369,7 @@ export async function materializeExperimentReviewStateImpl(
   const oneChangeSignature = buildOneChangeSignature({
     trackRecords: activeTrackRecords,
   });
+  const workflowControl = normalizeWorkflowControlContract(manifest.workflow_control);
   const packet = {
     schema_version: 1,
     trigger: params.trigger ?? "materialize_experiment_review_state",
@@ -375,7 +377,9 @@ export async function materializeExperimentReviewStateImpl(
       pickString(params.experimentReviewMaterialization ?? {}, [
         "basisStage",
         "basis_stage",
-      ]) ?? String(manifest.current_stage ?? "experiment"),
+      ]) ??
+      workflowControl?.stage ??
+      String(manifest.current_stage ?? "experiment"),
     target_track_ids: trackIds,
     primary_track_id:
       pickString(params.experimentReviewMaterialization ?? {}, [

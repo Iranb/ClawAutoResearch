@@ -329,6 +329,96 @@ test("claimAndActivateWorkflowHandoffForAgent can be blocked by a before-activat
   assert.equal(retried.activated, true);
 });
 
+test("claimAndActivateWorkflowHandoffForAgent keeps canonical blocker when hook omits a reason", async (t) => {
+  const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-handoff-hook-canonical-"));
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await fs.writeFile(
+    path.join(projectRoot, "PROJECT_MANIFEST.json"),
+    `${JSON.stringify(
+      {
+        project_id: "canonical-blocker-demo",
+        current_stage: "review",
+        owner_agent: "reviewer",
+        blocking_reason: "stale_mirror_blocker",
+        workflow_control: buildWorkflowControlContract({
+          contractId: "canonical-blocker-demo-control",
+          reconciledAt: "2026-05-19T08:05:00.000Z",
+          stage: "review",
+          owner: "reviewer",
+          nextAction: "/review-paper",
+          status: "waiting",
+          blockingReason: "canonical_handoff_blocker",
+          completionStatus: "incomplete",
+          completionSource: "review_completion",
+          completionReason: "canonical_handoff_blocker",
+          runtimeState: "idle",
+        }),
+        orchestration_state: {
+          status: "waiting",
+          current_owner: "reviewer",
+        },
+      },
+      null,
+      2
+    )}\n`,
+    "utf8"
+  );
+
+  const created = await createStageOwnerHandoffIntent({
+    projectRoot,
+    projectId: "canonical-blocker-demo",
+    workflowLine: "experiment",
+    stageBefore: "review",
+    stageAfter: "write",
+    ownerBefore: "reviewer",
+    ownerAfter: "academic_writer",
+    executionId: "exec-canonical-blocker",
+    nextAction: "Start writing.",
+  });
+  await syncPreparedWorkflowHandoffToManifest({
+    projectRoot,
+    intent: created.intent,
+  });
+
+  const staleManifest = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "PROJECT_MANIFEST.json"), "utf8")
+  );
+  staleManifest.blocking_reason = "stale_mirror_blocker";
+  await fs.writeFile(
+    path.join(projectRoot, "PROJECT_MANIFEST.json"),
+    `${JSON.stringify(staleManifest, null, 2)}\n`,
+    "utf8"
+  );
+
+  const activation = await claimAndActivateWorkflowHandoffForAgent({
+    projectRoot,
+    role: "academic_writer",
+    sessionKey: "agent:academic_writer:canonical",
+    beforeActivateHook: async () => ({
+      allow: false,
+    }),
+  });
+
+  assert.equal(activation.claimed, true);
+  assert.equal(activation.activated, false);
+
+  const manifest = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "PROJECT_MANIFEST.json"), "utf8")
+  );
+  assert.equal(manifest.blocking_reason, "canonical_handoff_blocker");
+  assert.equal(
+    manifest.workflow_control.blocking_reason,
+    "canonical_handoff_blocker"
+  );
+  assert.equal(
+    manifest.workflow_control.completion.reason,
+    "canonical_handoff_blocker"
+  );
+});
+
 test("claimAndActivateWorkflowHandoffForAgent ignores older failed handoffs for the same role", async (t) => {
   const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-handoff-stale-"));
   t.after(async () => {

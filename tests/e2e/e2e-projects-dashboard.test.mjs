@@ -156,6 +156,44 @@ test("builds a no-Discord cross-project E2E dashboard from project scorecards", 
   );
 });
 
+test("project dashboard summarizes stage and owner from canonical workflow_control", async (t) => {
+  const projectsRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-e2e-projects-canonical-"));
+  t.after(() => fs.rm(projectsRoot, { recursive: true, force: true }));
+
+  const projectRoot = await writeProjectScorecard(
+    projectsRoot,
+    "projection-drift",
+    scorecardFixture({
+      project: {
+        project_id: "projection-drift",
+        project_root: path.join(projectsRoot, "projection-drift"),
+        current_stage: "setup",
+        owner_agent: "researcher",
+      },
+    })
+  );
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "projection-drift",
+    current_stage: "setup",
+    owner_agent: "researcher",
+    workflow_control: {
+      stage: "analysis",
+      owner: "analyzer",
+      next_action: "/analyze-results",
+      blocking_reason: "experiment_search_stop_or_analysis_decision_pending",
+    },
+  });
+
+  const result = await buildE2EProjectsDashboard({ projectsRoot });
+  const [record] = result.dashboard.projects;
+
+  assert.equal(record.current_stage, "analysis");
+  assert.equal(record.owner_agent, "analyzer");
+  const html = await fs.readFile(result.projectsDashboardHtmlPath, "utf8");
+  assert.match(html, /analysis/);
+  assert.match(html, /analyzer/);
+});
+
 test("project dashboard CLI prints durable output paths", async (t) => {
   const projectsRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-e2e-projects-cli-"));
   t.after(() => fs.rm(projectsRoot, { recursive: true, force: true }));

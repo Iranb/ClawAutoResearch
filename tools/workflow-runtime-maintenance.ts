@@ -2943,8 +2943,11 @@ export async function runWorkflowRuntimeMaintenancePass(params: {
   const manifest = await readJsonIfExists<Record<string, unknown>>(
     path.join(projectRoot, "PROJECT_MANIFEST.json")
   );
-  const currentStage = readString(manifest?.current_stage);
-  const currentOwner = readString(manifest?.owner_agent);
+  const workflowControl = readRecord(manifest?.workflow_control);
+  const currentStage =
+    readString(workflowControl?.stage) ?? readString(manifest?.current_stage);
+  const currentOwner =
+    readString(workflowControl?.owner) ?? readString(manifest?.owner_agent);
   const orchestrationState = readRecord(manifest?.orchestration_state);
   const pendingHandoffId = readString(
     orchestrationState?.pending_handoff_id ?? orchestrationState?.pendingHandoffId
@@ -2973,8 +2976,8 @@ export async function runWorkflowRuntimeMaintenancePass(params: {
       projectRoot,
       projectId,
       workflowLine: manifest?.workflow_line === "survey" ? "survey" : "experiment",
-      stage: readString(manifest?.current_stage),
-      originalOwner: readString(manifest?.owner_agent),
+      stage: currentStage,
+      originalOwner: currentOwner,
       failureKind: "paper_ingestion_failed",
       failureReason: `PaperNexus retry terminal state still has ${retryableFailures.length} retryable failure(s).`,
       verificationRule: "paper_ingestion_retry_terminal",

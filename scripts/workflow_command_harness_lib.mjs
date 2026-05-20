@@ -197,10 +197,14 @@ export async function buildLocalSnapshot(projectRoot) {
     };
   }
   const manifest = (await readJson(path.join(projectRoot, "PROJECT_MANIFEST.json"))) ?? {};
+  const workflowControl = isRecord(manifest.workflow_control)
+    ? manifest.workflow_control
+    : {};
   return {
     projectId: manifest.project_id ?? path.basename(projectRoot),
     projectRoot,
-    currentStage: manifest.current_stage ?? null,
+    currentStage:
+      workflowControl.stage ?? manifest.current_stage ?? manifest.currentStage ?? null,
     title: manifest.title ?? null,
     workflowLine: manifest.workflow_line ?? manifest.writing_contract?.paper_mode ?? null,
     paperIngestionRepairRequired: manifest.paper_ingestion?.refresh_required === true,

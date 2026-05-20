@@ -22,6 +22,11 @@ import {
   readProjectsStateRaw as readProjectsStateRawFromRegistry,
   syncProjectsStateEntry as syncProjectsStateEntryFromRegistry,
 } from "./workflow-project-registry";
+import {
+  applyWorkflowControlContractToManifest,
+  buildWorkflowControlContract,
+  normalizeWorkflowControlContract,
+} from "./workflow-control-contract.js";
 
 type WorkflowGuardPolicyLike = {
   projectsRoot?: string | null;
@@ -115,10 +120,18 @@ function applySurveyWorkflowBootstrapToManifest(params: {
   topic: string;
   now: string;
 }): Record<string, unknown> {
-  const currentStage = normalizeStage(params.manifest.current_stage);
-  const currentSurveyReview = normalizeSurveyReviewState(params.manifest.survey_review);
+  const workflowControl = normalizeWorkflowControlContract(
+    params.manifest.workflow_control
+  );
+  const baseManifest = workflowControl
+    ? applyWorkflowControlContractToManifest(params.manifest, workflowControl)
+    : params.manifest;
+  const currentStage = normalizeStage(
+    workflowControl?.stage ?? baseManifest.current_stage
+  );
+  const currentSurveyReview = normalizeSurveyReviewState(baseManifest.survey_review);
   const currentWritingContractRecord =
-    asRecord(params.manifest.writing_contract) ?? {};
+    asRecord(baseManifest.writing_contract) ?? {};
   const currentWritingContract = normalizeWritingContractState(
     currentWritingContractRecord
   );
@@ -136,7 +149,7 @@ function applySurveyWorkflowBootstrapToManifest(params: {
     last_updated_at: params.now,
   });
   const nextManifest = {
-    ...params.manifest,
+    ...baseManifest,
     workflow_line: "survey",
     paper_type: "survey",
     survey_review: serializeSurveyReviewState(nextSurveyReview),
@@ -153,15 +166,34 @@ function applySurveyWorkflowBootstrapToManifest(params: {
     return nextManifest;
   }
 
-  return {
+  const pendingReason =
+    nextSurveyReview.pendingReason ?? SURVEY_BOOTSTRAP_PENDING_REASON;
+  const nextAction = formatSurveyPipelineCommand(params.topic);
+  const resetManifest = {
     ...nextManifest,
     owner_agent: "researcher",
     current_stage: "survey_review",
     current_micro_stage: nextSurveyReview.currentPhase ?? "survey_requested",
-    next_action: formatSurveyPipelineCommand(params.topic),
+    next_action: nextAction,
     resume_action: '/resume-pipeline "<project_id>"',
-    blocking_reason: nextSurveyReview.pendingReason ?? SURVEY_BOOTSTRAP_PENDING_REASON,
+    blocking_reason: pendingReason,
   };
+  return applyWorkflowControlContractToManifest(
+    resetManifest,
+    buildWorkflowControlContract({
+      contractId: `${asString(baseManifest.project_id) ?? "survey"}:survey_bootstrap`,
+      reconciledAt: params.now,
+      stage: "survey_review",
+      owner: "researcher",
+      nextAction,
+      status: "waiting",
+      blockingReason: pendingReason,
+      completionStatus: "incomplete",
+      completionSource: "survey_review_completion",
+      completionReason: pendingReason,
+      runtimeState: "idle",
+    })
+  );
 }
 
 type EnsuredWorkflowProjectLike = {

@@ -30,6 +30,7 @@ import {
   DEFAULT_IDEA_CATALYST_CONTRACT_PATH,
   WORKFLOW_DIRECT_AUTHORITIES,
 } from "../../../tools/workflow-authority-registry.ts";
+import { buildWorkflowControlContract } from "../../../tools/workflow-control-contract.ts";
 
 async function writeJson(filePath, value) {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
@@ -1586,6 +1587,37 @@ test("legacy write stage uses canonical write package and hook gate evidence", a
   assert.equal(ready.contractSource, "write_completion");
 });
 
+test("write completion legacy fallback keeps canonical writer owner over stale mirror", async (t) => {
+  const projectRoot = await makeProject(t, "openclaw-wf-stage-write-canonical-owner-");
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "write-canonical-owner",
+    current_stage: "write",
+    owner_agent: "researcher",
+    workflow_control: buildWorkflowControlContract({
+      contractId: "write-canonical-owner:write",
+      reconciledAt: "2026-05-19T09:54:00.000Z",
+      stage: "write",
+      owner: "academic_writer",
+      nextAction: "/write-paper",
+      status: "waiting",
+      blockingReason: "paper_draft_missing",
+      completionStatus: "incomplete",
+      completionSource: "writing_completion",
+      completionReason: "paper_draft_missing",
+      runtimeState: "idle",
+    }),
+  });
+
+  const completion = await resolveWorkflowStageCompletion({
+    projectRoot,
+    stage: "write",
+  });
+
+  assert.equal(completion.stage, "write");
+  assert.equal(completion.owner, "academic_writer");
+  assert.notEqual(completion.blockingReason, "experiment_multi_seed_validation_pending");
+});
+
 test("polish review completion is blocked by incomplete PaperGuru six-pass gate", async (t) => {
   const projectRoot = await makeProject(t, "openclaw-wf-stage-polish-blocked-");
   await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
@@ -1855,6 +1887,49 @@ test("runtime ownership marks stale running queue degraded when no active sessio
     runtime.blockingReason,
     "stale_runtime_queue_without_active_session"
   );
+});
+
+test("runtime ownership leaves idle owner sessions idle without active work", async (t) => {
+  const projectRoot = await makeProject(t, "openclaw-wf-stage-runtime-idle-");
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "runtime-idle-session",
+    current_stage: "experiment",
+    owner_agent: "researcher",
+  });
+  await writeJson(
+    path.join(projectRoot, ".openclaw-research", "workflow-runtime-queue.json"),
+    {
+      entries: [],
+    }
+  );
+  await writeJson(
+    path.join(projectRoot, ".openclaw-research", "workflow-runtime-sessions.json"),
+    {
+      entries: [
+        {
+          session_key: "agent:researcher:idle",
+          runtime: "sessions_spawn_v1",
+          role: "researcher",
+          owner_agent: "researcher",
+          family: "research",
+          kind: "workflow_stage_dispatch",
+          project_root: projectRoot,
+          status: "idle",
+          started_at: "2026-05-12T00:00:00.000Z",
+        },
+      ],
+    }
+  );
+
+  const runtime = await resolveRuntimeOwnership(projectRoot, {
+    stage: "experiment",
+    owner: "researcher",
+    nextAction: "/monitor-experiment",
+  });
+  assert.equal(runtime.runtimeState, "idle");
+  assert.equal(runtime.queueKey, null);
+  assert.equal(runtime.sessionKey, null);
+  assert.equal(runtime.blockingReason, null);
 });
 
 test("workflow control preserves graph blocker when stale runtime queue would otherwise reset setup", async (t) => {

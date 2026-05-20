@@ -17,6 +17,7 @@ import {
   serializeOrchestrationState,
 } from "../workflow-guard-state/execution-state";
 import { reconcileWorkflowControl } from "../workflow-control-reconciler";
+import { normalizeWorkflowControlContract } from "../workflow-control-contract.js";
 import {
   normalizeResearchProgramState,
 } from "../workflow-guard-state/research-program";
@@ -2923,7 +2924,8 @@ export async function materializeCodeExperimentBundleImpl(params: {
   generatedFiles.push(CODE_EXPERIMENT_ARTIFACTS.orchestratorDispatch);
   generatedFiles.push(CODE_EXPERIMENT_ARTIFACTS.coderDispatch);
 
-  const currentStage = normalizeStage(manifest.current_stage);
+  const workflowControl = normalizeWorkflowControlContract(manifest.workflow_control);
+  const currentStage = normalizeStage(workflowControl?.stage ?? manifest.current_stage);
   const isCodeStage = currentStage === "code";
   const orchestration = normalizeOrchestrationState(manifest.orchestration_state);
   manifest.orchestration_state = serializeOrchestrationState({
@@ -2947,6 +2949,7 @@ export async function materializeCodeExperimentBundleImpl(params: {
     lastUpdatedAt: now,
   });
   if (isCodeStage) {
+    manifest.current_stage = "code";
     manifest.owner_agent = "coder";
   }
   await writeJsonEnsured(manifestPath, manifest);

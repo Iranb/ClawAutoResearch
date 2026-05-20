@@ -111,6 +111,8 @@ function isExperimentDecisionBlocker(value: string | null | undefined): boolean 
         "rollback_to_plan",
         "rollback_to_idea",
         "experiment_search_stop_or_analysis_decision_pending",
+        "reviewed_auto_prelaunch_review_pending",
+        "reviewed_auto_launch_approved",
       ].includes(blocker)
   );
 }

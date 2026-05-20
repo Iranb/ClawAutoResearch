@@ -116,8 +116,9 @@ function isBlockingRevisionActionItem(value) {
 
 export async function detectLiveSubstantiveRevisionTerminal(params) {
   const manifest = params.manifest ?? {};
-  const stage = readString(manifest.current_stage) ?? "";
-  const owner = readString(manifest.owner_agent) ?? "";
+  const workflowControl = readLiveWorkflowControl(manifest);
+  const stage = workflowControl.stage ?? "";
+  const owner = workflowControl.owner ?? "";
   if (stage !== "write" || owner !== "academic_writer") {
     return { terminal: false, reason: null, details: {} };
   }
@@ -213,6 +214,36 @@ function readString(value) {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
+function readLiveWorkflowControl(manifest) {
+  const workflowControl =
+    manifest?.workflow_control && typeof manifest.workflow_control === "object"
+      ? manifest.workflow_control
+      : manifest?.workflowControl && typeof manifest.workflowControl === "object"
+        ? manifest.workflowControl
+        : null;
+  return {
+    stage:
+      readString(workflowControl?.stage) ??
+      readString(manifest?.current_stage) ??
+      readString(manifest?.currentStage),
+    owner:
+      readString(workflowControl?.owner) ??
+      readString(manifest?.owner_agent) ??
+      readString(manifest?.ownerAgent),
+    nextAction:
+      readString(workflowControl?.next_action) ??
+      readString(workflowControl?.nextAction) ??
+      readString(manifest?.next_action) ??
+      readString(manifest?.nextAction) ??
+      readString(manifest?.resume_action),
+    blockingReason:
+      readString(workflowControl?.blocking_reason) ??
+      readString(workflowControl?.blockingReason) ??
+      readString(manifest?.blocking_reason) ??
+      readString(manifest?.blockingReason),
+  };
+}
+
 export const detectLivePaperArtifactTerminal = detectWorkflowPaperArtifactTerminal;
 
 const LIVE_PAPER_ARTIFACT_TERMINAL_STAGES = new Set([
@@ -223,7 +254,7 @@ const LIVE_PAPER_ARTIFACT_TERMINAL_STAGES = new Set([
 ]);
 
 function liveStageAllowsPaperArtifactTerminal(manifest) {
-  const stage = readString(manifest?.current_stage);
+  const stage = readLiveWorkflowControl(manifest ?? {}).stage;
   return LIVE_PAPER_ARTIFACT_TERMINAL_STAGES.has(stage ?? "");
 }
 
@@ -233,7 +264,7 @@ async function detectStageScopedLivePaperArtifactTerminal(params) {
       terminal: false,
       reason: null,
       details: {
-        stage: readString(params.manifest?.current_stage),
+        stage: readLiveWorkflowControl(params.manifest ?? {}).stage ?? null,
         skippedReason: "workflow_not_in_paper_terminal_stage",
       },
     };
@@ -340,9 +371,10 @@ function isActiveHandoffIntent(entry, params) {
 
 export async function readLiveWorkflowActivation(params) {
   const manifest = params.manifest ?? (await readManifest(params.projectRoot));
+  const workflowControl = readLiveWorkflowControl(manifest);
   if (
-    readString(manifest.current_stage) === readString(params.stage) &&
-    readString(manifest.owner_agent) === readString(params.owner)
+    workflowControl.stage === readString(params.stage) &&
+    workflowControl.owner === readString(params.owner)
   ) {
     return { active: true, reason: "manifest_owner_stage_assigned" };
   }
@@ -430,6 +462,7 @@ function compactQueuedRequestProgress(request) {
 }
 
 function workflowProgressFingerprint(manifest) {
+  const workflowControl = readLiveWorkflowControl(manifest);
   const paperIngestion =
     manifest?.paper_ingestion && typeof manifest.paper_ingestion === "object"
       ? manifest.paper_ingestion
@@ -460,12 +493,12 @@ function workflowProgressFingerprint(manifest) {
       ? paperIngestion.completedPapers
       : [];
   return JSON.stringify({
-    stage: manifest?.current_stage ?? null,
-    owner: manifest?.owner_agent ?? null,
-    nextAction: manifest?.next_action ?? manifest?.resume_action ?? null,
+    stage: workflowControl.stage ?? null,
+    owner: workflowControl.owner ?? null,
+    nextAction: workflowControl.nextAction ?? null,
     workflowStatus: manifest?.workflow_status ?? manifest?.status ?? null,
     blockingReason:
-      manifest?.blocking_reason ??
+      workflowControl.blockingReason ??
       manifest?.last_blocking_reason ??
       paperIngestion.blocking_reason ??
       paperIngestion.waiting_reason ??
@@ -508,10 +541,11 @@ function workflowProgressFingerprint(manifest) {
 }
 
 function hasWorkflowProgressShape(manifest) {
+  const workflowControl = readLiveWorkflowControl(manifest);
   return Boolean(
-    readString(manifest?.current_stage) ||
-      readString(manifest?.owner_agent) ||
-      readString(manifest?.next_action) ||
+    workflowControl.stage ||
+      workflowControl.owner ||
+      workflowControl.nextAction ||
       readString(manifest?.workflow_status) ||
       readString(manifest?.status)
   );
@@ -714,7 +748,8 @@ function defaultStageCommand(params) {
 }
 
 export function deriveStageCommand(params) {
-  const stage = String(params.iterator?.stageAfter ?? params.manifest.current_stage ?? "setup");
+  const workflowControl = readLiveWorkflowControl(params.manifest ?? {});
+  const stage = String(params.iterator?.stageAfter ?? workflowControl.stage ?? "setup");
   const actionCommand =
     params.iterator?.recommendedActions?.find(
       (entry) =>
@@ -742,14 +777,22 @@ export function deriveStageCommand(params) {
     return iteratorMention;
   }
 
-  const manifestSlash = [params.manifest.next_action, params.manifest.resume_action]
+  const manifestSlash = [
+    workflowControl.nextAction,
+    params.manifest.next_action,
+    params.manifest.resume_action,
+  ]
     .map((entry) => String(entry ?? "").trim())
     .find((entry) => entry.startsWith("/") && stageAllowsCommand(stage, entry));
   if (manifestSlash) {
     return manifestSlash;
   }
 
-  const manifestMention = [params.manifest.next_action, params.manifest.resume_action]
+  const manifestMention = [
+    workflowControl.nextAction,
+    params.manifest.next_action,
+    params.manifest.resume_action,
+  ]
     .map((entry) => slashCommandMentionCompatibleWithStage(stage, entry))
     .find(Boolean);
   if (manifestMention) {
@@ -925,8 +968,10 @@ export async function waitForProgress(params) {
       await sleep(params.pollMs);
       continue;
     }
-    const currentStage = String(latestManifest.current_stage ?? "");
-    const currentOwner = String(latestManifest.owner_agent ?? "");
+    const latestControl = readLiveWorkflowControl(latestManifest);
+    const baselineControl = readLiveWorkflowControl(params.baselineManifest);
+    const currentStage = String(latestControl.stage ?? "");
+    const currentOwner = String(latestControl.owner ?? "");
     const pdfExists = await pathExists(
       path.join(params.projectRoot, "academic_writer", "paper", "main.pdf")
     );
@@ -947,8 +992,8 @@ export async function waitForProgress(params) {
       };
     }
     if (
-      currentStage !== String(params.baselineManifest.current_stage ?? "") ||
-      currentOwner !== String(params.baselineManifest.owner_agent ?? "")
+      currentStage !== String(baselineControl.stage ?? "") ||
+      currentOwner !== String(baselineControl.owner ?? "")
     ) {
       return { progressed: true, manifest: latestManifest, reason: "stage_or_owner_changed" };
     }
@@ -1032,8 +1077,9 @@ async function runLiveStageTurn(params) {
     stageTimeoutMs,
     progressPollMs,
   } = params;
-  const owner = String(iterator.ownerAfter ?? manifest.owner_agent ?? "researcher");
-  const stage = String(iterator.stageAfter ?? manifest.current_stage ?? "setup");
+  const workflowControl = readLiveWorkflowControl(manifest);
+  const owner = String(iterator.ownerAfter ?? workflowControl.owner ?? "researcher");
+  const stage = String(iterator.stageAfter ?? workflowControl.stage ?? "setup");
   const command = ensureSlashCommandText(
     deriveStageCommand({ lane, manifest, iterator, topic }),
     lane === "survey" ? `/survey-pipeline ${JSON.stringify(topic)}` : `/research-pipeline ${JSON.stringify(topic)}`
@@ -1111,7 +1157,7 @@ async function runLiveStageTurn(params) {
     projectRoot,
     projectId,
     workflowLine: lane === "survey" ? "survey" : "experiment",
-    stageBefore: String(manifest.current_stage ?? null),
+    stageBefore: String(workflowControl.stage ?? null),
     stageAfter: stage,
     ownerBefore: fromRole,
     ownerAfter: owner,
@@ -1306,8 +1352,11 @@ async function runHarnessOrFailure(projectRoot, lane, options = {}) {
 }
 
 function liveNoProgressFailureReason(params) {
+  const turnControl = readLiveWorkflowControl(params.turn?.manifest ?? {});
+  const baselineControl = readLiveWorkflowControl(params.manifest ?? {});
   const blockingReason =
-    params.turn?.manifest?.blocking_reason ??
+    turnControl.blockingReason ??
+    baselineControl.blockingReason ??
     params.turn?.manifest?.orchestration_state?.blocking_reason ??
     params.manifest?.blocking_reason ??
     null;
@@ -1593,10 +1642,11 @@ export async function runAutoCommandEndToEndLive(params) {
     let noProgressTurns = 0;
     for (let index = 0; index < maxIterations; index += 1) {
       const manifest = await readManifest(projectRoot);
+      const manifestControl = readLiveWorkflowControl(manifest);
       const pdfExists = await pathExists(
         path.join(projectRoot, "academic_writer", "paper", "main.pdf")
       );
-      if (pdfExists && ["submit", "done"].includes(String(manifest.current_stage ?? ""))) {
+      if (pdfExists && ["submit", "done"].includes(String(manifestControl.stage ?? ""))) {
         break;
       }
       const artifactTerminal = await detectStageScopedLivePaperArtifactTerminal({
@@ -1645,23 +1695,24 @@ export async function runAutoCommandEndToEndLive(params) {
         workflowPolicy,
       }));
       const manifestAfterIterator = await readManifest(projectRoot);
+      const manifestAfterIteratorControl = readLiveWorkflowControl(manifestAfterIterator);
       const iteratorChangedStageOrOwner =
-        String(manifestAfterIterator.current_stage ?? "") !==
-          String(manifest.current_stage ?? "") ||
-        String(manifestAfterIterator.owner_agent ?? "") !==
-          String(manifest.owner_agent ?? "");
+        String(manifestAfterIteratorControl.stage ?? "") !==
+          String(manifestControl.stage ?? "") ||
+        String(manifestAfterIteratorControl.owner ?? "") !==
+          String(manifestControl.owner ?? "");
       if (iteratorChangedStageOrOwner) {
         const turn = {
           owner: String(
-            manifestAfterIterator.owner_agent ??
+            manifestAfterIteratorControl.owner ??
               iterator.ownerAfter ??
               previousRole ??
               "researcher"
           ),
           stage: String(
-            manifestAfterIterator.current_stage ??
+            manifestAfterIteratorControl.stage ??
               iterator.stageAfter ??
-              manifest.current_stage ??
+              manifestControl.stage ??
               "setup"
           ),
           command: null,
@@ -1673,7 +1724,11 @@ export async function runAutoCommandEndToEndLive(params) {
         turns.push(turn);
         previousRole = turn.owner;
         noProgressTurns = 0;
-        if (["submit", "done"].includes(String(turn.manifest.current_stage ?? ""))) {
+        if (
+          ["submit", "done"].includes(
+            String(readLiveWorkflowControl(turn.manifest ?? {}).stage ?? "")
+          )
+        ) {
           break;
         }
         continue;
@@ -1700,17 +1755,19 @@ export async function runAutoCommandEndToEndLive(params) {
           graceMs: noProgressGraceMs,
           pollMs: params.progressPollMs ?? null,
           reconcileAfterGrace: async ({ baselineManifest }) => {
-            const beforeStage = String(baselineManifest?.current_stage ?? "");
-            const beforeOwner = String(baselineManifest?.owner_agent ?? "");
+            const beforeControl = readLiveWorkflowControl(baselineManifest);
+            const beforeStage = String(beforeControl.stage ?? "");
+            const beforeOwner = String(beforeControl.owner ?? "");
             const beforeFingerprint = workflowProgressFingerprint(baselineManifest ?? {});
             await runWorkflowAutoIterator(buildLiveAutoIteratorParams({
               projectRoot,
               workflowPolicy,
             }));
             const manifestAfterReconciliation = await readManifest(projectRoot);
+            const afterControl = readLiveWorkflowControl(manifestAfterReconciliation);
             const stageOrOwnerChanged =
-              String(manifestAfterReconciliation.current_stage ?? "") !== beforeStage ||
-              String(manifestAfterReconciliation.owner_agent ?? "") !== beforeOwner;
+              String(afterControl.stage ?? "") !== beforeStage ||
+              String(afterControl.owner ?? "") !== beforeOwner;
             if (
               stageOrOwnerChanged ||
               workflowProgressFingerprint(manifestAfterReconciliation) !== beforeFingerprint
@@ -1755,7 +1812,11 @@ export async function runAutoCommandEndToEndLive(params) {
           };
         }
       }
-      if (["submit", "done"].includes(String(turn.manifest.current_stage ?? ""))) {
+      if (
+        ["submit", "done"].includes(
+          String(readLiveWorkflowControl(turn.manifest ?? {}).stage ?? "")
+        )
+      ) {
         break;
       }
     }

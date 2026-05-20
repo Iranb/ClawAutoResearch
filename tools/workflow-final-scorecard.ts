@@ -24,6 +24,21 @@ export type WorkflowFinalScorecardStageEntry = {
   missing_signals: string[];
 };
 
+export type WorkflowFinalScorecardProjectionMismatch = {
+  field: "current_stage" | "owner_agent" | "next_action" | "blocking_reason";
+  projection: string | null;
+  canonical: string | null;
+};
+
+export type WorkflowFinalScorecardManifestProjection = {
+  current_stage: string | null;
+  owner_agent: string | null;
+  next_action: string | null;
+  blocking_reason: string | null;
+  matches_canonical: boolean;
+  mismatches: WorkflowFinalScorecardProjectionMismatch[];
+};
+
 export type WorkflowFinalScorecard = {
   schema_version: "workflow-final-scorecard-v1";
   generated_at: string;
@@ -57,12 +72,8 @@ export type WorkflowFinalScorecard = {
     missing_signals: string[];
     state: Record<string, unknown>;
   };
-  manifest_projection: {
-    current_stage: string | null;
-    owner_agent: string | null;
-    next_action: string | null;
-    blocking_reason: string | null;
-  };
+  input_manifest_projection: WorkflowFinalScorecardManifestProjection;
+  manifest_projection: WorkflowFinalScorecardManifestProjection;
   blockers: string[];
   artifact_paths: {
     scorecard_path: string;
@@ -104,20 +115,70 @@ function collectBlockers(entries: WorkflowFinalScorecardStageEntry[]): string[] 
   return Array.from(new Set(blockers));
 }
 
+function buildManifestProjectionSnapshot(
+  manifest: Record<string, unknown>
+): Omit<WorkflowFinalScorecardManifestProjection, "matches_canonical" | "mismatches"> {
+  return {
+    current_stage: asString(manifest.current_stage ?? manifest.currentStage),
+    owner_agent: asString(manifest.owner_agent ?? manifest.ownerAgent),
+    next_action: asString(manifest.next_action ?? manifest.nextAction),
+    blocking_reason: asString(manifest.blocking_reason ?? manifest.blockingReason),
+  };
+}
+
+function buildManifestProjectionDiagnostic(
+  manifest: Record<string, unknown>,
+  canonical: WorkflowFinalScorecard["canonical"]
+): WorkflowFinalScorecardManifestProjection {
+  const projection = buildManifestProjectionSnapshot(manifest);
+  const comparisons: WorkflowFinalScorecardProjectionMismatch[] = [
+    {
+      field: "current_stage",
+      projection: projection.current_stage,
+      canonical: canonical.stage,
+    },
+    {
+      field: "owner_agent",
+      projection: projection.owner_agent,
+      canonical: canonical.owner,
+    },
+    {
+      field: "next_action",
+      projection: projection.next_action,
+      canonical: canonical.next_action,
+    },
+    {
+      field: "blocking_reason",
+      projection: projection.blocking_reason,
+      canonical: canonical.blocking_reason,
+    },
+  ];
+  const mismatches = comparisons.filter(
+    (entry) => entry.projection !== entry.canonical
+  );
+  return {
+    ...projection,
+    matches_canonical: mismatches.length === 0,
+    mismatches,
+  };
+}
+
 export async function materializeWorkflowFinalScorecard(params: {
   projectRoot: string;
   now?: string | null;
 }): Promise<MaterializeWorkflowFinalScorecardResult> {
   const projectRoot = path.resolve(params.projectRoot);
   const now = params.now ?? new Date().toISOString();
+  const manifestPath = path.join(projectRoot, "PROJECT_MANIFEST.json");
+  const inputManifest =
+    (await readJsonIfExists<Record<string, unknown>>(manifestPath)) ?? {};
   const reconciled = await reconcileWorkflowControl({
     projectRoot,
     now,
   });
   const manifest =
-    (await readJsonIfExists<Record<string, unknown>>(
-      path.join(projectRoot, "PROJECT_MANIFEST.json")
-    )) ?? reconciled.manifest;
+    (await readJsonIfExists<Record<string, unknown>>(manifestPath)) ??
+    reconciled.manifest;
   const [
     analysis,
     writing,
@@ -151,6 +212,17 @@ export async function materializeWorkflowFinalScorecard(params: {
     blockers.length === 0
       ? "pass"
       : "blocked";
+  const canonical: WorkflowFinalScorecard["canonical"] = {
+    contract_id: reconciled.contract.contract_id,
+    stage: reconciled.contract.stage,
+    owner: reconciled.contract.owner,
+    next_action: reconciled.contract.next_action,
+    status: reconciled.contract.status,
+    blocking_reason: reconciled.contract.blocking_reason,
+    completion_status: reconciled.contract.completion.status,
+    completion_source: reconciled.contract.completion.source,
+    runtime_state: reconciled.contract.runtime_state,
+  };
   const scorecard: WorkflowFinalScorecard = {
     schema_version: "workflow-final-scorecard-v1",
     generated_at: now,
@@ -161,29 +233,18 @@ export async function materializeWorkflowFinalScorecard(params: {
       scorecard_is_completion_authority: false,
       scorecard_purpose: "derived_diagnostic",
     },
-    canonical: {
-      contract_id: reconciled.contract.contract_id,
-      stage: reconciled.contract.stage,
-      owner: reconciled.contract.owner,
-      next_action: reconciled.contract.next_action,
-      status: reconciled.contract.status,
-      blocking_reason: reconciled.contract.blocking_reason,
-      completion_status: reconciled.contract.completion.status,
-      completion_source: reconciled.contract.completion.source,
-      runtime_state: reconciled.contract.runtime_state,
-    },
+    canonical,
     chain,
     paperguru: {
       status: paperGuruGate.status,
       missing_signals: paperGuruGate.missingSignals,
       state: paperGuruGate.paperGuruState,
     },
-    manifest_projection: {
-      current_stage: asString(manifest.current_stage ?? manifest.currentStage),
-      owner_agent: asString(manifest.owner_agent ?? manifest.ownerAgent),
-      next_action: asString(manifest.next_action ?? manifest.nextAction),
-      blocking_reason: asString(manifest.blocking_reason ?? manifest.blockingReason),
-    },
+    input_manifest_projection: buildManifestProjectionDiagnostic(
+      inputManifest,
+      canonical
+    ),
+    manifest_projection: buildManifestProjectionDiagnostic(manifest, canonical),
     blockers: Array.from(new Set(blockers)),
     artifact_paths: {
       scorecard_path: FINAL_SCORECARD_RELATIVE_PATH,

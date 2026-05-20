@@ -38,6 +38,10 @@ import {
   type PapernexusMcpClientConfig,
 } from "./papernexus-packets/mcp-client";
 import {
+  materializePapernexusAgentMaterials,
+  type PapernexusAgentMaterialsResult,
+} from "./papernexus-packets/agent-materials";
+import {
   writeLiteratureRequisitionDecisionReport,
 } from "./literature-discovery/requisition-decision";
 import {
@@ -1966,6 +1970,7 @@ async function writeRemoteLiteratureDiscoveryPacket(params: {
   artifactRelativePath: string;
   requestStatus: "running" | "completed" | "needs_repair";
   queueProgressPayload: Record<string, unknown> | null;
+  agentMaterials?: PapernexusAgentMaterialsResult | null;
   now: string;
 }): Promise<void> {
   const evidencePapers = params.sourceEntries
@@ -1989,7 +1994,12 @@ async function writeRemoteLiteratureDiscoveryPacket(params: {
             : "needs_repair",
       target_question_ids: params.requestId ? [params.requestId] : [],
       target_domains: [],
-      candidate_queries: [],
+      candidate_queries: (params.agentMaterials?.literatureDiscoveryQueries ?? []).map(
+        (query) => ({
+          query,
+          source: "papernexus_agent_materials",
+        })
+      ),
       candidate_papers: evidencePapers,
       selected_papers: evidencePapers,
       rejected_papers: [],
@@ -2018,6 +2028,9 @@ async function writeRemoteLiteratureDiscoveryPacket(params: {
         artifact_path: params.artifactRelativePath,
         queue_progress: params.queueProgressPayload,
       },
+      papernexus_agent_materials: summarizeAgentMaterialsForReport(
+        params.agentMaterials
+      ),
       source_contracts: {
         papernexus_remote_discovery: {
           artifact_path: params.artifactRelativePath,
@@ -2617,6 +2630,126 @@ function buildRemoteDiscoveryTopic(params: {
       .join("\n");
   }
   return bootstrapTopic;
+}
+
+function inferRemoteDiscoveryTargetDomain(params: {
+  manifest: Record<string, unknown>;
+  requisition: Record<string, unknown> | null;
+}): string | null {
+  const discovery = asRecord(params.requisition?.literature_discovery) ?? params.requisition;
+  const targetDomains = Array.isArray(discovery?.target_domains)
+    ? discovery.target_domains
+    : Array.isArray(discovery?.missing_domains)
+      ? discovery.missing_domains
+      : [];
+  const firstTargetDomain = targetDomains.find(
+    (entry): entry is string => typeof entry === "string" && entry.trim().length > 0
+  );
+  if (firstTargetDomain) {
+    return firstTargetDomain.trim();
+  }
+  const researchProgram = asRecord(params.manifest.research_program);
+  return researchProgram
+    ? pickString(researchProgram, [
+        "fine_grained_domain",
+        "fineGrainedDomain",
+        "coarse_grained_domain",
+        "coarseGrainedDomain",
+        "target_domain",
+        "targetDomain",
+        "domain",
+        "field",
+      ])
+    : null;
+}
+
+function inferRemoteDiscoveryConstraints(manifest: Record<string, unknown>): string[] {
+  const researchProgram = asRecord(manifest.research_program);
+  if (!researchProgram) {
+    return [];
+  }
+  return uniqueStrings([
+    ...asStringArray(researchProgram.constraints),
+    ...asStringArray(researchProgram.success_criteria ?? researchProgram.successCriteria),
+    ...asStringArray(researchProgram.datasets),
+    pickString(researchProgram, ["fixed_budget", "fixedBudget", "compute_budget", "computeBudget"]),
+    pickString(researchProgram, ["primary_metric", "primaryMetric"]),
+    pickString(researchProgram, ["baseline_reference", "baselineReference", "baseline"]),
+  ].filter((entry): entry is string => Boolean(entry)));
+}
+
+function mergeRemoteDiscoverySeedPapers(
+  baseSeeds: Record<string, unknown>[],
+  materialSeeds: Record<string, unknown>[]
+): Record<string, unknown>[] {
+  const seen = new Set<string>();
+  const merged: Record<string, unknown>[] = [];
+  for (const seed of [...baseSeeds, ...materialSeeds]) {
+    const title = pickString(seed, ["title", "paper_title", "paperTitle"]);
+    const canonicalId = pickString(seed, ["canonical_id", "canonicalId"]);
+    const doi = pickString(seed, ["doi"]);
+    const arxivId = pickString(seed, ["arxiv_id", "arxivId"]);
+    const pmid = pickString(seed, ["pmid"]);
+    const pmcid = pickString(seed, ["pmcid"]);
+    const canonicalArxivId =
+      canonicalId?.toLowerCase().startsWith("arxiv:")
+        ? canonicalId.slice("arxiv:".length)
+        : null;
+    const canonicalDoi =
+      canonicalId?.toLowerCase().startsWith("doi:")
+        ? canonicalId.slice("doi:".length)
+        : null;
+    const key =
+      arxivId || canonicalArxivId
+        ? `arxiv:${(arxivId ?? canonicalArxivId ?? "").toLowerCase()}`
+      : doi || canonicalDoi
+        ? `doi:${(doi ?? canonicalDoi ?? "").toLowerCase()}`
+      : canonicalId ? `canonical:${canonicalId}`
+      : pmid ? `pmid:${pmid}`
+      : pmcid ? `pmcid:${pmcid}`
+      : `title:${title ? normalizeTitle(title) : JSON.stringify(seed)}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    merged.push(seed);
+    if (merged.length >= MAX_REMOTE_DISCOVERY_SEED_PAPERS) {
+      break;
+    }
+  }
+  return merged;
+}
+
+function appendMaterialQueriesToTopic(
+  topic: string,
+  materialQueries: string[]
+): string {
+  const queries = uniqueStrings(materialQueries).slice(0, 12);
+  if (queries.length === 0) {
+    return topic;
+  }
+  return [
+    topic,
+    "",
+    "PaperNexus agent_materials source discovery plan queries:",
+    ...queries.map((query) => `- ${query}`),
+  ].join("\n");
+}
+
+function summarizeAgentMaterialsForReport(
+  agentMaterials: PapernexusAgentMaterialsResult | null | undefined
+): Record<string, unknown> | null {
+  if (!agentMaterials?.attempted) {
+    return null;
+  }
+  return {
+    available: agentMaterials.available,
+    error: agentMaterials.error,
+    artifact_paths: agentMaterials.artifactPaths,
+    literature_discovery_query_count: agentMaterials.literatureDiscoveryQueries.length,
+    seed_paper_count: agentMaterials.seedPapers.length,
+    summary: agentMaterials.summary,
+  };
 }
 
 function isHttpUrl(value: string | null | undefined): boolean {
@@ -3271,6 +3404,7 @@ async function refreshExistingRemoteLiteratureDiscovery(params: {
     artifactRelativePath: params.artifactRelativePath,
     requestStatus,
     queueProgressPayload: queueProgressPayload.payload,
+    agentMaterials: null,
     now: params.now,
   });
   const decision = buildLiteratureRequisitionDecisionFields({
@@ -3599,10 +3733,32 @@ async function maybeRunRemoteLiteratureDiscovery(params: {
   }
 
   const startedAt = params.now;
-  const args = buildRemoteDiscoveryArgs({
-    topic: topic ?? "Resolve and import the supplied seed papers for graph construction.",
+  const baseTopic =
+    topic ?? "Resolve and import the supplied seed papers for graph construction.";
+  const agentMaterials = await materializePapernexusAgentMaterials({
+    projectRoot: params.projectRoot,
+    clientConfig: client.clientConfig,
     sharedCorpus: client.sharedCorpus,
+    projectId: params.projectId,
+    targetProblem: baseTopic,
+    targetDomain: inferRemoteDiscoveryTargetDomain({
+      manifest: params.manifest,
+      requisition,
+    }),
+    constraints: inferRemoteDiscoveryConstraints(params.manifest),
     seedPapers,
+    now: params.now,
+  });
+  const remoteTopic = agentMaterials.available
+    ? appendMaterialQueriesToTopic(baseTopic, agentMaterials.literatureDiscoveryQueries)
+    : baseTopic;
+  const remoteSeedPapers = agentMaterials.available
+    ? mergeRemoteDiscoverySeedPapers(seedPapers, agentMaterials.seedPapers)
+    : seedPapers;
+  const args = buildRemoteDiscoveryArgs({
+    topic: remoteTopic,
+    sharedCorpus: client.sharedCorpus,
+    seedPapers: remoteSeedPapers,
     workflowPolicy: params.workflowPolicy,
   });
   const discoveryTimeoutMs = resolveRemoteDiscoveryMcpTimeoutMs({
@@ -3638,8 +3794,8 @@ async function maybeRunRemoteLiteratureDiscovery(params: {
       }),
       mcpUrl: params.workflowPolicy.papernexusMcpUrl,
       activeRequest,
-      topic,
-      seedPaperCount: seedPapers.length,
+      topic: remoteTopic,
+      seedPaperCount: remoteSeedPapers.length,
       failureKind: timedOut
         ? "remote_literature_discovery_launch_timeout"
         : "remote_literature_discovery_failed",
@@ -3658,8 +3814,8 @@ async function maybeRunRemoteLiteratureDiscovery(params: {
       message: "PaperNexus literature_discovery returned an unreadable payload.",
       mcpUrl: params.workflowPolicy.papernexusMcpUrl,
       activeRequest,
-      topic,
-      seedPaperCount: seedPapers.length,
+      topic: remoteTopic,
+      seedPaperCount: remoteSeedPapers.length,
     });
   }
 
@@ -3720,6 +3876,7 @@ async function maybeRunRemoteLiteratureDiscovery(params: {
     local_request_id: requestId,
     local_source_index_path: relativizeProjectPath(params.projectRoot, sourceIndexPath),
     local_metadata_graph_summary: metadataGraphSummary,
+    papernexus_agent_materials: summarizeAgentMaterialsForReport(agentMaterials),
     remote_task_ids: taskIds,
     remote_queue_progress: queueProgressPayload,
     remote_queue_progress_error: queueProgressError,
@@ -3733,6 +3890,7 @@ async function maybeRunRemoteLiteratureDiscovery(params: {
     artifactRelativePath,
     requestStatus,
     queueProgressPayload,
+    agentMaterials,
     now: params.now,
   });
   const reportRelativePath = path.join(
@@ -3786,6 +3944,7 @@ async function maybeRunRemoteLiteratureDiscovery(params: {
     sourceBackedCount,
     metadataOnlyCount: Math.max(0, sourceEntries.length - sourceBackedCount),
     evidenceGapClosed: requestStatus === "completed" && sourceBackedCount > 0,
+    agentMaterials: summarizeAgentMaterialsForReport(agentMaterials),
     citedEvidence: {
       source_index_path: sourceEntries.length > 0
         ? relativizeProjectPath(params.projectRoot, sourceIndexPath)
@@ -3794,6 +3953,7 @@ async function maybeRunRemoteLiteratureDiscovery(params: {
         params.projectRoot,
         params.reportPath
       ),
+      papernexus_agent_materials: agentMaterials.artifactPaths,
     },
   });
 
@@ -3872,7 +4032,7 @@ async function maybeRunRemoteLiteratureDiscovery(params: {
           args: [],
           command_text:
             activeRequest?.commandText ??
-            `PaperNexus MCP literature_discovery ingest for ${(topic ?? "seed papers").slice(0, 160)}`,
+            `PaperNexus MCP literature_discovery ingest for ${remoteTopic.slice(0, 160)}`,
           manifest_path: activeRequest?.manifestPath ?? artifactRelativePath,
           shared_corpus: client.sharedCorpus,
           paper_count: sourceEntries.length,
@@ -3957,10 +4117,11 @@ async function maybeRunRemoteLiteratureDiscovery(params: {
       run_id: runId,
       mcp_url: params.workflowPolicy?.papernexusMcpUrl,
       shared_corpus: client.sharedCorpus,
-      seed_paper_count: seedPapers.length,
+      seed_paper_count: remoteSeedPapers.length,
       configured_timeout_ms: discoveryTimeoutMs,
       artifact_path: artifactRelativePath,
       report_path: reportRelativePath,
+      papernexus_agent_materials: summarizeAgentMaterialsForReport(agentMaterials),
       import_task_ids: taskIds,
       metadata_graph: metadataGraphSummary,
       import_summary: importSummary,

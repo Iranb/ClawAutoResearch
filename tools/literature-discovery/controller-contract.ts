@@ -41,6 +41,7 @@ import {
   type MergedPaperCandidate,
 } from "../research30/merge";
 import { collectSurveyEntries } from "../survey-review-artifacts";
+import { normalizeWorkflowControlContract } from "../workflow-control-contract.js";
 
 export const DEFAULT_LITERATURE_RESEARCH_CONTROLLER_DIR =
   "researcher/literature-research-controller";
@@ -2737,6 +2738,7 @@ export async function materializeLiteratureResearchControllerArtifacts(params: {
     queryPlan,
     citationExpansionPacket,
   });
+  const workflowControl = normalizeWorkflowControlContract(manifest.workflow_control);
   const needAssessment = {
     schema_version: 1,
     generated_at: generatedAt,
@@ -2746,8 +2748,12 @@ export async function materializeLiteratureResearchControllerArtifacts(params: {
     decision,
     status,
     current_state: {
-      stage: asString(manifest.current_stage ?? manifest.currentStage),
-      owner_agent: asString(manifest.owner_agent ?? manifest.ownerAgent),
+      stage:
+        workflowControl?.stage ??
+        asString(manifest.current_stage ?? manifest.currentStage),
+      owner_agent:
+        workflowControl?.owner ??
+        asString(manifest.owner_agent ?? manifest.ownerAgent),
       coverage_verdict: coverageAudit.verdict,
       source_index_paper_count: sourceIndex.entries.length,
       included_paper_count: includedPapers.length,

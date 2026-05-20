@@ -117,6 +117,13 @@ test("maybeDispatchAutoIteratorTask queues an orchestrator auto-stage fallback w
   assert.equal(result.dispatched, false);
   assert.equal(result.queuedFallback, true);
   assert.match(result.error ?? "", /workflow execution runtime is unavailable/i);
+  assert.equal(result.ownerRuntimeStatus.status, "queued");
+  assert.equal(result.ownerRuntimeStatus.queueKey, result.queueKey);
+  assert.equal(result.ownerRuntimeStatus.runtimeState, "queued");
+  assert.notEqual(
+    result.ownerRuntimeStatus.reason,
+    "owner_runtime_dispatch_unavailable"
+  );
 
   const queue = await readWorkflowRuntimeQueueStore(projectRoot);
   assert.equal(queue.entries.length, 1);
@@ -413,6 +420,13 @@ test("maybeDispatchAutoIteratorTask queues same-owner repair dispatch when auto 
   assert.equal(result.dispatched, false);
   assert.equal(result.sameOwnerRepairDispatch, true);
   assert.equal(result.queuedFallback, true);
+  assert.equal(result.ownerRuntimeStatus.status, "queued");
+  assert.equal(result.ownerRuntimeStatus.queueKey, result.queueKey);
+  assert.equal(result.ownerRuntimeStatus.runtimeState, "queued");
+  assert.notEqual(
+    result.ownerRuntimeStatus.reason,
+    "owner_runtime_dispatch_unavailable"
+  );
 
   const queue = await readWorkflowRuntimeQueueStore(projectRoot);
   assert.equal(queue.entries.length, 1);
@@ -561,6 +575,15 @@ test("maybeDispatchAutoIteratorTask claims the next matching task when dispatch 
   });
 
   assert.equal(result?.dispatched, true);
+  assert.ok(["active", "started"].includes(result.ownerRuntimeStatus.status));
+  assert.equal(
+    result.ownerRuntimeStatus.sessionKey,
+    "agent:orchestrator:discord:group:paper-lab"
+  );
+  assert.notEqual(
+    result.ownerRuntimeStatus.reason,
+    "owner_runtime_dispatch_unavailable"
+  );
   const store = await readWorkflowTaskGraphStore(projectRoot);
   assert.equal(store?.tasks[0].status, "claimed");
   assert.equal(store?.tasks[0].lease?.sessionKey, "agent:orchestrator:discord:group:paper-lab");

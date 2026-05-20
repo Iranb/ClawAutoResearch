@@ -4,6 +4,8 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 
 const JS_RUNTIME_EXTENSIONS = [".js", ".mjs", ".cjs", ".json", ".node"];
+const CONFLICT_COPY_RUNTIME_ARTIFACT_PATTERN =
+  / [0-9]+\.(?:[cm]?js|d\.[cm]?ts)(?:\.map)?$/;
 const TS_SOURCE_SUFFIXES = [
   [".ts", ".js"],
   [".mts", ".mjs"],
@@ -42,6 +44,18 @@ async function fileExists(filePath) {
   } catch {
     return false;
   }
+}
+
+function isConflictCopyRuntimeArtifact(filePath) {
+  return CONFLICT_COPY_RUNTIME_ARTIFACT_PATTERN.test(path.basename(filePath));
+}
+
+async function removeConflictCopyRuntimeArtifacts(distRoot) {
+  const conflictArtifacts = await walkFiles(distRoot, isConflictCopyRuntimeArtifact);
+  for (const artifactPath of conflictArtifacts) {
+    await fs.rm(artifactPath, { force: true });
+  }
+  return conflictArtifacts;
 }
 
 async function syncTemplatesDir({ repoRoot, distRoot }) {
@@ -192,6 +206,8 @@ export async function prepareDistRuntime({
     throw new Error(`dist root not found: ${distRoot}`);
   }
 
+  const removedConflictArtifacts =
+    await removeConflictCopyRuntimeArtifacts(distRoot);
   const distToolsRoot = path.join(distRoot, "tools");
   const templatesCopied = await syncTemplatesDir({ repoRoot, distRoot });
   const copiedHelpers = await copyJsOnlyToolHelpers({ toolsRoot, distToolsRoot });
@@ -212,6 +228,7 @@ export async function prepareDistRuntime({
 
   return {
     copiedHelpers,
+    removedConflictArtifactCount: removedConflictArtifacts.length,
     templatesCopied,
     runtimeFileCount: runtimeFiles.length,
     rewrittenCount,

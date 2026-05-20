@@ -8,6 +8,7 @@ import { createPluginRegistrationContext } from "../../../tools/plugin-registrat
 import { registerWorkflowTools } from "../../../tools/register-workflow-tools.ts";
 import { materializeWritingHookPolicies } from "../../../tools/research-writing/hook-policies.ts";
 import { maybePrepareWorkflowStageContracts } from "../../../tools/workflow-guard-runtime/stage-preflight.ts";
+import { buildWorkflowControlContract } from "../../../tools/workflow-control-contract.ts";
 
 async function writeJson(targetPath, value) {
   await fs.mkdir(path.dirname(targetPath), { recursive: true });
@@ -368,6 +369,43 @@ test("research_workflow materialize_writing_hook_policies writes the writing-own
     ),
     true
   );
+});
+
+test("materializeWritingHookPolicies defaults to canonical workflow_control stage", async (t) => {
+  const projectRoot = await makeWritingHookProject({
+    stage: "idea",
+  });
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  const manifest = await readManifest(projectRoot);
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    ...manifest,
+    current_stage: "idea",
+    workflow_control: buildWorkflowControlContract({
+      contractId: "demo-project:write",
+      reconciledAt: "2026-05-19T09:55:00.000Z",
+      stage: "write",
+      owner: "academic_writer",
+      nextAction: "/write-paper",
+      status: "waiting",
+      blockingReason: "writing_hooks_pending",
+      completionStatus: "incomplete",
+      completionSource: "write_package_completion",
+      completionReason: "writing_hooks_pending",
+      runtimeState: "idle",
+    }),
+  });
+
+  const result = await materializeWritingHookPolicies({
+    projectRoot,
+  });
+
+  assert.equal(result.stage, "write");
+  assert.ok(result.generatedHookIds.includes("main-tex-consistency-audit"));
+  assert.ok(result.enabledHookIds.includes("figure-caption-audit"));
+  assert.equal(result.generatedHookIds.includes("survey-taxonomy-audit"), false);
 });
 
 test("materializeWritingHookPolicies generates survey-specific section hooks", async (t) => {

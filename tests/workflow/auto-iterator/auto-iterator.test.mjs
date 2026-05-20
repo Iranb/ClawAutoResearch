@@ -574,6 +574,85 @@ test("runWorkflowAutoIterator writes structured diagnostics for stage evaluation
   );
 });
 
+test("runWorkflowAutoIterator treats workflow_control as authority over stale manifest mirrors", async (t) => {
+  const projectRoot = await makeTempProject();
+
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "canonical-drift-demo",
+    current_stage: "graph_build",
+    owner_agent: "researcher",
+    next_action: "/graph-build",
+    blocking_reason: "graph_sources_missing",
+    workflow_control: buildWorkflowControlContract({
+      contractId: "canonical-drift-demo-control",
+      reconciledAt: "2026-05-19T06:34:00.000Z",
+      stage: "analysis",
+      owner: "analyzer",
+      nextAction: "/analyze-results",
+      status: "waiting",
+      blockingReason: "analysis_report_missing",
+      completionStatus: "incomplete",
+      completionSource: "analysis_completion",
+      completionReason: "analysis_report_missing",
+      runtimeState: "idle",
+    }),
+  });
+
+  const result = await runWorkflowAutoIterator({
+    projectRoot,
+    agentId: "researcher",
+    queueMailbox: false,
+    policy: {
+      autoMode: "aggressive",
+    },
+  });
+
+  assert.equal(result.stageBefore, "analysis");
+  assert.equal(result.stageEffective, "analysis");
+  assert.equal(result.ownerBefore, "analyzer");
+  assert.equal(result.ownerAfter, "analyzer");
+  assert.equal(result.nextAction, "/analyze-results");
+  assert.equal(result.blockingReason, "analysis_report_missing");
+
+  const diagnostics = await readWorkflowDiagnosticEvents(projectRoot);
+  const tickStarted = diagnostics.find(
+    (event) =>
+      event.component === "auto_iterator" && event.action === "tick_started"
+  );
+  assert.ok(tickStarted);
+  assert.equal(tickStarted.owner, "analyzer");
+  assert.equal(tickStarted.details?.workflowStateSource, "workflow_control");
+  assert.deepEqual(tickStarted.details?.workflowStateMirrorMismatch, {
+    stage: { canonical: "analysis", mirror: "graph_build" },
+    owner: { canonical: "analyzer", mirror: "researcher" },
+    nextAction: {
+      canonical: "/analyze-results",
+      mirror: "/graph-build",
+    },
+    blockingReason: {
+      canonical: "analysis_report_missing",
+      mirror: "graph_sources_missing",
+    },
+  });
+
+  const manifest = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "PROJECT_MANIFEST.json"), "utf8")
+  );
+  assert.equal(manifest.workflow_control.stage, "analysis");
+  assert.equal(manifest.current_stage, "analysis");
+  assert.equal(manifest.workflow_control.owner, "analyzer");
+  assert.equal(manifest.owner_agent, "analyzer");
+  assert.equal(manifest.workflow_control.next_action, manifest.next_action);
+  assert.equal(
+    manifest.workflow_control.blocking_reason,
+    manifest.blocking_reason
+  );
+});
+
 function buildCompliantFigureTableLatex({
   figures = 5,
   tables = 4,

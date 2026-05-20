@@ -9,6 +9,7 @@ import { materializeLocalExperimentExecutionImpl } from "../../tools/workflow-gu
 import { collectExecutionProofReceipts } from "../../tools/workflow-execution-proof.ts";
 import { evaluateExperimentSearchDecision } from "../../tools/workflow-experiment-decision.ts";
 import { runWorkflowAutoIterator } from "../../tools/workflow-guard.ts";
+import { buildWorkflowControlContract } from "../../tools/workflow-control-contract.ts";
 
 async function writeJson(targetPath, value) {
   await fs.mkdir(path.dirname(targetPath), { recursive: true });
@@ -169,6 +170,83 @@ test("code experiment materializer emits SQLite-specific bundle for SQLite index
   assert.equal(manifest.workflow_control.next_action, "/run-experiment");
   assert.equal(manifest.workflow_control.completion.status, "incomplete");
   assert.equal(manifest.workflow_control.completion.source, "code_completion");
+});
+
+test("code experiment materializer repairs stale top-level stage from canonical code control", async (t) => {
+  const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-code-bundle-canonical-"));
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  const topic =
+    "CPU-only FixMatch consistency filtering for generalized category discovery on a local reference split.";
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), {
+    project_id: "code-bundle-canonical",
+    current_stage: "experiment",
+    owner_agent: "researcher",
+    workflow_control: buildWorkflowControlContract({
+      contractId: "code-bundle-canonical:code",
+      reconciledAt: "2026-05-19T10:04:00.000Z",
+      stage: "code",
+      owner: "coder",
+      nextAction: "/run-experiment",
+      status: "waiting",
+      blockingReason: "code_bundle_pending",
+      completionStatus: "incomplete",
+      completionSource: "code_completion",
+      completionReason: "code_bundle_pending",
+      runtimeState: "idle",
+    }),
+    topic,
+    orchestration_state: {
+      status: "running",
+      current_owner: "researcher",
+      next_transition_candidate: null,
+      stage_run_id: "stage-code-bundle-canonical",
+    },
+    research_program: {
+      status: "approved",
+      goal: topic,
+      primary_metric: "H-score",
+      baseline_reference: "supervised GCD baseline",
+      datasets: ["local-gcd-reference-benchmark"],
+      tracks: [
+        {
+          track_id: "track-main",
+          status: "active",
+          hypothesis:
+            "FixMatch consistency filtering improves novel-class discovery without hurting known-class accuracy.",
+          novelty_basis:
+            "Adapt FixMatch pseudo-label consistency to known/novel GCD calibration.",
+          main_metric: "H-score",
+        },
+      ],
+      plan_selection: {
+        selected_track_id: "track-main",
+      },
+    },
+  });
+
+  const bundle = await materializeCodeExperimentBundleImpl({
+    projectRoot,
+    trigger: "test",
+    agentId: "coder",
+  });
+
+  const manifest = JSON.parse(
+    await fs.readFile(path.join(projectRoot, "PROJECT_MANIFEST.json"), "utf8")
+  );
+  assert.equal(manifest.current_stage, "code");
+  assert.equal(manifest.owner_agent, "coder");
+  assert.equal(manifest.orchestration_state.current_owner, "coder");
+  assert.equal(manifest.orchestration_state.next_owner, "researcher");
+  assert.equal(manifest.orchestration_state.next_transition_candidate, "experiment");
+  assert.equal(
+    manifest.orchestration_state.resume_cursor,
+    `code:${bundle.experimentId}:bundle_ready`
+  );
+  assert.equal(manifest.workflow_control.stage, "code");
+  assert.equal(manifest.workflow_control.owner, "coder");
 });
 
 test("local experiment execution materializer runs and reconciles a code bundle for analysis", async (t) => {

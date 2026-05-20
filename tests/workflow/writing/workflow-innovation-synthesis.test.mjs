@@ -7,6 +7,7 @@ import path from "node:path";
 import { createPluginRegistrationContext } from "../../../tools/plugin-registration-shared.ts";
 import { registerWorkflowTools } from "../../../tools/register-workflow-tools.ts";
 import { materializeInnovationSynthesis } from "../../../tools/research-writing/innovation-synthesis.ts";
+import { buildWorkflowControlContract } from "../../../tools/workflow-control-contract.ts";
 import { maybePrepareWorkflowStageContracts } from "../../../tools/workflow-guard-runtime/stage-preflight.ts";
 
 async function writeJson(targetPath, value) {
@@ -273,6 +274,64 @@ test("materializeInnovationSynthesis saturates repeated unresolved gaps instead 
   assert.equal(saturatedManifest.story_gap_search_requisition.status, "saturated");
   assert.equal(saturatedManifest.story_gap_search_requisition.same_gap_cycles_used, 2);
   assert.equal(saturatedManifest.paper_ingestion.queued_requests.length, 1);
+});
+
+test("materializeInnovationSynthesis defaults story-gap reentry to canonical workflow_control stage", async (t) => {
+  const projectRoot = await makeInnovationProjectRoot();
+  t.after(async () => {
+    await fs.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  const manifest = await readManifest(projectRoot);
+  manifest.current_stage = "experiment";
+  manifest.owner_agent = "researcher";
+  manifest.workflow_control = buildWorkflowControlContract({
+    contractId: "wcc-innovation-synthesis-canonical",
+    reconciledAt: "2026-05-19T18:30:00.000Z",
+    stage: "review",
+    owner: "reviewer",
+    nextAction: "/review-phase",
+    status: "blocked",
+    blockingReason: "innovation_synthesis_gap",
+    completionStatus: "incomplete",
+    completionSource: "test",
+    completionReason: "canonical innovation synthesis fixture",
+  });
+  await writeJson(path.join(projectRoot, "PROJECT_MANIFEST.json"), manifest);
+
+  const result = await materializeInnovationSynthesis({ projectRoot });
+  assert.equal(result.storyGapSearch?.originStage, "review");
+  assert.deepEqual(result.storyGapSearch?.requiredStageReentry, [
+    "graph_build",
+    "analyze",
+    "write",
+  ]);
+  assert.equal(result.storyGapSearch?.requiredStageReentry.includes("experiment"), false);
+
+  const packet = JSON.parse(
+    await fs.readFile(
+      path.join(
+        projectRoot,
+        "researcher",
+        "story-gap-search",
+        "STORY_GAP_SEARCH_REQUISITION.json"
+      ),
+      "utf8"
+    )
+  );
+  assert.equal(packet.origin_stage, "review");
+  assert.deepEqual(packet.required_stage_reentry, ["graph_build", "analyze", "write"]);
+  assert.equal(packet.required_stage_reentry.includes("experiment"), false);
+
+  const updatedManifest = await readManifest(projectRoot);
+  assert.equal(updatedManifest.story_gap_search_requisition.origin_stage, "review");
+  const queuedRequest = updatedManifest.paper_ingestion.queued_requests[0];
+  assert.match(queuedRequest.detail, /triggered from review/);
+  assert.doesNotMatch(queuedRequest.detail, /triggered from experiment/);
+  const requisitionManifest = JSON.parse(
+    await fs.readFile(path.join(projectRoot, queuedRequest.manifest_path), "utf8")
+  );
+  assert.equal(requisitionManifest.literature_discovery.origin_stage, "review");
 });
 
 test("maybePrepareWorkflowStageContracts materializes innovation synthesis during late writing stages", async (t) => {

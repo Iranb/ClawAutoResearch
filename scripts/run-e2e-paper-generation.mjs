@@ -1710,7 +1710,16 @@ const openMediumOrHigherIssues = reviewIssuesRaw.filter((issue) => {
   const severity = String(issue?.severity ?? "").toLowerCase();
   return status === "open" && ["critical", "high", "medium"].includes(severity);
 }).length;
-const currentStage = manifest.current_stage ?? "unknown";
+const currentStage = readFirstString(
+  manifest,
+  [["workflow_control", "stage"], ["workflowControl", "stage"], ["current_stage"], ["currentStage"]],
+  "unknown"
+);
+const currentOwner = readFirstString(
+  manifest,
+  [["workflow_control", "owner"], ["workflowControl", "owner"], ["owner_agent"], ["ownerAgent"]],
+  "unknown"
+);
 const paperMode =
   manifest.writing_contract?.paper_mode ??
   manifest.writing_contract?.paperMode ??
@@ -2525,8 +2534,16 @@ const scorecard = {
     project_root: projectRoot,
     lane,
     task_type: lane,
-    current_stage: manifest.current_stage ?? "unknown",
-    owner_agent: manifest.owner_agent ?? "unknown",
+    current_stage: readFirstString(
+      manifest,
+      [["workflow_control", "stage"], ["workflowControl", "stage"], ["current_stage"], ["currentStage"]],
+      "unknown"
+    ),
+    owner_agent: readFirstString(
+      manifest,
+      [["workflow_control", "owner"], ["workflowControl", "owner"], ["owner_agent"], ["ownerAgent"]],
+      "unknown"
+    ),
     paper_mode: paperMode,
   },
   verdict: {
@@ -2914,8 +2931,8 @@ const report = `# E2E Run Report
 - project_id: ${manifest.project_id ?? path.basename(projectRoot)}
 - project_root: ${projectRoot}
 - generated_at: ${now}
-- current_stage: ${manifest.current_stage ?? "unknown"}
-- owner_agent: ${manifest.owner_agent ?? "unknown"}
+- current_stage: ${currentStage}
+- owner_agent: ${currentOwner}
 - paper_mode: ${manifest.writing_contract?.paper_mode ?? manifest.writing_contract?.paperMode ?? "unknown"}
 - PaperNexus mode: ${manifest.papernexus_access?.mode ?? manifest.paper_ingestion?.papernexus_access_mode ?? "unknown"}
 - cite_count: ${citeCount}
@@ -3123,8 +3140,8 @@ const progressNarrative = `# E2E Progress Narrative
 
 ## Current State
 
-- current_stage: ${manifest.current_stage ?? "unknown"}
-- owner_agent: ${manifest.owner_agent ?? "unknown"}
+- current_stage: ${currentStage}
+- owner_agent: ${currentOwner}
 - paper_mode: ${paperMode}
 - artifact_status: ${artifactStatus}
 - review_closeout_status: ${reviewCloseoutStatus}
